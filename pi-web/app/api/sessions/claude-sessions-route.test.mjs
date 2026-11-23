@@ -171,7 +171,11 @@ test("rename and archive persist in the index and the row follows", async () => 
 });
 
 test("delete removes the index entry and only that session's transcript", async () => {
+  // polyforge#252: a pi-web delete does not wait for the allowed-roots cache's
+  // 5 s TTL — the claude branch drops it with the record.
+  globalThis.__piAllowedRootsCache = { roots: new Set([project]), expiresAt: Date.now() + 60_000 };
   assert.equal((await detail.DELETE(new Request("http://localhost", { method: "DELETE" }), params(MINE))).status, 200);
+  assert.equal(globalThis.__piAllowedRootsCache, undefined, "a successful claude delete invalidates the allowed-roots cache");
   assert.equal(index.getClaudeSessionRecord(MINE), undefined);
   assert.equal(fs.existsSync(transcriptOf(MINE)), false);
   assert.ok(fs.existsSync(transcriptOf(OTHER)));

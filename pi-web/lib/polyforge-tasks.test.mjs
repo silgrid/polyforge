@@ -22,7 +22,7 @@ const REAL_ROW = {
 
 test("the Tasks floor is 2.20.12 and the boundary is inclusive", async () => {
   assert.equal(lib.POLYFORGE_TASKS_MINIMUM_PF_VERSION, "2.20.12");
-  const detect = await jiti.import("./polyforge-detect.ts");
+  const detect = await jiti.import("./polyforge-version.ts");
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.11", lib.POLYFORGE_TASKS_MINIMUM_PF_VERSION), true);
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.12", lib.POLYFORGE_TASKS_MINIMUM_PF_VERSION), false);
 });

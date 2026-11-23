@@ -36,7 +36,13 @@ work item's decided rulings (every section of its verbatim content —
 each item, numbered across the sections in order of appearance, mapped
 to a unit — an id of units.json, or a bold id of the plan's `## Units`
 when there is no units file — or `none — <reason>`); the units' test
-files count as declared. Details:
+files count as declared. A declared path is repository-root relative, and
+a path relative to a nested project root — a directory carrying its own
+tracked `.polyforge/verify-scope.conf` — names that root's file when the
+change base's or HEAD's committed tree holds it under exactly one such
+root: a repository-root file wins over the relative path, and a relative
+path no single root holds (none, or two roots alike) stays undeclared.
+Details:
   {plan, units_file, unavailable, work_item, decided, unmapped_decided,
    declared_writes: [{path, obligations: [{path, note}], none_reason}],
    undeclared, unchanged_obligations, unchanged_writes, released}
@@ -188,7 +194,7 @@ import re  # noqa: E402
 import secrets  # noqa: E402
 import shutil  # noqa: E402
 import time  # noqa: E402
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple  # noqa: E402
+from typing import Any, Callable, Collection, Dict, List, Mapping, Optional, Sequence, Set, Tuple  # noqa: E402
 
 from pfstep import container, deadline, duration, git, goglob, gotext, runner, secretpat  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
@@ -1091,10 +1097,82 @@ def clean_repo_path(v: Any) -> str:
     return s
 
 
+def repo_trees(repos_dir: str, changed: Optional[Dict[str, List[str]]]) -> Tuple[Optional[Dict[str, Dict[str, Any]]], str]:
+    """Each changed repo's nested project roots and the files its committed
+    trees (the change base's and HEAD's) hold: the context a plan's
+    subproject-relative paths resolve against. Only committed trees count —
+    an untracked conf neither makes a root nor moves one. (None, why) when
+    a tree cannot be read."""
+    capsule_dir = os.path.dirname(os.path.abspath(repos_dir))
+    out: Dict[str, Dict[str, Any]] = {}
+    for name in sorted(changed or {}):
+        d = os.path.join(repos_dir, name)
+        ref, unknown = base_ref(capsule_dir, d)
+        if not ref:
+            return None, "repo %s: %s, so the change base cannot be resolved" % (name, unknown)
+        base, err = run_git(d, "merge-base", "HEAD", ref)
+        if err is not None:
+            return None, "repo %s: git merge-base HEAD %s failed: %s" % (name, ref, err)
+        files: Dict[str, bool] = {}
+        for commit in (trim_space(base), "HEAD"):
+            listed, err = run_git(d, "ls-tree", "-r", "-z", "--name-only", commit)
+            if err is not None:
+                return None, "repo %s: %s" % (name, err)
+            for p in listed.split("\x00"):
+                if p:
+                    files[p] = True
+        suffix = "/.polyforge/verify-scope.conf"
+        roots = sorted({p[: -len(suffix)] for p in files if p.endswith(suffix)})
+        out[name] = {"files": set(files), "roots": roots}
+    return out, ""
+
+
+def declared_identities(d: str, repos: Sequence[str],
+                        trees: Optional[Dict[str, Dict[str, Any]]]) -> List[str]:
+    """The identities a plan declaration names besides itself: a path
+    relative to a nested project root names that root's file when exactly
+    one root of its repository (or of the repository its `<repo>/` prefix
+    names) holds it. A path that is itself a repository-root file names
+    only that file — the explicit path wins — and one no single root holds
+    names nothing, so an ambiguous relative path authorizes no file."""
+    if trees is None:
+        return []
+    scope, rel = "", d
+    for name in repos:
+        if d.startswith(name + "/"):
+            scope, rel = name, d[len(name) + 1:]
+            break
+    out: List[str] = []
+    for name in ([scope] if scope else list(repos)):
+        t = trees.get(name) or {}
+        files = t.get("files") or set()
+        canonical = ""
+        if rel in files:
+            canonical = rel
+        else:
+            hits = [r + "/" + rel for r in t.get("roots") or [] if (r + "/" + rel) in files]
+            if len(hits) == 1:
+                canonical = hits[0]
+        if canonical:
+            out.append(name + "/" + canonical if scope else canonical)
+    return out
+
+
+def declaration_changed(d: str, touched: Collection[str], repos: Sequence[str],
+                        trees: Optional[Dict[str, Dict[str, Any]]]) -> bool:
+    """Whether a declared path's file (its explicit identity or the one
+    nested root that owns it) is in the changed set."""
+    return d in touched or any(c in touched for c in declared_identities(d, repos, trees))
+
+
 def fold_plan_conformance(touched_files: Sequence[Any], authored: Sequence[str],
-                          changed: Optional[Dict[str, List[str]]], unavailable: str) -> Dict[str, Any]:
-    """The pure fold: the declared set against the changed files. The
-    answer's lists are None where the Go fold left them nil."""
+                          changed: Optional[Dict[str, List[str]]], unavailable: str,
+                          trees: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """The pure fold: the declared set against the changed files, a
+    declaration's subproject-relative identity resolved through `trees`
+    (the changed repos' committed trees; None = no nested roots, the old
+    repository-root-only reading). The answer's lists are None where the
+    Go fold left them nil."""
     obligations_out: List[Dict[str, Any]] = []
     pc: Dict[str, Any] = {"unavailable": unavailable, "declared_writes": None, "undeclared": None,
                           "unchanged_obligations": None, "unchanged_writes": None, "released": None}
@@ -1148,6 +1226,9 @@ def fold_plan_conformance(touched_files: Sequence[Any], authored: Sequence[str],
         return pc
     changed = changed or {}
     repos = sorted(changed)
+    for d in list(declared):
+        for c in declared_identities(d, repos, trees):
+            declared[c] = True
     touched = set()
     undeclared: List[str] = []
     for name in repos:
@@ -1160,13 +1241,13 @@ def fold_plan_conformance(touched_files: Sequence[Any], authored: Sequence[str],
     released: List[str] = []
     unchanged_obligations: List[str] = []
     for p in obligations:
-        if p in touched:
+        if declaration_changed(p, touched, repos, trees):
             continue
-        if not any(w in touched for w in parents.get(p, [])):
+        if not any(declaration_changed(w, touched, repos, trees) for w in parents.get(p, [])):
             released.append("`%s` — lapsed: no write that declares it is in the diff" % p)
         else:
             unchanged_obligations.append(p)
-    unchanged_writes = [p for p in writes if p not in touched]
+    unchanged_writes = [p for p in writes if not declaration_changed(p, touched, repos, trees)]
     pc["undeclared"] = undeclared or None
     pc["unchanged_obligations"] = unchanged_obligations or None
     pc["unchanged_writes"] = unchanged_writes or None
@@ -2379,7 +2460,10 @@ def plan_conformance(inv: Invocation, args: List[str]) -> int:
     touched = plan_touched_files(raw)
     authored = unit_test_files(units_of(c.repos_dir, c.repos, decls or []))
     changed, reason = changed_files(c.repos_dir)
-    pc = fold_plan_conformance(touched, authored, changed, reason)
+    trees: Optional[Dict[str, Dict[str, Any]]] = None
+    if not reason:
+        trees, reason = repo_trees(c.repos_dir, changed)
+    pc = fold_plan_conformance(touched, authored, changed, reason, trees)
     if pc["unavailable"]:
         d["unavailable"] = pc["unavailable"]
     for k in ("declared_writes", "undeclared", "unchanged_obligations", "unchanged_writes", "released"):

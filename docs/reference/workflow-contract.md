@@ -432,7 +432,14 @@ container — and on the host otherwise, the result's `details.isolation`
 recording which ran; the per-unit fast checks stay on the host, a boxed
 close consumes no `--reuse` green evidence, and a container the close
 cannot build, start or keep is the run's error, never a red of the
-change's, never a host stand-in.
+change's, never a host stand-in. The close's order is fixed: the scoped
+selection green, then the facts, then the self-review, then the hand-off;
+once the scoped selection has run, a step that changes no code does not
+re-run it (the reuse key is the command text, the root's subtree tree hash
+and the declared prerequisites — artifacts alone are no code change) while
+a changed tree re-runs only itself and on a host close reuses the untouched roots by `--reuse` (a boxed close consumes none), and a
+red is reported from the result file's own baseline record, never
+reproduced by hand on the base worktree.
 The plan's decided rulings are judged by the same entry:
 `facts.py plan-conformance` reads the work item's verbatim content
 (`runtime-state/work-item.json`) and requires every item of every section
@@ -536,7 +543,7 @@ container backend `PF_CONTAINER_ENGINE` (`[daemon] container_engine`,
 default). A step's own copy of any of them
 never reaches it. `TMPDIR` is `<capsule>/artifacts/downloads/tmp/`, created before the harness starts; failure to create it rejects the spawn rather than falling back to shared `/tmp`. A tool or configuration that explicitly overwrites `TMPDIR` is outside this daemon guarantee. The complete variable table is in [Scripts](#scripts), while this section describes process inheritance and `PATH`.
 
-A pi step process also loads the daemon-owned step guard from its dedicated agent directory (`extensions/guard/`, polyforge#214): before a `bash` tool call runs, the guard blocks a command that starts a background job this call does not wait for (`&` with no later `wait` or `kill` in the same call, `nohup`, `setsid`, `disown`) or sleeps more than 3 s in one go — the tool result is an error whose text starts with `step guard: blocked` and names the sanctioned shape (foreground with a logged exit code, or a bounded wait inside the same call). After an `edit` or `write` of a `.go`/`.ts`/`.tsx`/`.mts`/`.cts`/`.js`/`.mjs`/`.cjs`/`.py`/`.json` file, a fast syntax check of that file runs and its finding is appended to the tool result; the check never blocks or fails the edit, and a type without a checker is returned untouched. Claude steps run no guard (`--safe-mode` skips hooks; `claude` is out of scope).
+A pi step process also loads the daemon-owned step guard from its dedicated agent directory (`extensions/guard/`, polyforge#214): before a `bash` tool call runs, the guard blocks a command that starts a background job this call does not wait for (`&` with no later `wait` or `kill` in the same call, `nohup`, `setsid`, `disown`) or sleeps more than 3 s in one go — the tool result is an error whose text starts with `step guard: blocked` and names the sanctioned shape (foreground with a logged exit code, or a bounded wait inside the same call). In the `build` step (every lane whose step id is `build`) it also blocks a whole-suite test command — a full-phase test command of the repository's own `verify-scope --full --json` declaration at the command's effective directory, run against the whole tree — with the reason naming the written fast-check form (`fast_checks.py --repo <name> --close-scoped …`, run from the capsule root) and the test runner's own name filter; a command the declaration puts in a cheaper phase (fast, scoped or a base setup), a `fast_checks.py` command, and a targeted or filtered test run pass, and a projection that cannot be read fails open. After an `edit` or `write` of a `.go`/`.ts`/`.tsx`/`.mts`/`.cts`/`.js`/`.mjs`/`.cjs`/`.py`/`.json` file, a fast syntax check of that file runs and its finding is appended to the tool result; the check never blocks or fails the edit, and a type without a checker is returned untouched. Claude steps run no guard (`--safe-mode` skips hooks; `claude` is out of scope).
 
 ### The prompt
 

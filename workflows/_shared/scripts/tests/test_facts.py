@@ -890,5 +890,188 @@ class NotRunnableRuleTest(unittest.TestCase):
                          ("not_runnable", {"toolchain": "demo", "rule": "custom-boom", "line": "BOOM after the setup"}))
 
 
+# --- polyforge#194: plan paths under a nested project root ---------------
+
+def prefix_plan(touched: str, obligations: str = "none — fixture") -> str:
+    """A develop plan with one unit declaring `touched` (its write paths)
+    and `obligations`."""
+    return ("# plan\n\n## Units\n\n1. **u1** — the page\n"
+            "   - Touched files: %s\n"
+            "   - Coupled obligations: %s\n" % (touched, obligations))
+
+
+class PlanPrefixNormalizeTest(GitCase):
+    """polyforge#194: a plan's subproject-relative path and the diff's
+    repository-root path are one file; a relative path no single nested
+    project root owns stays undeclared. Every case is a real git capsule
+    run through the full `facts.py plan-conformance` entry, so the exit
+    code and the result file are the observed behaviour, never a helper's
+    return. Expected values are hand-derived from the ticket's AC1 and
+    the repository's nested-project-root convention (a directory whose
+    tracked `.polyforge/verify-scope.conf` gives it a root of its own),
+    not from the implementation's output."""
+
+    def capsule(self, name: str, base: Dict[str, str],
+                change: Dict[str, Optional[str]], plan: str) -> str:
+        """A capsule whose one commit changes `change` (None = delete)
+        against `base`, with the plan at artifacts/plan.md."""
+        cap = os.path.join(self.tmp, name)
+        repo = Repo(os.path.join(cap, "repos", "polyforge"), base)
+        repo.git("update-ref", "refs/remotes/origin/main", repo.head())
+        for p in change:
+            if change[p] is None:
+                repo.git("rm", "-q", p)
+        write(repo.dir, {p: v for p, v in change.items() if v is not None})
+        repo.git("add", "-A")
+        repo.git("commit", "-q", "-m", "the change")
+        write(cap, {"capsule.json": json.dumps({"work_item_id": "wi_194", "bundle_name": "develop",
+                                                "repos": {"polyforge": "polyforge"}}),
+                    "artifacts/plan.md": plan})
+        return cap
+
+    def plan_conformance(self, cap: str) -> Tuple[int, Dict[str, Any]]:
+        """One facts.py plan-conformance run on the capsule; the result
+        file must carry the run's own exit code."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PF_", "BASH_"))}
+        out = os.path.join(self.tmp, "prefix-result.json")
+        argv = [sys.executable, "-B", os.path.join(SCRIPTS, "facts.py"),
+                "plan-conformance", "--capsule", cap, "--json", "--out", out]
+        p = subprocess.run(argv, cwd=cap, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with open(out, encoding="utf-8") as f:
+            res: Dict[str, Any] = json.load(f)
+        self.assertEqual(p.returncode, res["exit_code"], "the result file carries the run's own exit code")
+        return p.returncode, res
+
+    def test_a_subproject_relative_declaration_declares_the_nested_file(self) -> None:
+        cap = self.capsule(
+            "prefix-ok",
+            {"pi-web/.polyforge/verify-scope.conf": "stack=npm\n", "pi-web/app/page.tsx": "old\n"},
+            {"pi-web/app/page.tsx": "new\n"},
+            prefix_plan("`app/page.tsx` (write)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], [])
+        self.assertEqual(res["details"]["unchanged_writes"], [])
+
+    def test_an_undeclared_nested_file_is_still_reported(self) -> None:
+        cap = self.capsule(
+            "prefix-negative",
+            {"pi-web/.polyforge/verify-scope.conf": "stack=npm\n",
+             "pi-web/app/page.tsx": "old\n", "pi-web/app/other.tsx": "old\n"},
+            {"pi-web/app/page.tsx": "new\n", "pi-web/app/other.tsx": "new\n"},
+            prefix_plan("`app/page.tsx` (write)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], ["pi-web/app/other.tsx"],
+                         "only the truly undeclared file is named")
+
+    def test_repository_root_and_repos_prefixed_paths_keep_their_meaning(self) -> None:
+        cap = self.capsule(
+            "prefix-explicit",
+            {"pi-web/.polyforge/verify-scope.conf": "stack=npm\n", "pi-web/app/page.tsx": "old\n"},
+            {"pi-web/app/page.tsx": "new\n"},
+            prefix_plan("`pi-web/app/page.tsx` (write), `repos/polyforge/pi-web/app/page.tsx` (write)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], [])
+        self.assertEqual(res["details"]["unchanged_writes"], [])
+
+    def test_a_similar_directory_is_no_nested_root(self) -> None:
+        cap = self.capsule(
+            "prefix-boundary",
+            {"pi-web/.polyforge/verify-scope.conf": "stack=npm\n", "pi-webx/app/page.tsx": "old\n"},
+            {"pi-webx/app/page.tsx": "new\n"},
+            prefix_plan("`app/page.tsx` (write)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], ["pi-webx/app/page.tsx"],
+                         "a directory sharing the root's prefix is no root")
+
+    def test_a_repository_root_file_needs_no_root(self) -> None:
+        cap = self.capsule("prefix-root-file", {"app/page.tsx": "old\n"},
+                           {"app/page.tsx": "new\n"}, prefix_plan("`app/page.tsx` (write)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], [])
+        cap = self.capsule("prefix-no-root",
+                           {"app/page.tsx": "old\n", "other/app/page.tsx": "old\n"},
+                           {"other/app/page.tsx": "new\n"}, prefix_plan("`app/page.tsx` (write)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], ["other/app/page.tsx"],
+                         "a directory without a conf is no root")
+
+    def test_two_nested_roots_holding_the_same_path_keep_it_undeclared(self) -> None:
+        base = {"pi-web/.polyforge/verify-scope.conf": "stack=npm\n",
+                "pi-web/app/page.tsx": "old\n",
+                "admin/.polyforge/verify-scope.conf": "stack=npm\n",
+                "admin/app/page.tsx": "old\n"}
+        cap = self.capsule("prefix-ambiguous", base, {"pi-web/app/page.tsx": "new\n"},
+                           prefix_plan("`app/page.tsx` (write)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], ["pi-web/app/page.tsx"],
+                         "the unchanged sibling root makes the relative path ambiguous")
+        cap = self.capsule("prefix-ambiguous-explicit", base, {"pi-web/app/page.tsx": "new\n"},
+                           prefix_plan("`pi-web/app/page.tsx` (write)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], [])
+
+    def test_a_deleted_nested_file_keeps_its_base_identity(self) -> None:
+        cap = self.capsule(
+            "prefix-deleted",
+            {"pi-web/.polyforge/verify-scope.conf": "stack=npm\n", "pi-web/app/old.tsx": "old\n"},
+            {"pi-web/app/old.tsx": None},
+            prefix_plan("`app/old.tsx` (write)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], [])
+
+    def test_an_untracked_nested_root_is_no_root(self) -> None:
+        cap = self.capsule(
+            "prefix-untracked",
+            {"pi-web/.polyforge/verify-scope.conf": "stack=npm\n", "pi-web/app/page.tsx": "old\n"},
+            {"pi-web/app/page.tsx": "new\n"},
+            prefix_plan("`app/page.tsx` (write)"))
+        write(os.path.join(cap, "repos", "polyforge"),
+              {"admin/.polyforge/verify-scope.conf": "stack=npm\n", "admin/app/page.tsx": "old\n"})
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"]["undeclared"], [],
+                         "only the committed trees name roots")
+
+    def test_a_coupled_obligation_uses_the_same_identity(self) -> None:
+        base = {"pi-web/.polyforge/verify-scope.conf": "stack=npm\n",
+                "pi-web/app/page.tsx": "old\n", "pi-web/app/docs/page.md": "old\n"}
+        cap = self.capsule("prefix-obligation", base,
+                           {"pi-web/app/page.tsx": "new\n", "pi-web/app/docs/page.md": "new\n"},
+                           prefix_plan("`app/page.tsx` (write)", "`app/docs/page.md` (the row)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"]["unchanged_obligations"], [])
+        self.assertEqual(res["details"]["released"], [])
+        cap = self.capsule("prefix-obligation-unchanged", base,
+                           {"pi-web/app/page.tsx": "new\n"},
+                           prefix_plan("`app/page.tsx` (write)", "`app/docs/page.md` (the row)"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1,
+                         "an unchanged coupled obligation is judged red (conformant()): " + res["summary"])
+        self.assertEqual(res["details"]["unchanged_obligations"], ["app/docs/page.md"])
+        self.assertEqual(res["details"]["released"], [])
+        # the obligation's parent write is not in the diff: the obligation lapses
+        plan = ("# plan\n\n## Units\n\n1. **u1** — the page\n"
+                "   - Touched files: `app/page.tsx` (write)\n"
+                "   - Coupled obligations: `app/docs/page.md` (the row)\n"
+                "2. **u2** — the other\n"
+                "   - Touched files: `other.tsx` (write)\n"
+                "   - Coupled obligations: none — fixture\n")
+        cap = self.capsule("prefix-obligation-lapsed", base, {"pi-web/other.tsx": "new\n"}, plan)
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(len(res["details"]["released"]), 1)
+        self.assertIn("app/docs/page.md", res["details"]["released"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

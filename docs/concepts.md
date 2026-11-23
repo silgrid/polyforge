@@ -425,6 +425,15 @@ then pass on record, so such a round spends no rewind; what stays red the
 `verification` agent routes as its skill says, and it never passes a red
 it cannot place.
 
+A repository whose `.polyforge/verify-scope.conf` declares parallel
+`group=` lines (polyforge#244) runs its full tier's declared groups side by
+side (polyforge#253): each group in a container of its own, a group's
+commands in plan order, the fast gates before the grouped span and the
+dependency audit after it serially in the repository's container; the
+commands, the checks and the summary stay in plan order, and a repository
+that declares no group — one group, `full_parallel=1` or a host run
+included — keeps the serial bar byte for byte.
+
 A repository whose tree carries `.polyforge/Dockerfile.verify` runs
 that bar in a container of its own; one without it runs on
 the host as above. The container runs on the backend the Host selected —
@@ -1105,7 +1114,11 @@ setting:
   the same `selected`, the shared validator taking it as green-equivalent
   evidence. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
-  conformance with the diff, and its `## 已定对照` mapping of the ticket's
+  conformance with the diff — a plan path relative to a nested project
+  root, a directory carrying its own tracked `.polyforge/verify-scope.conf`,
+  names that root's file when exactly one root holds it; a repository-root
+  path wins and an ambiguous relative path stays undeclared — and its
+  `## 已定对照` mapping of the ticket's
   decided rulings — an unmapped one red and named), `build --replay --isolation host` (each
   unit's test commit a one-parent
   ancestor of its implementation commit holding test paths only, every

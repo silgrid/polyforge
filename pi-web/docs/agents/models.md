@@ -29,7 +29,7 @@ options 非数组、行缺字符串 model）拒写且文件字节不变，未知
 
 设置中的「模型」页显示组合默认模型、按 provider 分组的双 harness 清单，以及 pi 的 provider 草稿编辑区。只有相同 provider 的精确 id 合并；Claude 行的聊天开关显示「不支持」，按模型强度仅显示原生读值。pi 的聊天开关沿用 enabledModels 最小编辑，模型强度经适配器写 modelThinkingLevels；组合默认模型沿用 /api/models/default。
 
-清单的第五列「步骤能力档」（85b2）读写 pf 的 Host 目录 `[step_tiers]`：身份规则 pi 为 `pi:<provider>/<id>`、Claude 为 `claude:<值>`（候选可带 `:<强度>` 后缀，设档时原样随模型移动）；「应用到：全部」由 Pi Web 展开为该行每个可用 harness 一条写入（先加后删、移空的档改 unset、失败按 harness 回报）；每一步写入前都用同一次 Host 读取取回目录与文件哈希——计划从 CAS 所守的那份状态推导，并发外部写要么进计划、要么被 409 拒下并保留草稿，读回按集合判定「全部」（同档）或「指定」（逐 harness 标「不一致：… 当前为 …」；「恢复默认」即统一成所选档写到全部 harness，新支持的 harness 不会自动跟随）。只有已定义模型能设档（未保存的 pi 新行先保存原生定义）；服务端只接受已定义模型的新增候选，未定义、非 Host、pf 低于 0.2.4、坏档名一律拒写且不调用 pf。目录不可读（或版本不够）时整列只读并显示原因，其余列不受影响；目录里的失效引用（已不是已定义模型）在清单下提示一次。存储在 pf 的 Host 配置而非原生文件，与 models.json 草稿的 Save 互不相干。
+清单的第五列「步骤能力档」（85b2；polyforge#256 B7 起**只读**）显示 pf 的 Host 目录 `[step_tiers]`：身份规则 pi 为 `pi:<provider>/<id>`、Claude 为 `claude:<值>`（候选可带 `:<强度>` 后缀）。单元格只显示小标签——整行同属一档时显示档名，各 harness 不同时写 `pi: default` / `claude: fast-chat` 等只读短标签（同 harness 多档按 default 优先、其余字母序逐档显示），无档或能力不可用显示「—」；不渲染 select、应用/保存按钮或任何写入口，打开页面不写默认档。设档仍走命令行 `pf config set step_tiers.<tier> … --host` 与配置写路由：服务端只接受已定义模型的新增候选，未定义、非 Host、pf 低于 0.2.4-0、坏档名一律拒写且不调用 pf，CAS 冲突答案不变（`lib/polyforge-config-write.test.mjs` 的接口安全用例保留）。步骤档的版本下限是 `0.2.4-0`：`v0.2.4-dev.N` 与 `v0.2.4` 可用，`v0.2.3`、2.20.x 与不可解析版本按原逻辑禁用；目录不可读（或版本不够）时整列只读，理由串由模型页按 `pfVersion` 事实本地化（en / zh-CN / zh-TW，三语言齐全；未安装、未知版本、读取失败分开），其余列不受影响；目录里的失效引用（已不是已定义模型）在清单下提示一次。存储在 pf 的 Host 配置而非原生文件，与 models.json 草稿的 Save 互不相干。
 
 provider 添加与编辑、托管 provider 的上下文窗口在同一 models.json 草稿内，共用 Save；保存由 /api/models-config 转交 pi 适配器，沿用版本/结构闸门及既有 schema、损坏文件和符号链接保护。登录留在账号页，模型页的账号按钮跳到该页。刷新按钮改为「刷新模型列表」。旧 Models (legacy) tab 已移除。
 
