@@ -51,7 +51,7 @@ import {
 } from "@/lib/pane-state";
 import { readOpenPaneTabs, writeOpenPaneTabs } from "@/lib/pane-tab-state";
 import { reorderById, syncTabOrder, applyTabOrder } from "@/lib/tab-order";
-import { projectDisplayNameForPath } from "@/lib/project-groups";
+import { projectDisplayNameForPath, workspaceAfterSessionRemoval } from "@/lib/project-groups";
 import { listCustomDirectories } from "@/lib/custom-directories";
 import { copyText } from "@/lib/clipboard";
 import { sendAgentCommand } from "@/lib/agent-client";
@@ -246,6 +246,11 @@ export function AppShell() {
   // stale (e.g. a delete that completes after the user navigated away).
   const selectedSessionRef = useRef(selectedSession);
   selectedSessionRef.current = selectedSession;
+  // The sidebar's effective workspace after AppShell moved off a vanished
+  // session (polyforge#252): the token lets it follow a switch back to NO
+  // project, which the selection-driven prop sync cannot express.
+  const [workspaceSwitch, setWorkspaceSwitch] = useState<{ root: string | null; key: string | null; token: number } | null>(null);
+  const workspaceSwitchTokenRef = useRef(0);
   // pi#108: the Polyforge dock panel. The bg-tasks dock that shared this
   // slot retired with the built-in running list (#173): a pi session's
   // background tasks now live above its composer and in their detail panel.
@@ -430,14 +435,40 @@ export function AppShell() {
   // which a not-yet-loaded list never does.
   const [sessionCatalogReported, setSessionCatalogReported] = useState(false);
   // The interface moves off a vanished session's project before any request
-  // can use its cwd (polyforge#252). Filled in by this unit's implementation
-  // commit; declared here so the component test runs real code.
+  // can use its cwd (polyforge#252). Its project stays the workspace only while
+  // another session of it remains (at a root that session authorizes); else
+  // the most recent remaining project, else no project. The gone session's own
+  // cwd is never handed to a component again.
   const moveOffVanishedSession = useCallback((
-    _vanished: SessionInfo,
-    _remaining: readonly SessionInfo[],
+    vanished: SessionInfo,
+    remaining: readonly SessionInfo[],
   ) => {
-    // (implementation)
-  }, []);
+    const decision = workspaceAfterSessionRemoval(remaining, workspaceKeyOf(vanished));
+    const root = decision.keep ? decision.root : decision.next?.root ?? null;
+    const key = decision.keep ? workspaceKeyOf(vanished) : decision.next?.key ?? null;
+    // A duplicate report from the catalogue (the delete's own list reload) must
+    // not move the workspace a second time.
+    selectedSessionRef.current = null;
+    workspaceSwitchTokenRef.current += 1;
+    setWorkspaceSwitch({ root, key, token: workspaceSwitchTokenRef.current });
+    setSelectedSession(null);
+    setActiveCwd(root);
+    setNewSessionCwd(root);
+    const draftId = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    setNewSessionDraftId(draftId);
+    activeNewSessionDraftKeyRef.current = root ? `new:${draftId}:${root}` : null;
+    setSessionKey((k) => k + 1);
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setBranchSwitchLocked(false);
+    setSystemPrompt(null);
+    setSystemTools(null);
+    setSystemInfoLoading(false);
+    setActiveTopPanel((panel) => (panel === "debug" ? panel : null));
+    router.replace(root ? `?cwd=${encodeURIComponent(root)}` : (typeof window !== "undefined" ? window.location.pathname : "/"), { scroll: false });
+  }, [router]);
   const handleSessionsChange = useCallback((sessions: SessionInfo[]) => {
     setSessionCatalog(sessions);
     setSessionCatalogReported(true);
@@ -449,7 +480,16 @@ export function AppShell() {
       const refreshed = sessions.find((session) => session.id === current.id);
       return refreshed ? mergeCatalogRow(current, refreshed) : current;
     });
-  }, []);
+    // A refreshed catalogue that no longer carries the selected session means
+    // another process deleted it (an external delete, not pi-web's own, which
+    // handles itself below). Its cwd is no longer authorized by any session, so
+    // move off it before a request uses it. A transient draft is not in the
+    // catalogue by design and is never treated as vanished.
+    const active = selectedSessionRef.current;
+    if (active && !active.transient && !sessions.some((session) => session.id === active.id)) {
+      moveOffVanishedSession(active, sessions);
+    }
+  }, [moveOffVanishedSession]);
   // Sidebar-detected external write (TUI / another pi process) targeting the
   // selected session; converted into a keyed signal that ChatWindow consumes
   // to reload that session from disk exactly once per key.
@@ -1776,30 +1816,15 @@ export function AppShell() {
     setRefreshKey((k) => k + 1);
     // The DELETE can outlive a session switch: this callback's captured
     // selectedSession is from the delete click. Read the latest selection
-    // and only fall back to the empty composer when the user is still on
-    // the deleted session at the moment removal completes.
+    // and only move off the workspace when the user is still on the deleted
+    // session at the moment removal completes.
     const active = selectedSessionRef.current;
-    if (active?.id === sessionId) {
-      clearTabOpenSession(sessionId);
-      const cwd = active.cwd;
-      const draftId = typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-      setNewSessionDraftId(draftId);
-      activeNewSessionDraftKeyRef.current = cwd ? `new:${draftId}:${cwd}` : null;
-      setSelectedSession(null);
-      setNewSessionCwd(cwd ?? null);
-      setSessionKey((k) => k + 1);
-      setBranchTree([]);
-      setBranchActiveLeafId(null);
-      setBranchSwitchLocked(false);
-      setSystemPrompt(null);
-      setSystemTools(null);
-      setSystemInfoLoading(false);
-      setActiveTopPanel((panel) => panel === "debug" ? panel : null);
-      router.replace(cwd ? `?cwd=${encodeURIComponent(cwd)}` : (typeof window !== "undefined" ? window.location.pathname : "/"), { scroll: false });
-    }
-  }, [invalidateWorkspaceRestore, router]);
+    if (active?.id !== sessionId) return;
+    clearTabOpenSession(sessionId);
+    // The catalogue still lists the session while the delete returns; drop it
+    // so the project's remaining sessions decide the next workspace.
+    moveOffVanishedSession(active, sessionCatalog.filter((session) => session.id !== sessionId));
+  }, [moveOffVanishedSession, sessionCatalog]);
 
   const handleOpenFile = useCallback((
     filePath: string,
@@ -2178,6 +2203,7 @@ export function AppShell() {
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
         onSessionsChange={handleSessionsChange}
         onExternalSessionChange={handleExternalSessionChange}
+        workspaceSwitch={workspaceSwitch}
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([

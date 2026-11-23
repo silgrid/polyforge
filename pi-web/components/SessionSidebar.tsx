@@ -221,6 +221,12 @@ interface Props {
   /** Fired when the selected session was written externally (another pi
    *  process) so the open chat view can reload it from disk. */
   onExternalSessionChange?: (sessionId: string) => void;
+  /**
+   * AppShell moved the effective workspace off a vanished session
+   * (polyforge#252). Follows even when `root` is null — back to no project
+   * selected — which the selection-driven cwd sync cannot express.
+   */
+  workspaceSwitch?: { root: string | null; key: string | null; token: number } | null;
 }
 
 interface ProjectSelection {
@@ -737,7 +743,7 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, highlightSessionId, followHighlightIntoView, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, activeFilePath, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange, onExternalSessionChange }: Props) {
+export function SessionSidebar({ selectedSessionId, highlightSessionId, followHighlightIntoView, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, activeFilePath, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange, onExternalSessionChange, workspaceSwitch }: Props) {
   const { t } = useI18n();
   // Split-view follow: the row highlight reads the focus-derived id when the
   // shell passes one and falls back to the classic selection otherwise.
@@ -1621,6 +1627,20 @@ export function SessionSidebar({ selectedSessionId, highlightSessionId, followHi
       setSelectedCwd(selectedCwdProp);
     }
   }, [selectedCwdProp]);
+
+  // AppShell moved the workspace off a vanished session (polyforge#252): follow
+  // its target, including "no project selected" (null), which the sync above
+  // (non-null only) cannot express. A token, not the value, is the trigger, so
+  // a later switch to the same root still lands.
+  const lastWorkspaceSwitchTokenRef = useRef(0);
+  useEffect(() => {
+    if (!workspaceSwitch || workspaceSwitch.token === lastWorkspaceSwitchTokenRef.current) return;
+    lastWorkspaceSwitchTokenRef.current = workspaceSwitch.token;
+    setSelectedCwd(workspaceSwitch.root);
+    setExplorerSelection(workspaceSwitch.root
+      ? { root: workspaceSwitch.root, key: workspaceSwitch.key ?? workspaceSwitch.root }
+      : null);
+  }, [workspaceSwitch]);
 
   // Auto-select cwd and restore session from URL on first load
   useEffect(() => {
