@@ -1,8 +1,9 @@
 /**
- * Browser-only preferences of the Polyforge Jobs-tab card stream,
- * set in Settings › Polyforge: the goal-title length and
- * the card poll interval. They live in this browser's localStorage only —
- * never pf config, never a server file. Client-safe: no Node import.
+ * Browser-only preferences of the Polyforge panel, set in Settings ›
+ * Polyforge: the Jobs-tab card stream's goal-title length and card poll
+ * interval, and the browser-notification switch. They live in this browser's
+ * localStorage only — never pf config, never a server file. Client-safe: no
+ * Node import.
  */
 
 export const POLYFORGE_TITLE_LENGTH_KEY = "pi-web:polyforge-title-length";
