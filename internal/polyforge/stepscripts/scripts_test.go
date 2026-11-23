@@ -261,7 +261,8 @@ if cmd == "exec":
         if "keepalive" in script:
             sys.exit(0)
     full = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/")}
-    full.update(env)
+    for k, v in env.items():
+        full[k] = map_tmp(v) if k == "TMPDIR" else v
     sys.exit(subprocess.run(argv, cwd=workdir, env=full).returncode)
 if cmd in ("rm", "ps", "volume"):
     sys.exit(0)
