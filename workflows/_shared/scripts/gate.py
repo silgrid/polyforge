@@ -488,7 +488,11 @@ def plan_of(directory: str, report: container.ContainerReport, cmds: Sequence[En
     tag records and the release compares, is made of: the image's content
     half (the Dockerfile's hash), the container's limits, and every command
     in order with its phase, its declared prerequisites and the timeout it
-    runs under. A command naming the clone's path names it as <clone>, and
+    runs under. A repository that declares full-gate groups (polyforge#244)
+    records them too — each bound command's group, and the parallelism the
+    gate runs them at — while a repository that declares none keeps the
+    plan, and so the digest, byte for byte. A command naming the clone's
+    path names it as <clone>, and
     one a fallback's engine names the lane snapshot's directory (its audit
     names the engine's own) reads <engine>, so where either lives never
     splits the digest — the <engine> half only when lane_dir names the
@@ -511,14 +515,25 @@ def plan_of(directory: str, report: container.ContainerReport, cmds: Sequence[En
         cmd = pat.sub("<clone>", c.cmd)
         if lane_pat is not None:
             cmd = lane_pat.sub("<engine>", cmd)
-        commands.append({
+        entry: Dict[str, Any] = {
             "name": c.name, "phase": c.phase, "cmd": cmd,
             "requires_env": list(c.requires_env), "requires_cmd": list(c.requires_cmd),
             "timeout": duration.format(timeout_of(c)),
-        })
-    return {"image": report.digest if report.digest else report.image[report.image.rfind(":") + 1:],
-            "cpus": report.cpus, "memory": report.memory,
-            "pids": report.pids, "commands": commands}
+        }
+        # polyforge#244: a bound command names its group; an unbound one (and
+        # every command of a repository that declares no group) adds no key.
+        if c.group:
+            entry["group"] = c.group
+        commands.append(entry)
+    plan: Dict[str, Any] = {
+        "image": report.digest if report.digest else report.image[report.image.rfind(":") + 1:],
+        "cpus": report.cpus, "memory": report.memory,
+        "pids": report.pids, "commands": commands}
+    # The parallelism is part of the plan only when a group is declared: the
+    # serial gate's plan keeps its bytes (and its green tags' identity).
+    if any(c.group for c in cmds):
+        plan["parallel"] = parallel or 2
+    return plan
 
 
 @dataclass
