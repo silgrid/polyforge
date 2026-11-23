@@ -398,100 +398,57 @@ test("no settings component names the config-button base class directly (AC2)", 
   }
   assert.deepEqual(offenders, [], `direct config-button base class: ${offenders.join(", ")}`);
 });
-/**
- * A source file's JSX start tags, each with what styles it: its own class
- * expression (or `style` attribute) and the class expressions of the elements
- * enclosing it. Fragments and closing tags only move the stack; a self-closing
- * tag never opens one.
- */
-function jsxTags(source) {
-  const tags = [];
-  const stack = [];
-  const lineAt = (index) => source.slice(0, index).split("\n").length;
-  /** The class expression of one start tag, composed the same way the token case composes it. */
-  const classOf = (text) => {
-    const at = text.indexOf("className=");
-    if (at === -1) return null;
-    const start = at + "className=".length;
-    const character = text[start];
-    if (character === '"' || character === "'") {
-      const end = text.indexOf(character, start + 1);
-      return { text: text.slice(start + 1, end), dynamics: [] };
-    }
-    if (character !== "{") return null;
-    let depth = 0;
-    let quote = null;
-    let end = start;
-    for (; end < text.length; end += 1) {
-      const current = text[end];
-      if (quote) {
-        if (current === "\\") end += 1;
-        else if (current === quote) quote = null;
-        continue;
-      }
-      if (current === '"' || current === "'" || current === "`") { quote = current; continue; }
-      if (current === "{") depth += 1;
-      else if (current === "}") { depth -= 1; if (depth === 0) break; }
-    }
-    return composeValue(text.slice(start + 1, end));
-  };
-  let index = 0;
-  while ((index = source.indexOf("<", index)) !== -1) {
-    if (source.startsWith("<!--", index)) {
-      const commentEnd = source.indexOf("-->", index);
-      index = commentEnd === -1 ? source.length : commentEnd + 3;
-      continue;
-    }
-    const next = source[index + 1] ?? "";
-    if (next === "/") {
-      // a closing tag: pop to its name (a stray one pops nothing)
-      const name = /^<\/([A-Za-z][\w.]*)/.exec(source.slice(index))?.[1];
-      if (name) {
-        const at = stack.map((entry) => entry.name).lastIndexOf(name);
-        if (at !== -1) stack.length = at;
-      }
-      const close = source.indexOf(">", index);
-      index = close === -1 ? source.length : close + 1;
-      continue;
-    }
-    if (!/[A-Za-z]/.test(next)) {
-      // a fragment `<>` opens nothing (React fragments carry no class)
-      index += 1;
-      continue;
-    }
-    // Read the tag to its closing `>`, respecting quotes and `{}` expressions.
-    let cursor = index + 1;
-    let quote = null;
-    let brace = 0;
-    let end = -1;
-    for (; cursor < source.length; cursor += 1) {
-      const character = source[cursor];
-      if (quote) {
-        if (character === "\\") cursor += 1;
-        else if (character === quote) quote = null;
-        continue;
-      }
-      if (character === '"' || character === "'" || character === "`") { quote = character; continue; }
-      if (character === "{") brace += 1;
-      else if (character === "}") brace -= 1;
-      else if (character === ">" && brace === 0) { end = cursor; break; }
-    }
-    if (end === -1) break;
-    const text = source.slice(index, end + 1);
-    const name = /^<([A-Za-z][\w.]*)/.exec(text)?.[1] ?? "";
-    const selfClosing = /\/>$/.test(text);
-    tags.push({
-      name,
-      line: lineAt(index),
-      className: classOf(text),
-      inlineStyle: /\bstyle=/.test(text),
-      ancestors: stack.map((entry) => entry.className).filter(Boolean),
-    });
-    if (!selfClosing) stack.push({ name, className: classOf(text) });
-    index = end + 1;
-  }
-  return tags;
+import ts from "typescript";
+
+/** The class expression of a JSX element, composed the way the token case composes it (null: no className). */
+function classExpressionOf(node) {
+  const attribute = node.attributes.properties.find((candidate) => ts.isJsxAttribute(candidate) && candidate.name.getText() === "className");
+  if (!attribute || !attribute.initializer) return null;
+  if (ts.isStringLiteral(attribute.initializer)) return { text: attribute.initializer.text, dynamics: [] };
+  const expression = ts.isJsxExpression(attribute.initializer) && attribute.initializer.expression
+    ? attribute.initializer.expression.getText()
+    : attribute.initializer.getText();
+  return composeValue(expression);
 }
+
+/** Whether a JSX element carries an inline `style` attribute (the legacy editors style their controls this way). */
+function hasInlineStyle(node) {
+  return node.attributes.properties.some((candidate) => ts.isJsxAttribute(candidate) && candidate.name.getText() === "style");
+}
+
+/**
+ * Every native form control in a source file, with its own class expression or
+ * inline style and the class expressions of the JSX elements enclosing it. The
+ * TypeScript parser walks the real tree, so generics (`useState<Row[]>`),
+ * comparisons and strings can never be mistaken for tags.
+ */
+function nativeControls(source, fileName) {
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const controls = [];
+  const visit = (node, ancestors) => {
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const opening = ts.isJsxElement(node) ? node.openingElement : node;
+      const className = classExpressionOf(opening);
+      if (ts.isIdentifier(opening.tagName) && NATIVE_CONTROLS.has(opening.tagName.text)) {
+        controls.push({
+          line: file.getLineAndCharacterOfPosition(opening.getStart(file)).line + 1,
+          tag: opening.tagName.text,
+          className,
+          inlineStyle: hasInlineStyle(opening),
+          ancestors,
+        });
+      }
+      const enclosing = className && className.text.trim().length > 0 ? [...ancestors, className] : ancestors;
+      if (ts.isJsxElement(node)) for (const child of node.children) visit(child, enclosing);
+      return;
+    }
+    ts.forEachChild(node, (child) => visit(child, ancestors));
+  };
+  visit(file, []);
+  return controls;
+}
+
+const NATIVE_CONTROLS = new Set(["input", "select", "textarea", "button"]);
 
 /**
  * Whether a class expression names a class at all (its tokens are the token
@@ -500,6 +457,24 @@ function jsxTags(source) {
  */
 const styled = (expression) => expression.text.replaceAll(PLACEHOLDER, "").trim().length > 0;
 
+/** Every selector the stylesheets declare (rule preludes only, comments and strings stripped). */
+const SELECTORS = STYLESHEETS.flatMap((css) => stripStylesheet(css).split(/[{}]/))
+  .filter((chunk) => chunk.trim().length > 0 && !chunk.trim().startsWith("@"))
+  .flatMap((chunk) => chunk.split(","))
+  .map((selector) => selector.trim());
+
+/**
+ * Whether the stylesheets style a native control through a container class:
+ * a selector that holds `.ancestor` and then the element name as a descendant
+ * (`.settings-account-form select`, `.harness-apply-to input`). A container's
+ * own rule (`.settings-models`) never counts — it says nothing about the
+ * control inside it.
+ */
+function stylesDescendant(ancestorClass, tag) {
+  const element = new RegExp(`(?:^|[\\s>~+])${tag}(?=$|[\\s.:#\\[)])`);
+  return SELECTORS.some((selector) => selector.includes(`.${ancestorClass}`) && element.test(selector));
+}
+
 // polyforge#257 (T2 止血, review r1#1) AC2: owner Q1=B forbids 「无样式的原生
 // 控件」. A token check cannot see a control that carries no className, so this
 // case reads the markup: every native form control in a settings component is
@@ -507,21 +482,17 @@ const styled = (expression) => expression.text.replaceAll(PLACEHOLDER, "").trim(
 // or by an enclosing element's class (a label wrapping its input is the usual
 // shape). The expected state is the ticket's own rule, not this render's output.
 test("every native form control in a settings component is styled by its own class or an ancestor's (AC2)", () => {
-  const native = new Set(["input", "select", "textarea", "button"]);
   const unstyled = [];
   for (const file of owned) {
     const name = relative(componentDir, file);
-    for (const tag of jsxTags(readFileSync(file, "utf8"))) {
-      if (!native.has(tag.name)) continue;
-      if (tag.className !== null && tag.className.text.trim().length > 0) {
-        if (!styled(tag.className)) unstyled.push(`${name}:${tag.line} <${tag.name}> names a class no rule declares`);
-        continue;
-      }
-      if (tag.inlineStyle) continue;
-      if (tag.ancestors.some((ancestor) => styled(ancestor))) continue;
-      unstyled.push(`${name}:${tag.line} <${tag.name}> has no class, no inline style and no styled ancestor`);
+    for (const control of nativeControls(readFileSync(file, "utf8"), name)) {
+      if (control.className !== null && control.className.text.trim().length > 0) continue;
+      if (control.inlineStyle) continue;
+      if (control.ancestors.some((ancestor) => [...new Set(ancestor.text.replaceAll(PLACEHOLDER, " ")
+        .split(/\s+/).filter(Boolean))]
+        .some((token) => stylesDescendant(token, control.tag)))) continue;
+      unstyled.push(`${name}:${control.line} <${control.tag}> has no class, no inline style and no styled ancestor`);
     }
   }
   assert.deepEqual(unstyled, [], `settings controls with no CSS rule: ${unstyled.join(", ")}`);
 });
-
