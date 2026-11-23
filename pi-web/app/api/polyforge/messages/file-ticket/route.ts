@@ -62,7 +62,13 @@ export async function POST(request: Request) {
     // a JSON `lane` field or the `x-polyforge-lane` header (the dialog keeps
     // the Messages path's body literal untouched). The Messages path sends
     // neither, so its one flag create is unchanged.
-    const created = await createPolyforgeFileTicket(validated.value, pin);
+    const record = typeof body === "object" && body !== null && !Array.isArray(body) ? body as Record<string, unknown> : {};
+    const laneInput = record.lane ?? request.headers.get("x-polyforge-lane") ?? undefined;
+    const lane = laneInput === undefined ? undefined : validatePolyforgeLane(laneInput);
+    if (lane && !lane.ok) {
+      return NextResponse.json({ error: lane.error }, { status: 400 });
+    }
+    const created = await createPolyforgeFileTicket(validated.value, pin, lane?.lane);
     return NextResponse.json({ ok: true, slug: created.slug });
   } catch (error) {
     const failure = error instanceof PolyforgeMessagesError

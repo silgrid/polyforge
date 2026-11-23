@@ -67,7 +67,7 @@ export function PolyforgeFileTicketDialog({
     try {
       const response = await fetch("/api/polyforge/messages/file-ticket", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...(lane ? { "x-polyforge-lane": lane } : {}) },
         body: JSON.stringify({ goal, project, content }),
       });
       const body = await response.json() as FileTicketResponse;

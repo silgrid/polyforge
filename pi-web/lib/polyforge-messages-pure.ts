@@ -584,6 +584,9 @@ export function fileTicketDialogDefaults(
  *  ticket defaults to `develop`; the Messages path carries none). */
 const LANE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
-export function validatePolyforgeLane(_value: unknown): { ok: true; lane: string } | { ok: false; error: string } {
-  return { ok: false, error: "" };
+export function validatePolyforgeLane(value: unknown): { ok: true; lane: string } | { ok: false; error: string } {
+  const lane = typeof value === "string" ? value.trim() : "";
+  if (lane === "") return { ok: false, error: "lane must be a non-empty lane name" };
+  if (!LANE_PATTERN.test(lane)) return { ok: false, error: "lane must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}" };
+  return { ok: true, lane };
 }

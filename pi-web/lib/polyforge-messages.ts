@@ -922,10 +922,16 @@ export async function createPolyforgeFileTicket(
   pin: string[] = [],
   lane?: string,
 ): Promise<{ slug: string }> {
-  const raw = await runPfJson(
-    [...pin, "--json", "file", "create", "--project", input.project, "--goal", input.goal, "--content", input.content],
-    WRITE_TIMEOUT_MS,
-  );
+  const raw = lane
+    ? await runPfJsonWithStdin(
+      [...pin, "--json", "file", "create", "--stdin"],
+      JSON.stringify({ project: input.project, goal: input.goal, content: input.content, bundle_name: lane }),
+      WRITE_TIMEOUT_MS,
+    )
+    : await runPfJson(
+      [...pin, "--json", "file", "create", "--project", input.project, "--goal", input.goal, "--content", input.content],
+      WRITE_TIMEOUT_MS,
+    );
   const slug = raw && typeof raw === "object" ? str((raw as { slug?: unknown }).slug) : "";
   if (!TICKET_SLUG.test(slug)) {
     throw new PolyforgeMessagesError("pf answered no ticket slug", "DAEMON-500");
