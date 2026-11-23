@@ -656,9 +656,11 @@ events are another ticket's.
   a rebuilt feed with reset ids is a new namespace this browser cannot tell
   apart). Only ids are stored, never the entry's text. An entry observed in the
   foreground, while the switch is off or without permission is consumed, never
-  back-filled (Q6 A). A browser whose ledger cannot be read pauses delivery (the
-  settings card says so); a ledger the browser cannot write — a full quota, a
-  locked-down profile — also pauses delivery, and the one-time banner reports it.
+  back-filled (Q6 A). A browser whose ledger cannot be read or written (a full
+  quota, a locked-down profile) pauses delivery; while the notification switch is
+  on, the same in-page banner reports it with a dismiss control for the page (the
+  settings card also names a read-blocked ledger), while a browser with the switch
+  off shows no note at all (polyforge#240 review r2#1).
 - **Delivery.** `window.Notification` (owner Q7 A), only while
   `shouldShowBrowserNotification()` says the page is not in the foreground
   (`visibilityState !== "visible" || !hasFocus()`, owner Q3 A, the same rule the

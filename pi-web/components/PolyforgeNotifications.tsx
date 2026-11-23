@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { usePolyforgeNotifications } from "@/hooks/usePolyforgeNotifications";
 import type { PolyforgeDecision } from "@/lib/polyforge-decisions-pure";
@@ -21,14 +22,18 @@ export function PolyforgeNotifications({
   const { t } = useI18n();
   // The one explicit gesture is the card's and this banner's: the page never
   // requests the permission on its own (owner ruling Q4).
-  const { hint, permission, storageBlocked, dismissHint, requestPermission } = usePolyforgeNotifications({
+  const { enabled, hint, permission, storageBlocked, dismissHint, requestPermission } = usePolyforgeNotifications({
     decisions,
     translate: t,
     onOpenDecision,
   });
-  // Review r1#4: a ledger the browser cannot write (quota, a locked-down
-  // profile) pauses delivery; the same one-time banner reports it.
-  if (!hint && !storageBlocked) return null;
+  // Review r1#4 / r2#1: a ledger the browser cannot read or write pauses
+  // delivery. While the notification switch is on, this dismissible in-page
+  // note reports it; the settings card also names a read-blocked ledger, and
+  // a switched-off browser shows no note at all.
+  const [storageDismissed, setStorageDismissed] = useState(false);
+  const showStorage = storageBlocked && !storageDismissed;
+  if (!enabled || (!showStorage && !hint)) return null;
 
   const authorize = async () => {
     const answer = await requestPermission();
@@ -60,9 +65,9 @@ export function PolyforgeNotifications({
       }}
     >
       <span data-pf-notification-hint-text="" style={{ minWidth: 0 }}>
-        {storageBlocked ? t("polyforge.settings.notificationsStorageBlocked") : t("polyforge.notifications.hint")}
+        {showStorage ? t("polyforge.settings.notificationsStorageBlocked") : t("polyforge.notifications.hint")}
       </span>
-      {!storageBlocked && permission === "default" && (
+      {!showStorage && permission === "default" && (
         <button
           type="button"
           data-pf-notification-authorize=""
@@ -82,11 +87,13 @@ export function PolyforgeNotifications({
           {t("polyforge.notifications.authorize")}
         </button>
       )}
-      {!storageBlocked && (
       <button
         type="button"
         data-pf-notification-dismiss=""
-        onClick={dismissHint}
+        onClick={() => {
+          setStorageDismissed(true);
+          dismissHint();
+        }}
         style={{
           flex: "0 0 auto",
           padding: "2px 8px",
@@ -101,7 +108,6 @@ export function PolyforgeNotifications({
       >
         {t("polyforge.notifications.dismiss")}
       </button>
-      )}
     </div>
   );
 }
