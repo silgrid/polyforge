@@ -398,3 +398,130 @@ test("no settings component names the config-button base class directly (AC2)", 
   }
   assert.deepEqual(offenders, [], `direct config-button base class: ${offenders.join(", ")}`);
 });
+/**
+ * A source file's JSX start tags, each with what styles it: its own class
+ * expression (or `style` attribute) and the class expressions of the elements
+ * enclosing it. Fragments and closing tags only move the stack; a self-closing
+ * tag never opens one.
+ */
+function jsxTags(source) {
+  const tags = [];
+  const stack = [];
+  const lineAt = (index) => source.slice(0, index).split("\n").length;
+  /** The class expression of one start tag, composed the same way the token case composes it. */
+  const classOf = (text) => {
+    const at = text.indexOf("className=");
+    if (at === -1) return null;
+    const start = at + "className=".length;
+    const character = text[start];
+    if (character === '"' || character === "'") {
+      const end = text.indexOf(character, start + 1);
+      return { text: text.slice(start + 1, end), dynamics: [] };
+    }
+    if (character !== "{") return null;
+    let depth = 0;
+    let quote = null;
+    let end = start;
+    for (; end < text.length; end += 1) {
+      const current = text[end];
+      if (quote) {
+        if (current === "\\") end += 1;
+        else if (current === quote) quote = null;
+        continue;
+      }
+      if (current === '"' || current === "'" || current === "`") { quote = current; continue; }
+      if (current === "{") depth += 1;
+      else if (current === "}") { depth -= 1; if (depth === 0) break; }
+    }
+    return composeValue(text.slice(start + 1, end));
+  };
+  let index = 0;
+  while ((index = source.indexOf("<", index)) !== -1) {
+    if (source.startsWith("<!--", index)) {
+      const commentEnd = source.indexOf("-->", index);
+      index = commentEnd === -1 ? source.length : commentEnd + 3;
+      continue;
+    }
+    const next = source[index + 1] ?? "";
+    if (next === "/") {
+      // a closing tag: pop to its name (a stray one pops nothing)
+      const name = /^<\/([A-Za-z][\w.]*)/.exec(source.slice(index))?.[1];
+      if (name) {
+        const at = stack.map((entry) => entry.name).lastIndexOf(name);
+        if (at !== -1) stack.length = at;
+      }
+      const close = source.indexOf(">", index);
+      index = close === -1 ? source.length : close + 1;
+      continue;
+    }
+    if (!/[A-Za-z]/.test(next)) {
+      // a fragment `<>` opens nothing (React fragments carry no class)
+      index += 1;
+      continue;
+    }
+    // Read the tag to its closing `>`, respecting quotes and `{}` expressions.
+    let cursor = index + 1;
+    let quote = null;
+    let brace = 0;
+    let end = -1;
+    for (; cursor < source.length; cursor += 1) {
+      const character = source[cursor];
+      if (quote) {
+        if (character === "\\") cursor += 1;
+        else if (character === quote) quote = null;
+        continue;
+      }
+      if (character === '"' || character === "'" || character === "`") { quote = character; continue; }
+      if (character === "{") brace += 1;
+      else if (character === "}") brace -= 1;
+      else if (character === ">" && brace === 0) { end = cursor; break; }
+    }
+    if (end === -1) break;
+    const text = source.slice(index, end + 1);
+    const name = /^<([A-Za-z][\w.]*)/.exec(text)?.[1] ?? "";
+    const selfClosing = /\/>$/.test(text);
+    tags.push({
+      name,
+      line: lineAt(index),
+      className: classOf(text),
+      inlineStyle: /\bstyle=/.test(text),
+      ancestors: stack.map((entry) => entry.className).filter(Boolean),
+    });
+    if (!selfClosing) stack.push({ name, className: classOf(text) });
+    index = end + 1;
+  }
+  return tags;
+}
+
+/**
+ * Whether a class expression names a class at all (its tokens are the token
+ * and dynamic cases' business): a control styled by a composed class
+ * (`config-button-${variant}`) still carries one.
+ */
+const styled = (expression) => expression.text.replaceAll(PLACEHOLDER, "").trim().length > 0;
+
+// polyforge#257 (T2 止血, review r1#1) AC2: owner Q1=B forbids 「无样式的原生
+// 控件」. A token check cannot see a control that carries no className, so this
+// case reads the markup: every native form control in a settings component is
+// styled by its own class (or its own inline `style`, the legacy editors' way),
+// or by an enclosing element's class (a label wrapping its input is the usual
+// shape). The expected state is the ticket's own rule, not this render's output.
+test("every native form control in a settings component is styled by its own class or an ancestor's (AC2)", () => {
+  const native = new Set(["input", "select", "textarea", "button"]);
+  const unstyled = [];
+  for (const file of owned) {
+    const name = relative(componentDir, file);
+    for (const tag of jsxTags(readFileSync(file, "utf8"))) {
+      if (!native.has(tag.name)) continue;
+      if (tag.className !== null && tag.className.text.trim().length > 0) {
+        if (!styled(tag.className)) unstyled.push(`${name}:${tag.line} <${tag.name}> names a class no rule declares`);
+        continue;
+      }
+      if (tag.inlineStyle) continue;
+      if (tag.ancestors.some((ancestor) => styled(ancestor))) continue;
+      unstyled.push(`${name}:${tag.line} <${tag.name}> has no class, no inline style and no styled ancestor`);
+    }
+  }
+  assert.deepEqual(unstyled, [], `settings controls with no CSS rule: ${unstyled.join(", ")}`);
+});
+
