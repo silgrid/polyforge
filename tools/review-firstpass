@@ -389,6 +389,10 @@ BLOCK_NEGATIVE = re.compile(r'非阻断|非阻塞|不阻断|不阻塞|无阻断|
 BLOCK_RANGE = re.compile(r'^#\d+\s*[–—~-]\s*#?\d+')
 BLOCK_OLD_ITEM = re.compile(r'^\d+\.\s*(?:\*\*|`)*(?:#\d+\s*)?(?:blocking|阻断|阻塞|bug|ac_gap|project_rule|test_weakened|guarantee)\b', re.I)
 BLOCK_THIS_ROUND = re.compile(r'(?:本轮|this round)\s*#(\d+)', re.I)
+OWNER_RULING_WORDS = re.compile(r'改判|放行|非阻断|不阻断|不算阻断')
+OWNER_DECISION_WORDS = re.compile(r'接受|放行|改判|非阻断|不阻断|不再阻断|移出')
+OWNER_PENDING = re.compile(r'(?:留|交|待|需要|等).{0,12}(?:owner|所有者).{0,12}(?:决定|裁定)|由.{0,8}(?:owner|所有者).{0,8}决定', re.I)
+OWNER_NEGATED = re.compile(r'(?:不需要|没有|无|不必|无需|不用).{0,12}(?:owner|所有者)', re.I)
 BLOCK_SUMMARY = re.compile(r'(\d+)\s*条?\s*(?<!非)(?:阻断|阻塞)|(?<!non-)blocking\s*(\d+)\s*条|(\d+)\s*(?<!non-)blocking')
 BLOCK_OUTCOMES = ('fixed', 'rebutted', 'owner', 'withdrawn-unknown', 'unknown')
 BLOCK_REASONS = ('no later round', 'later rounds do not mention it',
@@ -606,7 +610,7 @@ def owner_rulings(entries):
     out = []
     for e in entries:
         text = e.get('text') or ''
-        if not re.search(r'改判|放行|非阻断|不阻断|不算阻断', text):
+        if not OWNER_RULING_WORDS.search(text):
             continue
         for m in BLOCK_REF.finditer(text):
             out.append((int(m.group(1)), int(m.group(2)), e.get('at') or '', text))
@@ -624,9 +628,11 @@ def outcome_of_line(text):
         return 'fixed'
     if re.search(r'仍未修|未修|仍未|仍在|依然|仍存在|未解决|没有修|没有改|still[ -]open', text, re.I):
         return 'still-open'
-    if not re.search(r'(?:不需要|没有|无|不必|无需|不用).{0,12}(?:owner|所有者).{0,12}裁定', text, re.I) \
-            and re.search(r'(?:owner|所有者).{0,24}(?:已裁定|裁定已处理|裁定)|(?:已由|按).{0,12}(?:owner|所有者).{0,12}裁定', text, re.I):
-        return 'owner'
+    if not OWNER_NEGATED.search(text) and not OWNER_PENDING.search(text):
+        if re.search(r'(?:owner|所有者)', text, re.I) and OWNER_DECISION_WORDS.search(text):
+            return 'owner'
+        if re.search(r'(?:owner|所有者).{0,24}(?:已裁定|裁定已处理|裁定)|(?:已由|按).{0,12}(?:owner|所有者).{0,12}裁定', text, re.I):
+            return 'owner'
     if re.search(r'撤回|收回|不成立|接受 build|build 证据成立|证据成立|不构成|推翻|withdraw', text, re.I):
         if re.search(r'owner|所有者|裁定|改判|放行', text, re.I):
             return 'owner'
