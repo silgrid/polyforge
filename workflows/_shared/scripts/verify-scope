@@ -183,8 +183,8 @@ command's JSON entry then carries ``group: <name>``; a repository that
 binds none keeps the report's key set unchanged. ``full_parallel`` is the
 parallelism with a default of 2, echoed as the report's ``full_parallel``
 only when a command is bound; a value that is not a positive integer, or a
-second declaration, is diagnosed and ignored — an invalid value answers
-1 (serial). A line naming no full-phase command, a fast-phase command, or
+second valid declaration, is diagnosed and ignored — an invalid one
+answers 1 (serial) unless a later valid line follows it, which wins. A line naming no full-phase command, a fast-phase command, or
 one already bound elsewhere is diagnosed and dropped, the first binding
 winning. The engine itself runs nothing in parallel: the gate that
 consumes the report schedules the groups.
@@ -444,6 +444,7 @@ class Engine:
         # resolution command name -> group the report echoes.
         self.conf_groups: List[Tuple[str, str]] = []
         self.conf_parallel = 0
+        self.conf_parallel_bad = False
         self.group_of: Dict[str, str] = {}
         self.conf_runner = ""
         self.conf_e2e_runner = ""
@@ -1054,13 +1055,13 @@ class Engine:
                 if not re.fullmatch(r"[0-9]+", val, re.ASCII) or int(val) <= 0:
                     self.diag("conf ignores full_parallel %s (expected a positive integer);"
                               " the full gate runs serially: %s" % (val, line))
-                    if not self.conf_parallel:
-                        self.conf_parallel = 1
+                    self.conf_parallel_bad = True
                     continue
                 if self.conf_parallel:
                     self.diag("conf ignores a second full_parallel: %s" % line)
                     continue
                 self.conf_parallel = int(val)
+                self.conf_parallel_bad = False
             elif key == "not_runnable_rule":
                 # facts.py's replay key: the engine reads none of it, so it
                 # accepts the line without the unknown-key diagnostic — no
@@ -2343,6 +2344,7 @@ class Engine:
                 self.diag("conf ignores group '%s' for '%s': already in group '%s'" % (gname, name, self.group_of[name]))
                 continue
             self.group_of[name] = gname
+
     def line_report(self) -> str:
         out = ["mode: %s" % self.mode]
         for p in self.changed:
@@ -2429,7 +2431,7 @@ class Engine:
         # polyforge#244: the full gate's parallelism, only when a group is
         # bound — an undeclared repository's report keeps its key set.
         if self.group_of:
-            report["full_parallel"] = self.conf_parallel or 2
+            report["full_parallel"] = self.conf_parallel or (1 if self.conf_parallel_bad else 2)
         # A repository that declares micro_path= or micro_check= (and every
         # --micro report) echoes the micro declaration; one that declares
         # neither keeps the report's key set unchanged.
