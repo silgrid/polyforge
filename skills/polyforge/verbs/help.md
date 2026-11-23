@@ -12,9 +12,12 @@ first time in a session. `pf <verb> -help` prints only that verb's own
 registered flags (empty for verbs whose flags live on sub-actions) and
 exits 2.
 
-Delivery has no verb (`verbs/ship.md`); install / upgrade is
-`tools/install.sh` (`verbs/init.md`). The daily-use guide is
+Delivery has no verb (`verbs/ship.md`). The newcomer mainline is the
+workstation image: `docs/getting-started.md` (release checkout:
+`~/.local/share/polyforge/release/current/docs/getting-started.md`) — Docker,
+the image, compose, the first boot, a first submitted work item. Host
+install / upgrade is `tools/install.sh` (`verbs/init.md`), the path for a
+machine joining an existing team. The daily-use guide is
 `docs/user-guide.md` (release checkout:
-`~/.local/share/polyforge/release/current/docs/user-guide.md`) — install to
-a first submitted work item, the flow, the core concepts, memory and the
+`~/.local/share/polyforge/release/current/docs/user-guide.md`) — the flow, the core concepts, memory and the
 recovery moves.
