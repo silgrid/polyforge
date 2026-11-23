@@ -400,7 +400,7 @@ test("judgeFullSuite: the declared full test command blocks literally", () => {
 	const v = judgeFullSuite(parseCommandSegments("go test -race -timeout 30m ./pkg/ -count=1", guardRoot), [full], "/caps");
 	assert.ok(v, "the literal declared command is blocked");
 	assert.equal(v.rule, "full-test");
-	assert.match(v.reason, /fast_checks\.py --repo r --close-scoped/);
+	assert.match(v.reason, /fast_checks\.py" --repo r --close-scoped/);
 	assert.match(v.reason, /-run/);
 });
 
@@ -432,9 +432,9 @@ test("judgeFullSuite: a cheaper-phase declaration at the same directory subtract
 
 test("judgeFullSuite: a fast_checks.py command passes, and a whole-suite segment beside it does not", () => {
 	const full: RootProjection = { root: guardRoot, full: [entry(guardRoot, "go", "test")], cheap: [] };
-	const pass = parseCommandSegments('"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo r --phase fast', "/caps");
+	const pass = parseCommandSegments('"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo r --phase fast', guardRoot);
 	assert.equal(judgeFullSuite(pass, [full], "/caps"), undefined);
-	const compound = parseCommandSegments('"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo r --phase fast && go test ./...', "/caps");
+	const compound = parseCommandSegments('"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo r --phase fast && go test ./...', guardRoot);
 	assert.ok(judgeFullSuite(compound, [full], "/caps"));
 });
 
