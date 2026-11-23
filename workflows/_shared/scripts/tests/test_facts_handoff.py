@@ -202,7 +202,8 @@ class HandoffCase(GitCase):
         self.sound_unit(cap, repo, ["answer.txt"])
         write(cap, {"artifacts/build/units.json": "{not a JSON array"})
         code, res = self.run_handoff(cap)
-        self.assertEqual(code, 1, res["summary"], "carries keeps exit 2 no pass and refuses the hand-off")
+        # carries keeps exit 2 no pass and refuses the hand-off (owner Q3 B)
+        self.assertEqual(code, 1, res["summary"])
         self.assertIn("D3", self.items(res))
         self.assertIn("not judged", res["summary"])
 
