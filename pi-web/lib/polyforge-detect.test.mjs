@@ -80,6 +80,16 @@ test("unknownIsBelow counts a null/unparseable version below the floor only when
   assert.equal(isPolyforgeVersionBelowMinimum("not-a-version", "2.20.21", false), false);
 });
 
+// polyforge#256 B1: detect re-exports the browser-safe comparator (the install
+// card imports lib/polyforge-version.ts without this module's Node/SDK chain),
+// so the two surfaces can never drift into a second implementation.
+test("the version comparator is one implementation: detect re-exports the browser-safe module's", async () => {
+  const version = await jiti.import("./polyforge-version.ts");
+  assert.equal(isPolyforgeVersionBelowMinimum, version.isPolyforgeVersionBelowMinimum);
+  assert.equal(POLYFORGE_MINIMUM_PF_VERSION, version.POLYFORGE_MINIMUM_PF_VERSION);
+  assert.equal(version.comparePolyforgeVersions("v0.2.4-dev.49", "v0.2.4") < 0, true);
+});
+
 test("origin owner/repo pairs parse from both URL forms, .git stripped", () => {
   assert.equal(polyforgeOriginOwnerRepo("git@github.com:example-org/internal-forge.git"), "example-org/internal-forge");
   assert.equal(polyforgeOriginOwnerRepo("https://github.com/example-org/internal-forge.git"), "example-org/internal-forge");
