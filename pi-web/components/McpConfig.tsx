@@ -2508,9 +2508,9 @@ function McpUnifiedSection({
             ))}
           </ul>
           {claudeSide !== undefined && onUnify && (
-            <button type="button" className="config-button" disabled={controlsBusy || applyBusy} onClick={() => onUnify(row, "pi")}>
+            <ConfigButton disabled={controlsBusy || applyBusy} onClick={() => onUnify(row, "pi")}>
               {t("mcp.unified.unify")}
-            </button>
+            </ConfigButton>
           )}
         </section>
       )}

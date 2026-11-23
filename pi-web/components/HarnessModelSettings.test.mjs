@@ -126,3 +126,37 @@ test("old pf reason follows locale: version, not-installed and unreadable stay d
   assert.match(en({ stepTiersReason: null }), /could not be read/i, "an unreadable catalog is its own reason");
   assert.match(en({ pfVersion: null }), /unparseable version/i, "an unknown version is named, never a fake number");
 });
+
+// polyforge#257 (T2 止血) AC2: the model page's two structural leftovers — a
+// page-level 「模型」 h2 that no other tab has, and sidebar provider groups
+// drawn as bare <strong>. The expected markup is the shared settings
+// component's own contract (ConfigSidebarGroupLabel renders a group heading
+// with a `.config-sidebar-group-label-text` name), so the assertion is derived
+// from SettingsUi.tsx, not from this component's output.
+const { HarnessModelSidebar } = await jiti.import("./HarnessModelSettings.tsx");
+
+const SIDEBAR_ROWS = [
+  { provider: "anthropic", id: "opus", name: "Opus", harnesses: ["pi", "claude"], chatAvailable: true, reasoning: [], isDefault: true },
+  { provider: "gateway", id: "sonnet", name: "Sonnet", harnesses: ["pi"], chatAvailable: false, reasoning: [], isDefault: false },
+];
+
+test("the model page has no page-level h2 and its sidebar groups use the shared label", () => {
+  const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
+  assert.ok(!/<h2[\s>]/.test(page), "the page-level 「模型」 h2 is gone (the tab already names the page)");
+  assert.match(page, /data-model-page="unified"/, "the unified page root stays");
+
+  const sidebar = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSidebar, {
+    rows: SIDEBAR_ROWS,
+    selectedProvider: null,
+    onSelect: () => {},
+  })));
+  for (const provider of ["anthropic", "gateway"]) {
+    assert.match(
+      sidebar,
+      new RegExp(`<div class="config-sidebar-group"><div class="config-sidebar-group-label"><span class="config-sidebar-group-label-text">${provider}</span></div>`),
+      `${provider} is a shared sidebar group heading, not a bare <strong>`,
+    );
+  }
+  assert.ok(!/<strong>/.test(sidebar), "no bare <strong> group heading survives");
+  assert.match(sidebar, />Opus · pi, claude</, "each model row keeps its name and harnesses");
+});

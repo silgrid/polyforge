@@ -7,6 +7,8 @@
 // draft and is never reported as a total success. Presentational like
 // SettingsUi.tsx.
 
+import { ConfigButton } from "./SettingsUi";
+
 export type HarnessApplyToMode = "all" | "specific";
 
 export interface HarnessApplyToTarget {
@@ -130,9 +132,9 @@ export function HarnessApplyTo({
         </ul>
       )}
       {onSubmit && (
-        <button type="button" className="config-button" onClick={onSubmit} disabled={busy || !canSubmit}>
+        <ConfigButton onClick={onSubmit} disabled={busy || !canSubmit}>
           {texts.submit}
-        </button>
+        </ConfigButton>
       )}
       {results !== null && results.length > 0 && (
         <ul className="harness-apply-to-results">
