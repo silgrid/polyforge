@@ -638,12 +638,14 @@ def _union(parent, a, b):
         parent[rb] = ra
 
 
-def _unknown_reason(keys, verdicts, last_round, cap, asks):
+def _unknown_reason(keys, verdicts, last_round, cap, asks, still_open=False):
     later = [r for r in sorted(verdicts) if r > last_round]
     if later:
         if any(verdicts[r] == 'PASS' for r in later):
             return 'unknown', 'PASS round without naming it'
         return 'unknown', 'later rounds do not mention it'
+    if still_open:
+        return 'unknown', 'last mention still open'
     msgs = owner_messages(cap)
     if msgs:
         if any(not BLOCK_REF.search(m[1]) for m in msgs):
@@ -702,7 +704,7 @@ def chain_findings(cap, versions):
         if rel:
             last_round, _, oc, evidence = rel[-1]
             if oc == 'still-open':
-                outcome, reason = _unknown_reason(keys, verdicts, last_round, cap, asks)
+                outcome, reason = _unknown_reason(keys, verdicts, last_round, cap, asks, still_open=True)
             else:
                 outcome, reason = oc, ''
         else:
