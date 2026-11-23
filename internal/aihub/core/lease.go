@@ -430,16 +430,15 @@ type leaseHolder struct {
 
 // leaseWaiter is one row of the lease_waiters table.
 type leaseWaiter struct {
-	seq             int64
-	requestID       string
-	kind            string
-	key             string
-	machineID       string
-	workItem        string
-	operatorID      string
-	requestedAtNS   int64
-	lastPollAtNS    int64
-	lastPollUpdated bool
+	seq           int64
+	requestID     string
+	kind          string
+	key           string
+	machineID     string
+	workItem      string
+	operatorID    string
+	requestedAtNS int64
+	lastPollAtNS  int64
 }
 
 // loadLeaseHolder answers the (kind, key) holder, or nil when free.
