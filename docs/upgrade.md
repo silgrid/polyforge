@@ -960,8 +960,9 @@ it, and once that comparison is signed off a person may DROP it — no
 code reads it, and it serves nothing else.
 
 Before authorizing the deploy, review the blast radius read-only (the
-probe counts only the split pair) and keep the list for the
-post-deploy comparison — the accepted delivery's last half re-runs the
+probe sums the flat split rows AND the missing lock tables, so a
+database that ran the old v0.2.4 without the lock schema answers apply
+too) and keep the list for the post-deploy comparison — the accepted delivery's last half re-runs the
 split check's query per original id and expects exactly the old ids:
 
 ```sql
