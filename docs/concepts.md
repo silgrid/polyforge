@@ -590,12 +590,18 @@ work item merges itself at its end — its conflicts with the default branch
 are resolved then, while they are its own, never in a later batch. Every
 step of the lane is an agent step: `sync`,
 `verification`, `publish` and `merge` are mechanical steps on the lane's
-`cheap` tier, each following a shared skill
+`cheap` tier (a lane-declared tier, distinct from the per-ticket
+capability tier below), each following a shared skill
 (`workflows/_shared/skills/<name>.md`, rendered into its prompt) that runs
 one pre-written command verbatim — `sync.py`, `verify.py`, `merge.py` — and
 routes on the exit code the command's result file carries; each first
 checks what the step before it handed off (its skill says what: the
-result file and the commits stamped in `handoff.md`). The daemon
+result file and the commits stamped in `handoff.md`). A work item's
+**capability tier** is the per-ticket layer above these lane tiers: the
+pre-submit analysis recommends one Host `[step_tiers]` tier per step as
+text, and the session sets it with `pf override <id> --step <s> --tier
+<name>` after the owner confirms (an explicit `--models` chain on the same
+step outranks it). The daemon
 orchestrates — the dispatch, the heavy-run admission, the merge lock, the
 rewind — and reads no content, and no agent merges by hand:
 
@@ -861,7 +867,12 @@ with its own credentials (a step agent holds none) once the step hands off
   `.polyforge/Dockerfile.verify` is gated too) — and on a pass writes the green tag itself
   (`--mark-green`). The gate runs with `--keep-going`: every command runs,
   never stopping at the first failing one, so one red batch records every
-  failing command and its triage sees them all at once. A red gate is triaged by `gate.py --triage`: each
+  failing command and its triage sees them all at once. A repository that
+  declares parallel groups in its `.polyforge/verify-scope.conf` — this
+  project's Go bar and pi-web bar are two — runs them side by side, each
+  group's commands in plan order in a container of its own; the progress
+  lines of two groups interleave, the results and the summary stay in plan
+  order, and a repository that declares no group runs exactly as before. A red gate is triaged by `gate.py --triage`: each
   failing unit re-run once (the conf's `rerun=` template for an aggregate
   command; every failure flaky → the gate once more), a unit still red run
   at the baseline (the newest green tag merged into the gated head, else

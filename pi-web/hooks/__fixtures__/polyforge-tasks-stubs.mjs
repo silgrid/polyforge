@@ -50,3 +50,15 @@ export const ConfigSidebarText = inert("ConfigSidebarText");
 export const ConfigSplitView = inert("ConfigSplitView");
 export const ConfigStatusDot = inert("ConfigStatusDot");
 export const ConfigSwitch = inert("ConfigSwitch");
+
+// components/AccountSettings.tsx's two heavy children, stubbed for the
+// account read's hook behaviour test (polyforge#256 B3): the shell's state
+// machine is what the test drives; the terminal and the login form never
+// mount.
+export function TerminalPanel() {
+  return null;
+}
+
+export function PiAccountLogin() {
+  return null;
+}

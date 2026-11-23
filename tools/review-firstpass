@@ -155,6 +155,69 @@ the exported event file:
                output_tokens and pi's output are both read, claude's
                records deduped by message.id (stepcall/usage.go).
 
+With --events the report also gains the blocking-findings block
+(polyforge#242), over the same run set:
+
+  source       every version of artifacts/review.md in the capsule's own
+               git history is one review round (a capsule without a
+               readable history falls back to the stamped hand-off
+               sections, never both). The round number is the report
+               title's, the verdict its conclusion line.
+  classes      the five review classes — bug, ac_gap, project_rule,
+               test_weakened and guarantee — read from the item's own
+               line; an item that names none is unclassified. The
+               document dimension is not a sixth class.
+  linkage      an item is chained to a later round only by the
+               `r<n>#<k>` reference (the round's number and the item
+               number); a later round that repeats the text without the
+               reference is a different finding. A chain's final outcome
+               is its last named outcome; its rounds are the rounds it
+               appears in (cross-round is a marker, not an outcome). A
+               round re-dispatched keeps its last version for chaining,
+               while every version counts in the version and FAIL-version
+               totals.
+  outcome line only a disposition line sets an outcome: a line that opens
+               with the reference, or a table row whose first cell is the
+               reference. A mention elsewhere on a line (an explanation, a
+               facts table) links at most and never overrides the
+               disposition; a `；`/`;`/`。` clause starts its own subject.
+               An item line's parenthetical owner note (`… owner 已接受`)
+               is a mention, not a disposition.
+  outcomes     fixed (a later round says repaired, or says it was fixed by
+               the owner's ruling — `已按 owner 裁定修`); rebutted
+               (withdrawn on the build's evidence); owner-overturned (a
+               withdrawal names the owner's ruling, or an owner
+               disposition accepts / releases / reclassifies the item —
+               `owner 已裁定`, `已由 owner 裁定`, `owner 裁定已处理`,
+               `owner 裁定移出`, `owner「b」接受 … → 非阻断` — or an
+               asks.jsonl reply/message names the item and rules it
+               non-blocking); a pending `留/交/待/需要 owner 决定|裁定`
+               is not a ruling and does not set the outcome;
+               withdrawn-unknown (withdrawn with no attributable reason);
+               unknown (the reasons below, counted apart).
+  rate         the suspected false-positive rate is the numerator
+               (rebutted + owner-overturned + withdrawn-unknown) over the
+               denominator (every decidable chain: fixed + the numerator);
+               unknown chains never enter either. A class or model with no
+               decidable chain prints `n/a`, never 0%. The sensitivity
+               line counts a PASS round that names no item as fixed.
+  unknown      no later round, later rounds do not mention it, a PASS
+               round without naming it, owner words without an item
+               number, multiple candidates, last mention still open. A
+               last mention still open outranks the PASS-without-naming
+               reason.
+  unparsable   a FAIL version whose conclusion names blockers but whose
+               items cannot be parsed is counted apart and enters no
+               denominator.
+  model        the model is the round's stamped model; the baseline's
+               rounds carry one model, so the by-model table has one row
+               and cannot support a model comparison.
+  not tested   "fixed but no behaviour change" is offline-undecidable and
+               is not measured here.
+  detail       stdout prints only the summary and the unknown counts;
+               with --csv too, one row per chain is written to
+               `<csv>.blocking.csv`, and the existing CSV gains no column.
+
 A manifest carrying `arms` prints one `== arm <name> ==` block per arm,
 names alphabetically: the same run-set line, tier / infra / switch /
 estimate summary over the arm's enterable runs, one detail row per run in
@@ -314,6 +377,530 @@ def stamped_reviews(cap):
             continue
         out.append((rnd, 'PASS' if status == 'done' else 'FAIL'))
     return sorted(out)
+
+
+# ---------------------------------------------------------------- blocking findings
+# polyforge#242: the blocking findings of every review round, their class and
+# outcome, chained across rounds by the `r<n>#<k>` reference and by the owner's
+# asks.jsonl rulings, with the suspected false-positive rate by class and by
+# model. The review report is artifacts/review.md; every round's version is
+# committed in the capsule's own git history, so the version chain is the
+# source (a capsule without a readable history falls back to the stamped
+# hand-off sections). Read-only.
+
+BLOCK_CLASSES = ('bug', 'ac_gap', 'project_rule', 'test_weakened', 'guarantee')
+BLOCK_ROUND = re.compile(r'第\s*(\d+)\s*轮|[Rr]ound\s+(\d+)')
+BLOCK_VERDICT = re.compile(r'\b(PASS|FAIL)\b')
+BLOCK_REF = re.compile(r'r(\d+)#(\d+)')
+BLOCK_HEADING = re.compile(r'^\s{0,3}(#{2,4})\s+(.*)$')
+BLOCK_SECTION_BLOCK = re.compile(r'阻断|阻塞|blocking')
+BLOCK_SECTION_NON = re.compile(r'非阻断|非阻塞|non-blocking|无阻断|无阻塞|不阻断|不阻塞|没有阻断|没有阻塞|no blocking|without blocking')
+BLOCK_NEGATIVE = re.compile(r'非阻断|非阻塞|不阻断|不阻塞|无阻断|无阻塞|没有阻断|没有阻塞|non-blocking|no blocking|without blocking')
+BLOCK_RANGE = re.compile(r'^#\d+\s*[–—~-]\s*#?\d+')
+BLOCK_OLD_ITEM = re.compile(r'^\d+\.\s*(?:\*\*|`)*(?:#\d+\s*)?(?:blocking|阻断|阻塞|bug|ac_gap|project_rule|test_weakened|guarantee)\b', re.I)
+BLOCK_THIS_ROUND = re.compile(r'(?:本轮|this round)\s*#(\d+)', re.I)
+OWNER_RULING_WORDS = re.compile(r'改判|放行|非阻断|不阻断|不算阻断')
+OWNER_DECISION_WORDS = re.compile(r'接受|放行|改判|非阻断|不阻断|不再阻断|移出')
+OWNER_PENDING = re.compile(r'(?:留|交|待|需要|等).{0,12}(?:owner|所有者).{0,12}(?:决定|裁定)|由.{0,8}(?:owner|所有者).{0,8}决定', re.I)
+OWNER_NEGATED = re.compile(r'(?:不需要|没有|无|不必|无需|不用).{0,12}(?:owner|所有者)', re.I)
+BLOCK_SUMMARY = re.compile(r'(\d+)\s*条?\s*(?<!非)(?:阻断|阻塞)|(?<!non-)blocking\s*(\d+)\s*条|(\d+)\s*(?<!non-)blocking')
+BLOCK_OUTCOMES = ('fixed', 'rebutted', 'owner', 'withdrawn-unknown', 'unknown')
+BLOCK_REASONS = ('no later round', 'later rounds do not mention it',
+                 'PASS round without naming it', 'owner words without an item number',
+                 'multiple candidates', 'last mention still open')
+
+
+def review_round(text):
+    """the round number the review report's title names, else None."""
+    for line in text.split('\n')[:4]:
+        m = BLOCK_ROUND.search(line)
+        if m:
+            return int(m.group(1) or m.group(2))
+    return None
+
+
+def review_verdict(text):
+    """PASS / FAIL from the report's conclusion line, else ''."""
+    for line in text.split('\n')[:8]:
+        if '结论' in line or 'Conclusion' in line:
+            m = BLOCK_VERDICT.search(line.upper())
+            if m:
+                return m.group(1)
+    return ''
+
+
+def blocking_count_in_summary(text):
+    """the blocker count the report's conclusion names, else None."""
+    for line in text.split('\n')[:12]:
+        if '结论' in line or 'Conclusion' in line:
+            m = BLOCK_SUMMARY.search(line)
+            if m:
+                return int(next(g for g in m.groups() if g))
+    return None
+
+
+def _item_label(line):
+    s = line.strip()
+    s = re.sub(r'^#{1,6}\s+', '', s)
+    s = re.sub(r'^[-*]\s+', '', s)
+    s = re.sub(r'^\*+\s*', '', s)
+    return s
+
+
+def _class_of(label):
+    for c in BLOCK_CLASSES:
+        if re.search(r'(?<![A-Za-z0-9_])' + c + r'(?![A-Za-z0-9_])', label):
+            return c
+    return 'unclassified'
+
+
+def _is_blocking_line(label, section_blocking, section_non):
+    if BLOCK_NEGATIVE.search(label):
+        return False
+    low = label.lower()
+    if 'blocking' in low or '阻断' in label or '阻塞' in label:
+        return True
+    if section_blocking:
+        return True
+    if section_non:
+        return False
+    # the old numbered form under `## 发现`: the class word leads the item
+    return _class_of(label) != 'unclassified'
+
+
+def _item_number(label, fallback):
+    """(item, round) from the item's own leading `#<k>`, a leading `r<n>#<k>`
+    reference (the round it names is the item's own when it is the round being
+    parsed) or a leading `1.`; else fallback. A number anywhere else in the
+    prose — `polyforge#117` — is not an item number."""
+    m = re.match(r'^r(\d+)#(\d+)', label)
+    if m:
+        return int(m.group(2)), int(m.group(1))
+    m = re.match(r'^#(\d+)', label)
+    if m:
+        return int(m.group(1)), None
+    m = re.match(r'^(\d+)\.', label)
+    if m:
+        return int(m.group(1)), None
+    return fallback, None
+
+
+def parse_blocking_items(text, round_no):
+    """The blocking items of one review round: [{item, class, label}], one
+    per distinct item number, by first appearance. Only a line that opens
+    with its own item number is an item — a body list, a sub-bullet or a
+    prose mention is not; a line that only mentions an earlier round's item
+    (`r<n>#<k>` with n != round_no) is not an item either. A negated
+    `blocking` (`不阻断`, `无阻断`, `non-blocking`) never makes a line or a
+    section blocking, and the old numbered form under `## 发现` counts only
+    when the class word (or `blocking`) leads the item."""
+    items, seen = [], set()
+    section_blocking = section_non = False
+    for line in text.split('\n'):
+        h = BLOCK_HEADING.match(line)
+        if h and len(h.group(1)) == 2:
+            body = h.group(2).strip()
+            section_non = bool(BLOCK_SECTION_NON.search(body))
+            section_blocking = bool(BLOCK_SECTION_BLOCK.search(body)) and not section_non
+            continue
+        if section_non:
+            continue
+        label = _item_label(line)
+        if BLOCK_RANGE.match(label):
+            continue
+        starts = bool(re.match(r'^(?:#\d+|r\d+#\d+)', label))
+        if not starts and not section_blocking:
+            starts = bool(BLOCK_OLD_ITEM.match(label))
+        if not starts:
+            continue
+        num, ref_round = _item_number(label, None)
+        if num is None or (ref_round is not None and ref_round != round_no):
+            continue
+        if _is_blocking_line(label, section_blocking, section_non) and num not in seen:
+            seen.add(num)
+            items.append({'item': num, 'class': _class_of(label), 'label': label})
+    return items
+
+
+def _git(cap, *args):
+    try:
+        return subprocess.run(['git', '-C', cap] + list(args), capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def git_review_versions(cap):
+    """the review.md texts in the capsule's git history, oldest first; None
+    when the history is absent or unreadable."""
+    log = _git(cap, 'log', '--reverse', '--format=%H', '--', 'artifacts/review.md')
+    if log is None or log.returncode != 0:
+        return None
+    shas = [s for s in log.stdout.split() if s]
+    if not shas:
+        return None
+    out = []
+    for sha in shas:
+        show = _git(cap, 'show', sha + ':artifacts/review.md')
+        if show is None or show.returncode != 0:
+            return None
+        out.append(show.stdout)
+    return out
+
+
+def review_stamps(cap):
+    """[{round, status, model, end, text}] of the daemon-stamped review
+    sections in artifacts/handoff.md."""
+    hb = os.path.join(cap, 'artifacts', 'handoff.md')
+    if not os.path.exists(hb):
+        return []
+    with open(hb, errors='replace') as f:
+        text = f.read()
+    out = []
+    for sec in [s for s in ('\n---\n' + text).split('\n---\n') if s.strip()]:
+        step = section_row(sec, ('步骤',)) or section_row(sec, ('Step',))
+        if step != 'review':
+            continue
+        try:
+            rnd = int(section_row(sec, ('轮次',)) or section_row(sec, ('Round',)))
+        except ValueError:
+            continue
+        out.append({'round': rnd,
+                    'status': section_row(sec, ('状态',)) or section_row(sec, ('Status',)),
+                    'model': section_row(sec, ('模型',)) or section_row(sec, ('Model',)),
+                    'end': section_row(sec, ('结束',)) or section_row(sec, ('Ended',)),
+                    'text': sec})
+    return sorted(out, key=lambda s: s['round'])
+
+
+def load_review_versions(cap):
+    """[{round, verdict, text}] oldest first: the review.md version chain
+    from the capsule's git history, else the stamped hand-off sections."""
+    texts = git_review_versions(cap)
+    if texts:
+        return [{'round': review_round(t) or (i + 1), 'verdict': review_verdict(t), 'text': t}
+                for i, t in enumerate(texts)]
+    out = []
+    for s in review_stamps(cap):
+        verdict = {'fail': 'FAIL', 'done': 'PASS'}.get(s['status'], '')
+        if verdict:
+            out.append({'round': s['round'], 'verdict': verdict, 'text': s['text']})
+    return out
+
+
+def asks_entries(cap):
+    """the owner's asks.jsonl replies and messages, read once."""
+    path = os.path.join(cap, 'runtime-state', 'asks.jsonl')
+    try:
+        with open(path, errors='replace') as f:
+            lines = f.read().split('\n')
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and e.get('kind') in ('reply', 'message') and (e.get('text') or ''):
+            out.append(e)
+    return out
+
+
+def owner_messages(entries):
+    """[(at, text)] of the owner entries; the item reference is matched by
+    the caller."""
+    return [(e.get('at') or '', e.get('text') or '') for e in entries]
+
+
+def owner_rulings(entries):
+    """[(round, item, at, text)]: an owner reply/message naming an item and
+    ruling it non-blocking."""
+    out = []
+    for e in entries:
+        text = e.get('text') or ''
+        if not OWNER_RULING_WORDS.search(text):
+            continue
+        for m in BLOCK_REF.finditer(text):
+            out.append((int(m.group(1)), int(m.group(2)), e.get('at') or '', text))
+    return out
+
+
+def outcome_of_line(text):
+    """the outcome a disposition clause names. An explicit fix outranks a
+    withdrawal word later in the same clause (`部分已修 … 仍未修` stays
+    still-open); a bare `残留` describes the item's provenance and is the
+    last resort."""
+    if (re.search(r'已修复|已修|修好|修掉|已解决|已改|已补|fixed', text, re.I)
+            or re.search(r'已按.{0,40}修|按.{0,20}(?:owner|所有者|裁定).{0,20}修', text, re.I)) \
+            and not re.search(r'仍未修|未修|仍未|未解决|没有修|没有改', text, re.I):
+        return 'fixed'
+    if re.search(r'仍未修|未修|仍未|仍在|依然|仍存在|未解决|没有修|没有改|still[ -]open', text, re.I):
+        return 'still-open'
+    if not OWNER_NEGATED.search(text) and not OWNER_PENDING.search(text):
+        if re.search(r'(?:owner|所有者)', text, re.I) and OWNER_DECISION_WORDS.search(text):
+            return 'owner'
+        if re.search(r'(?:owner|所有者).{0,24}(?:已裁定|裁定已处理|裁定)|(?:已由|按).{0,12}(?:owner|所有者).{0,12}裁定', text, re.I):
+            return 'owner'
+    if re.search(r'撤回|收回|不成立|接受 build|build 证据成立|证据成立|不构成|推翻|withdraw', text, re.I):
+        if re.search(r'owner|所有者|裁定|改判|放行', text, re.I):
+            return 'owner'
+        if re.search(r'build|证据|evidence', text, re.I):
+            return 'rebutted'
+        return 'withdrawn-unknown'
+    if re.search(r'残留', text):
+        return 'still-open'
+    return None
+
+
+def _table_cells(line):
+    s = line.strip()
+    if not s.startswith('|'):
+        return None
+    return [c.strip() for c in s.strip('|').split('|')]
+
+
+def _disposition_ref(cell):
+    """the `r<n>#<k>` a cell or clause opens with, after stripping list,
+    bold and backtick markers."""
+    s = cell.strip().strip('`*_').strip()
+    return BLOCK_REF.match(s)
+
+
+def _dispositions(line):
+    """[(ref, status_text)] of a disposition line: a line that opens with a
+    `r<n>#<k>` reference, or a table row whose first cell does. A table row
+    uses only its first status-bearing cell after the reference cell; a
+    non-table line splits on `；`/`;`/`。` and each clause starts its own
+    subject. Any other reference is a mention, not a disposition."""
+    cells = _table_cells(line)
+    if cells is not None:
+        if not cells:
+            return []
+        m = _disposition_ref(cells[0])
+        if not m:
+            return []
+        for cell in cells[1:]:
+            if outcome_of_line(cell) is not None:
+                return [((int(m.group(1)), int(m.group(2))), cell)]
+        return []
+    label = _item_label(line)
+    label = re.sub(r'^\d+\.\s*', '', label)
+    out = []
+    for clause in re.split(r'[；;。]', label):
+        clause = clause.strip().strip('`*_').strip()
+        m = BLOCK_REF.match(clause)
+        if m:
+            out.append(((int(m.group(1)), int(m.group(2))), clause[m.end():]))
+    return out
+
+
+def _find(parent, x):
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    return x
+
+
+def _union(parent, a, b):
+    ra, rb = _find(parent, a), _find(parent, b)
+    if ra != rb:
+        parent[rb] = ra
+
+
+def _unknown_reason(verdicts, last_round, owner_msgs, round_end, still_open=False):
+    if still_open:
+        return 'unknown', 'last mention still open'
+    later = [r for r in sorted(verdicts) if r > last_round]
+    if later:
+        if any(verdicts[r] == 'PASS' for r in later):
+            return 'unknown', 'PASS round without naming it'
+        return 'unknown', 'later rounds do not mention it'
+    # Only an owner message that arrived after the round it would explain can
+    # name its missing item number; a plan confirmation from before it cannot.
+    msgs = [m for m in owner_msgs if not round_end or m[0] >= round_end]
+    if msgs:
+        if any(not BLOCK_REF.search(m[1]) for m in msgs):
+            return 'unknown', 'owner words without an item number'
+        if len({BLOCK_REF.search(m[1]).group(0) for m in msgs}) > 1:
+            return 'unknown', 'multiple candidates'
+    return 'unknown', 'no later round'
+
+
+def chain_findings(cap, versions):
+    """The blocker chains of one capsule: one entry per chain, with its
+    class, model, final outcome and the rounds it spans. Only a
+    disposition line (see `_dispositions`) sets an outcome; an item line
+    links the earlier items it names (association only)."""
+    nodes, parent = {}, {}
+    for v in versions:
+        for it in v['items']:
+            key = (v['round'], it['item'])
+            if key in nodes:
+                continue
+            nodes[key] = {'round': v['round'], 'item': it['item'], 'class': it['class'],
+                          'label': it['label']}
+            parent[key] = key
+    if not nodes:
+        return []
+    verdicts = {v['round']: v['verdict'] for v in versions}
+    stamps = {s['round']: s for s in review_stamps(cap)}
+    entries = asks_entries(cap)
+    owner_msgs = owner_messages(entries)
+    events = []
+    for v in versions:
+        for line in v['text'].split('\n'):
+            label = _item_label(line)
+            num, ref_round = _item_number(label, None)
+            enc = (v['round'], num) if (
+                num is not None and (ref_round is None or ref_round == v['round'])
+                and (v['round'], num) in nodes) else None
+            if enc:
+                for m in BLOCK_REF.finditer(label):
+                    ref = (int(m.group(1)), int(m.group(2)))
+                    if ref in nodes and ref != enc:
+                        _union(parent, enc, ref)
+            for ref, status in _dispositions(line):
+                if ref not in nodes:
+                    continue
+                oc = outcome_of_line(status)
+                if oc:
+                    events.append((v['round'], ref, oc, line.strip()))
+                for m in BLOCK_THIS_ROUND.finditer(status):
+                    other = (v['round'], int(m.group(1)))
+                    if other in nodes:
+                        _union(parent, ref, other)
+    for rnd, item, at, text in owner_rulings(entries):
+        if (rnd, item) in nodes:
+            events.append((rnd + 0.5, (rnd, item), 'owner', text))
+    chains = {}
+    for key in nodes:
+        chains.setdefault(_find(parent, key), []).append(key)
+    out = []
+    for root, keys in chains.items():
+        keys.sort()
+        first = keys[0]
+        rel = [e for e in events if _find(parent, e[1]) == root]
+        rel.sort(key=lambda e: e[0])
+        if rel:
+            last_round, _, oc, evidence = rel[-1]
+            round_end = (stamps.get(last_round) or {}).get('end') or ''
+            if oc == 'still-open':
+                outcome, reason = _unknown_reason(verdicts, last_round, owner_msgs, round_end, still_open=True)
+            else:
+                outcome, reason = oc, ''
+        else:
+            evidence = ''
+            last_round = max(k[0] for k in keys)
+            round_end = (stamps.get(last_round) or {}).get('end') or ''
+            outcome, reason = _unknown_reason(verdicts, last_round, owner_msgs, round_end)
+        model = (stamps.get(first[0]) or {}).get('model') or 'unknown'
+        out.append({'capsule': os.path.basename(cap), 'first_round': first[0],
+                    'last_round': max(k[0] for k in keys), 'item': nodes[first]['item'],
+                    'class': nodes[first]['class'], 'model': model, 'outcome': outcome,
+                    'reason': reason, 'rounds': sorted({k[0] for k in keys}),
+                    'evidence': evidence})
+    return out
+
+
+def summarize_findings(findings, versions, fail_versions, capsules, unparsable, items_n=None):
+    counts = {o: 0 for o in BLOCK_OUTCOMES}
+    reasons = {r: 0 for r in BLOCK_REASONS}
+    classes, models = {}, {}
+    for f in findings:
+        counts[f['outcome']] += 1
+        if f['outcome'] == 'unknown':
+            reasons[f['reason']] = reasons.get(f['reason'], 0) + 1
+        c = classes.setdefault(f['class'], {'items': 0, 'decidable': 0, 'suspected': 0})
+        m = models.setdefault(f['model'], {'items': 0, 'decidable': 0, 'suspected': 0})
+        for g in (c, m):
+            g['items'] += 1
+            if f['outcome'] != 'unknown':
+                g['decidable'] += 1
+            if f['outcome'] in ('rebutted', 'owner', 'withdrawn-unknown'):
+                g['suspected'] += 1
+    decidable = counts['fixed'] + counts['rebutted'] + counts['owner'] + counts['withdrawn-unknown']
+    suspected = counts['rebutted'] + counts['owner'] + counts['withdrawn-unknown']
+    return {'capsules': capsules, 'versions': versions, 'fail_versions': fail_versions,
+            'items': len(findings) if items_n is None else items_n, 'chains': len(findings),
+            'cross_round': sum(1 for f in findings if len(f['rounds']) > 1),
+            'counts': counts, 'reasons': reasons, 'decidable': decidable,
+            'suspected': suspected, 'pass_unknown': reasons.get('PASS round without naming it', 0),
+            'unparsable': unparsable, 'classes': classes, 'models': models,
+            'findings': findings}
+
+
+def blocking_report(caps_dir, rows):
+    """the blocking-findings report over the collected run set."""
+    findings, unparsable = [], 0
+    capsules = versions_n = fail_n = items_n = 0
+    for r in rows:
+        cap = os.path.join(caps_dir, r['capsule'])
+        versions = load_review_versions(cap)
+        if not versions:
+            continue
+        capsules += 1
+        versions_n += len(versions)
+        by_round = {}
+        for v in versions:
+            v['items'] = parse_blocking_items(v['text'], v['round'])
+            by_round[v['round']] = v
+        for v in versions:
+            if v['verdict'] == 'FAIL':
+                fail_n += 1
+                if not v['items'] and blocking_count_in_summary(v['text']):
+                    unparsable += 1
+        items_n += sum(len(v['items']) for v in by_round.values())
+        findings.extend(chain_findings(cap, [by_round[k] for k in sorted(by_round)]))
+    return summarize_findings(findings, versions_n, fail_n, capsules, unparsable, items_n)
+
+
+def blocking_lines(data, out=sys.stdout):
+    p = lambda s='': print(s, file=out)
+    p('== blocking findings ==')
+    p(f"review history: {data['capsules']} capsules, {data['versions']} review versions, {data['fail_versions']} FAIL versions")
+    p(f"blocking items: {data['items']} (chains {data['chains']}, cross-round {data['cross_round']})")
+    c = data['counts']
+    p(f"outcomes: fixed {c['fixed']}, rebutted {c['rebutted']}, owner-overturned {c['owner']}, "
+      f"withdrawn-unknown {c['withdrawn-unknown']}, unknown {c['unknown']}")
+    rate = f"{100 * data['suspected'] / data['decidable']:.0f}%" if data['decidable'] else 'n/a'
+    p(f"decidable: {data['decidable']}; suspected false positives: "
+      f"{data['suspected']}/{data['decidable']} ({rate})")
+    denom = data['decidable'] + data['pass_unknown']
+    srate = f"{100 * data['suspected'] / denom:.0f}%" if denom else 'n/a'
+    p(f"sensitivity (a PASS round without naming it counted fixed): {data['suspected']}/{denom} ({srate})")
+    p(f"unparsable FAIL versions: {data['unparsable']}")
+    p('by class:')
+    for name in BLOCK_CLASSES + ('unclassified',):
+        g = data['classes'].get(name, {'items': 0, 'decidable': 0, 'suspected': 0})
+        if g['decidable']:
+            p(f"  {name}: items {g['items']}, decidable {g['decidable']}, "
+              f"suspected {g['suspected']}/{g['decidable']} ({100 * g['suspected'] / g['decidable']:.0f}%)")
+        else:
+            p(f"  {name}: items {g['items']}, decidable 0, suspected n/a")
+    p('by model:')
+    for name in sorted(data['models']):
+        g = data['models'][name]
+        if g['decidable']:
+            p(f"  {name}: items {g['items']}, decidable {g['decidable']}, "
+              f"suspected {g['suspected']}/{g['decidable']} ({100 * g['suspected'] / g['decidable']:.0f}%)")
+        else:
+            p(f"  {name}: items {g['items']}, decidable 0, suspected n/a")
+    p('unknown by reason:')
+    for reason in BLOCK_REASONS:
+        p(f"  {reason}: {data['reasons'].get(reason, 0)}")
+
+
+def write_blocking_detail(data, path):
+    """one row per blocker chain, beside the existing CSV."""
+    with open(path, 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['capsule', 'rounds', 'item', 'class', 'model', 'outcome', 'reason', 'evidence'])
+        for d in sorted(data['findings'], key=lambda x: (x['capsule'], x['first_round'], x['item'])):
+            rounds = f"{d['rounds'][0]}-{d['rounds'][-1]}" if len(d['rounds']) > 1 else str(d['rounds'][0])
+            w.writerow([d['capsule'], rounds, d['item'], d['class'], d['model'],
+                        d['outcome'], d['reason'], d['evidence']])
 
 
 def collect(caps_dir, since, until):
@@ -1443,8 +2030,10 @@ def main(argv):
         cohort_arms(manifest)
     rows, quarantined = collect(a.capsules_dir, since, until)
     delivery = {}
+    blocking = None
     if a.events:
         delivery = {d['capsule']: d for d in delivery_rows_for(a.capsules_dir, rows, a.events)}
+        blocking = blocking_report(a.capsules_dir, rows)
     if a.csv:
         extra = []
         if manifest is not None:
@@ -1474,9 +2063,12 @@ def main(argv):
                 w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ['capsule'])
                 w.writeheader()
                 w.writerows(rows)
+        if blocking is not None:
+            write_blocking_detail(blocking, a.csv + '.blocking.csv')
     report(rows, quarantined)
     if a.events:
         delivery_block(a.capsules_dir, rows, a.events)
+        blocking_lines(blocking)
     if manifest is not None:
         cohort_report(rows, a.capsules_dir, manifest, cohort_path)
         arms_report(a.capsules_dir, rows, manifest, a.events)

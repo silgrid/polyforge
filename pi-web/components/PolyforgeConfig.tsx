@@ -98,6 +98,7 @@ import {
   type ConfigGroupId,
 } from "./polyforge-config-helpers";
 import { PolyforgeInstallCard } from "./PolyforgeInstallCard";
+import { PolyforgeNotificationSettings } from "./PolyforgeNotificationSettings";
 import { ComponentsUpdateCard } from "./ComponentsUpdateCard";
 
 /**
@@ -902,6 +903,11 @@ export function PolyforgeConfig({ cwd, active }: Props) {
           />
         </ConfigDetailGrid>
       </section>
+
+      {/* polyforge#240: browser notifications of the decision feed — the
+          switch, the browser permission and the explicit authorization
+          gesture; browser-only, so shown whether or not pf is detected. */}
+      <PolyforgeNotificationSettings />
 
       {/* the read-outs come after the settings, each
           collapsed by default with its count in the title.:

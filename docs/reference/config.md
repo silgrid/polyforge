@@ -100,7 +100,7 @@ one partition; `internal/polyforge/cellcfg/schema.go` owns it):
 | `[workspace."<path>"]` | table | Cell | next-claim | the Cell's repo mapping |
 | `summarize.models` / `.language` / `.interval_sec` | `[summarize]` | Cell | live | summarize lane |
 | `[memory_policy."<path>"."<entry>"]` | table family | Cell | next-claim | wrap-summary policy |
-| `step_tiers.<tier>` | `[step_tiers]` | Host-only | live | the step tier catalog (polyforge#143): one row per tier, its recommended `<harness>:<model>[:<effort>]` candidates — the machine-level list doctor checks a workspace's user-written candidates against, and the source Pi Web's 步骤能力档 page edits (85b2). Tier names follow the lane tier grammar and are not limited to a lane's `tiers`; the conventional `default` tier carries the mainline models. [Section](#step_tiers--the-step-tier-catalog) |
+| `step_tiers.<tier>` | `[step_tiers]` | Host-only | live | the step tier catalog (polyforge#143): one row per tier, its recommended `<harness>:<model>[:<effort>]` candidates — the machine-level list doctor checks a workspace's user-written candidates against; Pi Web only displays it read-only in the 步骤能力档 column (polyforge#256), and edits go through `pf config set step_tiers.<tier> … --host` (85b2). Tier names follow the lane tier grammar and are not limited to a lane's `tiers`; the conventional `default` tier carries the mainline models. [Section](#step_tiers--the-step-tier-catalog) |
 
 The CLI resolves a Cell-scoped command's Cell from `--profile`, then
 `PF_PROFILE`, then the cwd matched against the Host's effective workspace
@@ -391,7 +391,7 @@ Reload classes (one class per key):
 
 | Class | Keys | What a reload does |
 | --- | --- | --- |
-| live | `max_concurrent_jobs`, `max_concurrent_tasks`, `max_concurrent_bars`, `bar_load_threshold`, `command_path`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `transient_error_patterns`, `model_error_patterns`, `slow_model_median_latency`, `slow_model_p90_latency`, `summarize.models`, `summarize.language`, `summarize.interval_sec`, the whole `[step_tiers]` catalog | applied in the running daemon (the summarize lane's next call uses the new table; the failure-classification lists reach the next text classification and the slow-model bounds reach the next tick's judgement; the catalog has no daemon consumer — the reload classifies it `applied` live and the readers (`pf doctor`, `pf config list`) take the new value with no restart) |
+| live | `max_concurrent_jobs`, `max_concurrent_tasks`, `max_concurrent_bars`, `bar_load_threshold`, `command_path`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `transient_error_patterns`, `model_error_patterns`, `slow_model_median_latency`, `slow_model_p90_latency`, `summarize.models`, `summarize.language`, `summarize.interval_sec`, the whole `[step_tiers]` catalog | applied in the running daemon (the summarize lane's next call uses the new table; the failure-classification lists reach the next text classification and the slow-model bounds reach the next tick's judgement; the catalog now has a daemon consumer — the dispatch-time expansion of a per-ticket capability tier — so a Host reload swaps the live snapshot and the next dispatch uses the new tiers with no restart; a named Cell's reload never writes it, and the readers (`pf doctor`, `pf config list`) take the new value too) |
 | next-claim | the `[workspace]` mapping; the whole `[memory_policy]` family | mapping additions usable at the next dispatch (a removal/re-route with an in-flight job is refused and the work items are listed); the claim that follows writes the new effective memory policy into its capsule, a running job keeps the one its claim wrote |
 | connection-change | `server`, `api_key` | identity-stable: a changed `server` is refused ("create a new profile"; nothing applied); a changed `api_key` is verified with one heartbeat first — a different Hub user is refused, an unverifiable key is not taken for the same user (refused, retry later); a verified same-identity rotation is reported `pending-drain`: the Cell refuses new submits, automatic claims **and task spawns** (`DAEMON-409` naming the pending connection rotation; nothing is queued) until it is safe-idle (no job record of any state, nothing queued or in flight, no running one-off task), then switches by itself with no second reload. Each admission's pending check and its enqueue or slot reservation are one step against the switch's idle decision, so an admission is either refused or seen by the switch, which then waits. The effective and pending credential are persisted in the Cell's `effective-connection.json` (0600, never echoed); the record is written at the Cell's first start. Every assembly (Host start, `pf cell add`/`repair`) checks the file's normalized `server` against the Cell's recorded identity (`identity.json`): another server refuses the Cell with the new-profile route (an invalid default Cell blocks the Host start). A Host restart starts on the effective key and treats a differing file `api_key` as a pending change through the same identity check — a newer file value never switches the Cell's user nor bypasses the idle gate; one that is not adopted is reported on `GET /profiles`. An `api_key` removed from the file (`pf config unset api_key`, or a hand edit) is never shadowed by the persisted copy: a reload reports it `pending-restart` and on `GET /profiles`, drops a pending rotation, and the running Cell keeps its effective key until the Host restarts; the next start deletes the record and the Cell holds no credential — a named Cell is invalid (`api_key is not set`), the default Cell reads degraded naming the missing key, claims nothing and the proxy refuses its business (`DAEMON-409`); a key of the same Hub user set later is taken at once on reload (`applied`: nothing on the Hub to drain). A heartbeat answered for another Hub user than the recorded one degrades the Cell (claims stop) and the data-plane proxy refuses business on it (`DAEMON-409`) |
 | restart-only | `daemon_socket`, `harness_root`, `operator_agent_dir`, `python`, `container_engine` | reported pending; the running daemon keeps its value and a restart applies it |
@@ -611,9 +611,15 @@ expands that per harness before it writes, and reads the per-harness
 entries back as a set.
 
 The catalog is a recommendation, never an admission rule: a candidate
-outside it still runs (`pf override` does not read the catalog; a pi
-candidate's admission stays the Cell's `step-agent/models.json` hard
-check, `DAEMON-400` — the [daemon section](commands.md#the-daemon-pf-daemon)).
+outside it still runs (a pi candidate's admission stays the Cell's
+`step-agent/models.json` hard check, `DAEMON-400` — the
+[daemon section](commands.md#the-daemon-pf-daemon)). Its one consumer is
+the per-ticket capability tier: `pf override <id> --step <s> --tier
+<name>` validates the name against **this** catalog (`DAEMON-400` naming
+the catalog's tiers when it is absent) and the step's next dispatch
+expands it to the tier's ordered candidates; a `--models` chain on the
+same step still outranks it (polyforge#81). The catalog validates the
+name, never a candidate's admissibility.
 `pf doctor`'s `step tiers catalog` row warns when a user-written
 candidate (a workspace yaml `steps.*.models` or `tiers.*.models` list, or
 the `[summarize]` models) is not in the catalog, and skips while the
@@ -787,6 +793,7 @@ the whole file with an error naming the file, the line and
 
 ```yaml
 # Precedence: pf override (the per-step overlay, polyforge#25) > pf submit --models > steps.<project>.<step-id>.models > tiers.<project>.<tier>.models (a step naming that model_tier) > bundle step model_candidates (or the tier its model_tier names in the bundle's defaults.tiers) > steps.<project>.default.models > bundle defaults
+# polyforge#81: inside the pf override layer an explicit --models chain outranks --tier; a --tier name expands through the Host [step_tiers] catalog to that tier's whole ordered candidate list. A tier the catalog does not declare (or declares empty) falls through to the next layer and records one composition-scoped event; `--tier default` means "unset" and expands nothing.
 steps:
   polyforge:                                # a project of this workspace
     default: { models: ["pi:prov/model-a", "pi:prov/model-b"] }  # optional: steps without a list of their own
@@ -877,6 +884,27 @@ usual sources again), and it travels with the capsule chain: a write on a
 running ticket commits and pushes the chain at once — only the running
 posture is published at once and holds on another machine's re-claim or
 `pf resume`.
+
+A capability tier (`--tier <name>`, `--clear-tier`, polyforge#81) is
+the overlay's second model aspect: the name, never the expanded chain, is
+stored, and the step's next dispatch expands it through the Host
+`[step_tiers]` catalog (`config.md`'s [`[step_tiers]`](#step_tiers--the-step-tier-catalog)
+section) with no restart. An explicit `--models` chain on the same step
+outranks it — the view shows the tier as set and masked — and
+`--clear-models` lets the tier govern. `--tier default` requires the
+catalog to declare `default` (Q10 A: no exemption) but expands nothing:
+it means "unset", so the yaml and lane layers govern. A clear needs no
+catalog row. A **queued** ticket's tier rides this daemon's local pending
+override record, not an attrs key: the claim that follows on this
+machine inherits it (a claim on another machine does not; set it there
+instead). The claim re-judges the pending tier against the fresh
+capsule's lane snapshot: a tier whose step the lane no longer declares
+never enters the overlay, one `step_tier_dropped` event names the work
+item, the lane, the step and the tier, and the claim goes on — set the
+tier again on a step of the lane the ticket now runs. The view's source
+label says `step override tier <name>` (or
+`step override (pending) tier <name>`) and names a missing/empty tier's
+fallback.
 
 Writability: a step with a live dispatch (a running ticket's current
 `in_progress` step) and a step that already ran refuse every action; a
@@ -1231,6 +1259,8 @@ may declare them before the release ships the engine.
 | `go_harness` | path | The Go acceptance harness that owns its directory; the scoped selection runs it for the tests that reference a changed path. |
 | `fast_gate` | command | Repeatable, ordered: an anonymous fast-phase command, named `fast-<i>` (the i-th `fast_gate` line). |
 | `full_command` | command | Repeatable, ordered: an anonymous full-phase command, named `full-<i>`. |
+| `group` | `<name>\|<full-N\|command>` | Repeatable (polyforge#244): binds one full-phase command — by its name (`full-<i>` or a `check` name) or by its command text, verbatim — to one of the full gate's parallel groups. A group's commands run in plan order in a container of their own, the groups side by side; a command no line binds (the engine-appended dependency audit) runs serially in the gate's own container, the commands before the grouped span first and the ones after it last. Only the integrate lane's full gate (`gate.py`) schedules the groups side by side — the develop lane's verification (`verify.py`) runs its full tier serially and reads neither key — and the gate's plan records the group and the parallelism only when a group is declared; a line naming no full-phase command, a fast-phase command or one already bound elsewhere is diagnosed and dropped, the first binding winning. |
+| `full_parallel` | positive integer | The full gate's parallelism when a group is declared (polyforge#244): the default 2 runs two group commands at once, `1` runs the plan serially. An empty, zero, negative or non-numeric value is diagnosed and ignored (it answers 1, serial, unless a later valid line follows it), and the first valid declaration wins, a second one diagnosed and ignored. The value is echoed as the report's `full_parallel` only when a command is bound, so a repository that declares no group keeps its report and its gate's plan byte for byte; the gate's plan digest moves with it, and the gate id does not (the plan, not the command set). |
 | `check` | `<name>\|<fast\|full>\|<command>` | Repeatable: a named command of that phase, in file order among the phase's lines. |
 | `check_requires_env` | `<name>\|VAR[,VAR]` | The named command needs these variables set and non-empty. |
 | `check_requires_cmd` | `<name>\|bin[,bin]` | The named command needs these executables: a bare name is looked up on `PATH`, a name containing `/` is resolved against the repository root. |

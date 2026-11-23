@@ -88,6 +88,10 @@ class GateCLITest(unittest.TestCase):
             (ISO + ["--cpus", "many"], "--cpus"),
             (ISO + ["--pids", "1.5"], "--pids"),
             (ISO + ["--deadline", "soon"], "--deadline"),
+            (ISO + ["--parallel", "0"], "--parallel \"0\": not a positive integer"),
+            (ISO + ["--parallel", "-1"], "--parallel \"-1\": not a positive integer"),
+            (ISO + ["--parallel", "x"], "--parallel \"x\": not a positive integer"),
+            (ISO + ["--parallel", "1.5"], "--parallel \"1.5\": not a positive integer"),
             (ISO + ["x"], "unrecognized arguments"),
         ):
             with self.subTest(args):
@@ -182,6 +186,26 @@ class GateCLITest(unittest.TestCase):
         self.assertEqual(res["summary"], "1 of 2 commands failed: full-1 (exit 4)")
         self.assertEqual(res["details"]["failed"], ["app"])
         self.assertEqual(len(res["logs"]), 2)
+
+    def test_parallel_one_runs_the_groups_in_plan_order(self) -> None:
+        """polyforge#244 (owner Q10): --parallel N is the manual override of
+        the declared parallelism; 1 runs the plan strictly in order."""
+        conf = ("stack=none\n"
+                "fast_gate=printf 'fast\\n' >> ../order.txt\n"
+                "full_command=printf 'one\\n' >> ../order.txt\n"
+                "full_command=printf 'two\\n' >> ../order.txt\n"
+                "full_command=printf 'three\\n' >> ../order.txt\n"
+                "group=go|full-1\ngroup=pi-web|full-2\n")
+        d = gate_clone(self.root, conf)
+        out = os.path.join(self.root, "gate.json")
+        m = run_main(ISO + ["--parallel", "1", "--log-dir", os.path.join(self.root, "logs"), "--out", out],
+                     d, runtime=self.fb)
+        self.assertEqual(m.exit, 0, m.stderr)
+        with open(os.path.join(self.root, "order.txt"), encoding="utf-8") as f:
+            self.assertEqual(f.read().splitlines(), ["fast", "one", "two", "three"],
+                             "parallelism 1 runs the plan in plan order")
+        self.assertIn("in 2 groups, at most 1 at once", m.stdout,
+                      "the plan line names the groups there are and the parallelism it ran at (r1#5)")
 
     def test_the_plan_alone(self) -> None:
         d = gate_clone(self.root, "stack=none\nfast_gate=echo one\n")

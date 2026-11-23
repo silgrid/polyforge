@@ -12,6 +12,8 @@ import { FileViewer } from "./FileViewer";
 import { PolyforgePanel } from "./PolyforgePanel";
 import type { PolyforgePromptTarget } from "./PolyforgeMessages";
 import { parsePolyforgePrompt, type PolyforgePrompt } from "@/lib/polyforge-messages-pure";
+import type { PolyforgeDecision } from "@/lib/polyforge-decisions-pure";
+import { PolyforgeNotifications } from "./PolyforgeNotifications";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState, saveParkedFileViewerState, switchFileWorkspace, type ParkedFileWorkspace } from "./file-tab-state";
 import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
@@ -325,7 +327,16 @@ export function AppShell() {
     clearTaskRequest: clearPfTaskRequest,
     attentionCount: pfAttentionCount,
     openNextAttention: openPfNextAttention,
+    openDecisionTarget: openPfDecisionTarget,
   } = usePolyforge(pfPanelOpen);
+
+  // polyforge#240 Q7: a notification click opens the entry the notification
+  // was built from (the panel's own directed opener) and opens the dock, so
+  // the target is visible even while it was closed.
+  const openPfDecision = useCallback((decision: PolyforgeDecision) => {
+    openPfDecisionTarget(decision);
+    setPfPanelOpen(true);
+  }, [openPfDecisionTarget]);
 
   // pi#113: while the DESKTOP dock is open, a pointer press anywhere outside
   // its own DOM dismisses it — and the press still reaches its target: no
@@ -3000,6 +3011,10 @@ export function AppShell() {
         }
       }
     `}</style>
+
+      {/* polyforge#240: the one-time notification-permission explanation. */}
+      <PolyforgeNotifications decisions={pfDecisionsFeed?.decisions ?? null} onOpenDecision={openPfDecision} />
+
     <div style={{
       display: "flex",
       width: "100%",
