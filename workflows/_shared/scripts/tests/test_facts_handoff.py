@@ -266,6 +266,32 @@ class HandoffCase(GitCase):
         self.assertIn("D5", self.items(res))
         self.assertIn("changes the `carries:` header", res["summary"])
 
+    def test_d5_a_go_harness_test_file_carries_change_is_a_hit(self) -> None:
+        # a Go repository with a declared go_harness gives its directory's
+        # *_test.go files carries headers too (AGENTS.md, polyforge#111):
+        # changing one with no cited finding is D5 (review r3#1)
+        base = {"app.go": "package app\n",
+                ".polyforge/verify-scope.conf": "stack=go\ngo_harness=test/e2e-parallel.sh\n",
+                "test/x_test.go": "// carries: app.go\n\npackage test\n"}
+        cap, repo = self.capsule("d5-harness", base)
+        test = repo.commit("u1: test", {"test/check_test.sh": UNIT_TEST,
+                                        "test/x_test.go": "// carries: app.go\n\npackage test\n\n// pin\n"})
+        impl = repo.commit("u1: impl", {"answer.txt": "42\n"})
+        repo.commit("rewire the harness suite", {"test/x_test.go":
+                                                 "// carries: app.go, answer.txt\n\npackage test\n\n// pin\n"})
+        write(cap, {
+            "artifacts/plan.md": plan(["answer.txt", "test/x_test.go"]),
+            "artifacts/build/units.json": json.dumps([
+                {"id": "u1", "test_commit": test, "impl_commit": impl,
+                 "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/check_test.sh"]},
+                 "marker": "^ok$"}]),
+            "artifacts/build/change-analysis.json": json.dumps(CLEAN_ANALYSIS),
+        })
+        code, res = self.run_handoff(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertIn("D5", self.items(res))
+        self.assertIn("changes the `carries:` header", res["summary"])
+
     def test_d5_a_plain_deletion_is_listed_not_taken(self) -> None:
         cap, repo = self.capsule("d5-plain")
         self.sound_unit(cap, repo, ["answer.txt"])
