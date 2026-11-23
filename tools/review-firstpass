@@ -1938,8 +1938,6 @@ def main(argv):
                 w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ['capsule'])
                 w.writeheader()
                 w.writerows(rows)
-        if blocking is not None:
-            write_blocking_detail(blocking, a.csv + '.blocking.csv')
     report(rows, quarantined)
     if a.events:
         delivery_block(a.capsules_dir, rows, a.events)
