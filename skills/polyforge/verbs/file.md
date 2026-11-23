@@ -202,7 +202,11 @@ the same analysis prompt a create uses, and the new draft stays unconfirmed
 (auto-pull skips it) until `pf file analysis confirm`. A claimed, running or
 terminal ticket, or one with a local execution job, a running analysis task
 or a pending analysis request, is refused with the reason; the strong
-guarantee is this machine's daemon's. The flow, the 7-item report
+guarantee is this machine's daemon's. `pf file analysis confirm` confirms
+the TICKET TEXT only: the report's `### 步骤能力档建议` section (polyforge#81)
+recommends capability tiers, and confirmation sets no override — after the
+owner decides, the session sets each step's tier with `pf override <id>
+--step <step-id> --tier <name>`. The flow, the 7-item report
 format, the boundary against grilling and the pre-submit confirmation rule
 are defined once in `verbs/submit.md` (the analysis check) — this fragment
 adds nothing to them.
