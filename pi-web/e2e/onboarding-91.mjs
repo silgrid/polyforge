@@ -195,7 +195,7 @@ try {
     await page.locator("[data-onboarding-cell-key]").fill(KEY_SENTINEL);
     await page.locator("[data-onboarding-cell-add]").click({ timeout: ACTION_MS });
     await page.locator('[data-onboarding-step-panel="account"]').waitFor({ state: "visible", timeout: COLD_MS });
-    assert.equal((await stepStatuses(page)).find(([step]) => step === "aihub")[1], "complete", "the AIHub step did not complete after the Cell add");
+    await waitFor(async () => (await stepStatuses(page)).find(([step]) => step === "aihub")[1] === "complete", COLD_MS, "the AIHub step did not complete after the Cell add");
     const add = calls().find((call) => call.argv.includes("cell") && call.argv.includes("add"));
     assert.ok(add, "no `pf cell add` was spawned");
     assert.ok(add.argv.includes("team") && add.argv.includes("--server"), "the Cell add did not carry the profile and server");
@@ -215,7 +215,7 @@ try {
     await page.locator("[data-onboarding-workspace-path]").fill(project);
     await page.locator("[data-onboarding-workspace-use]").click({ timeout: ACTION_MS });
     await page.locator('[data-onboarding-step-panel="ticket"]').waitFor({ state: "visible", timeout: COLD_MS });
-    assert.equal((await stepStatuses(page)).find(([step]) => step === "workspace")[1], "complete", "the workspace step did not complete");
+    await waitFor(async () => (await stepStatuses(page)).find(([step]) => step === "workspace")[1] === "complete", COLD_MS, "the workspace step did not complete");
 
     await page.locator("[data-onboarding-ticket-open]").click({ timeout: ACTION_MS });
     const dialog = page.locator('[role="dialog"][data-lane="develop"]').first();
