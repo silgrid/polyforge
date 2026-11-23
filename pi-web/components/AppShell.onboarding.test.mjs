@@ -32,7 +32,7 @@ test("AppShell reads the onboarding state once and writes each wizard action", (
   assert.match(source, /void writeOnboarding\(\{ action: "reopen" \}\);/, "the settings entry writes no reopen");
 });
 
-test("the auto entry is the null-session branch: dismissed never opens, a reopen shows it over a session", () => {
+test("the popup rests on the dismissed fact alone; a reopen clears it", () => {
   assert.match(source, /const showPlaceholder = initialSessionRestored && !showChat;/);
   assert.match(source, /const onboardingOpen = onboarding\?\.imageManaged === true && !onboarding\.dismissed;/,
     "the wizard's open condition does not rest on the dismissed fact alone");
