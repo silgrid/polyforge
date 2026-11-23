@@ -279,6 +279,15 @@ class BlockingOutcomesTest(unittest.TestCase):
         [chain] = rf.chain_findings(self.cap, versions)
         self.assertEqual(chain['outcome'], 'fixed')
 
+    def test_a_still_open_disposition_is_not_reported_as_a_pass_without_naming(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #2 blocking · ac_gap — x\n'),
+            _review(2, 'PASS', '## 上一轮发现逐条核对\n\n| r1#2 ac_gap | **残留**（见 #1） | 说明 |\n'),
+            _review(3, 'PASS', '## 结论\n\nPASS。\n'))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'unknown')
+        self.assertEqual(chain['reason'], 'last mention still open')
+
     def test_rebutted_and_owner_and_fixed(self):
         versions = _versions(
             _review(1, 'FAIL', (
