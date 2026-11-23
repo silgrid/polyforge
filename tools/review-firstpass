@@ -205,8 +205,7 @@ With --events the report also gains the blocking-findings block
                round without naming it, owner words without an item
                number, multiple candidates, last mention still open. A
                last mention still open outranks the PASS-without-naming
-               reason; a disposition line that names the item but whose
-               status cannot be read is never reported as a PASS round without naming it.
+               reason.
   unparsable   a FAIL version whose conclusion names blockers but whose
                items cannot be parsed is counted apart and enters no
                denominator.
