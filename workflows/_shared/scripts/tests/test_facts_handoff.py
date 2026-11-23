@@ -106,11 +106,16 @@ class HandoffCase(GitCase):
 
     def test_d1_a_test_green_at_its_test_commit_is_a_hit(self) -> None:
         cap, repo = self.capsule("d1")
-        self.sound_unit(cap, repo, ["answer.txt"])
-        # the test passes on the old code: the unit has no red evidence
-        write(cap, {"artifacts/build/units.json": json.dumps([
-            {"id": "u1", "test_commit": repo.head(), "impl_commit": repo.head(),
-             "run": {"repo": "app", "cwd": ".", "argv": ["sh", "-c", "exit 0"]}, "marker": "^ok$"}])})
+        test = repo.commit("u1: test", {"test/check_test.sh": "echo ok\nexit 0\n"})
+        impl = repo.commit("u1: impl", {"answer.txt": "42\n"})
+        write(cap, {
+            "artifacts/plan.md": plan(["answer.txt"]),
+            "artifacts/build/units.json": json.dumps([
+                {"id": "u1", "test_commit": test, "impl_commit": impl,
+                 "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/check_test.sh"]},
+                 "marker": "^ok$"}]),
+            "artifacts/build/change-analysis.json": json.dumps(CLEAN_ANALYSIS),
+        })
         code, res = self.run_handoff(cap)
         self.assertEqual(code, 1, res["summary"])
         self.assertIn("D1", self.items(res))
