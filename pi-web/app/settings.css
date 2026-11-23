@@ -3476,3 +3476,185 @@ select.mcp-add-input {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/*
+ * polyforge#257 (T2 止血): the #85 settings components' own classes. Every
+ * class a settings component renders is declared here — the guard
+ * (components/settings-css-guard.test.mjs) fails on a class with no rule — and
+ * each rule reads the shared palette, so both themes follow it.
+ */
+
+/* A settings pane's host: the detail pane (.config-detail) is the one scroll
+   region, so the host only stacks its sections. */
+.settings-general-pane-host { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* ---- 账号 ---- */
+.settings-account-form { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.settings-account-form > label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.settings-account-form > label > span { color: var(--text-muted); font-size: 11px; font-weight: 500; }
+.settings-account-form select,
+.settings-account-form input:not([type="checkbox"]) {
+  height: 30px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+.settings-account-form select:focus-visible,
+.settings-account-form input:not([type="checkbox"]):focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.settings-account-form fieldset { min-width: 0; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; }
+.settings-account-form legend { padding: 0 4px; color: var(--text-muted); font-size: 11px; }
+.settings-account-checkbox { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; }
+.settings-account-checkbox input,
+.harness-apply-to input,
+.settings-model-table input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+.settings-account-cell-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); }
+.settings-account-cell-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
+.settings-account-cell-source { color: var(--text-dim); font-size: 11px; overflow-wrap: anywhere; }
+.settings-account-cell-facts { display: flex; flex-direction: column; gap: 3px; margin: 0; min-width: 0; }
+.settings-account-cell-facts > div { display: grid; grid-template-columns: minmax(96px, max-content) 1fr; align-items: baseline; gap: 10px; min-width: 0; }
+.settings-account-cell-facts dt { color: var(--text-muted); font-size: 11px; }
+.settings-account-cell-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.settings-account-cell-facts code { margin-right: 4px; padding: 1px 4px; border-radius: 4px; background: var(--bg-selected); font-family: var(--font-mono); font-size: 11px; }
+.settings-account-pi-guidance,
+.settings-account-keychain-hint { margin: 0; padding-left: 8px; border-left: 2px solid var(--border); color: var(--text-dim); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.settings-account-console-fallback { margin: 0; padding-left: 8px; border-left: 2px solid #d97706; color: #d97706; font-size: 11px; line-height: 1.5; }
+.settings-account-write-results { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.settings-account-write-results li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.settings-account-write-results li[data-write-status="written"] { color: #16a34a; }
+.settings-account-write-results li:not([data-write-status="written"]) { color: #ef4444; }
+.settings-account-login-terminal { height: 260px; min-height: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+
+/* pi 的 provider 列表（账号页交互会话卡）：图标、名字、连接状态一行一个，
+   已连接的排在上面由调用方决定，这里只给行式布局。 */
+.pi-account-login { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pi-account-rows { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
+.pi-account-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.pi-account-row:not(:disabled):hover,
+.pi-account-row:not(:disabled):focus-visible { background: var(--bg-hover); }
+.pi-account-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pi-account-state { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+
+/* ---- 「应用到」 ---- */
+.harness-apply-to { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.harness-apply-to > h3 { margin: 0; }
+.harness-apply-to-modes { display: flex; flex-wrap: wrap; gap: 12px; }
+.harness-apply-to-mode { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; }
+.harness-apply-to-targets { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.harness-apply-to-targets > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; }
+.harness-apply-to-target { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; }
+.harness-apply-to-target.is-disabled { cursor: default; opacity: 0.55; }
+.harness-apply-to-target-reason { color: var(--text-dim); font-size: 11px; }
+.harness-apply-to-results { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: 11px; }
+.harness-apply-to-results li[data-ok="true"] { color: #16a34a; }
+.harness-apply-to-results li[data-ok="false"] { color: #ef4444; }
+
+/* ---- 统一值 ---- */
+.unified-setting { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.unified-setting > h3 { margin: 0; }
+.unified-setting-values { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.unified-setting-values > li { display: grid; grid-template-columns: minmax(64px, max-content) 1fr; align-items: baseline; gap: 10px; min-width: 0; font-size: 12px; }
+.unified-setting-values > li > span:first-child { color: var(--text-muted); font-size: 11px; }
+.unified-setting-values code { padding: 1px 5px; border-radius: 4px; background: var(--bg-selected); font-family: var(--font-mono); font-size: 11px; }
+.unified-setting-reason { color: var(--text-dim); font-size: 11px; }
+
+/* ---- 常规页的环境 / 生效值与来源 ---- */
+.settings-harness-env-group,
+.settings-harness-effective-group { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-harness-env-group > h4,
+.settings-harness-effective-group > h4 { margin: 0; }
+.settings-harness-effective-value { font-size: 12px; overflow-wrap: anywhere; }
+.settings-harness-effective-scope { justify-self: start; padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); font-size: 10px; }
+
+/* ---- 模型页 ---- */
+.settings-section { min-width: 0; }
+.settings-models { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
+.settings-model-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.settings-model-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.settings-model-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.settings-model-table tbody tr:hover { background: var(--bg-hover); }
+.settings-model-table td > code { color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; overflow-wrap: anywhere; }
+.settings-model-table td > label { display: inline-flex; align-items: center; gap: 6px; }
+.settings-model-table select {
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+}
+.settings-model-table [data-step-tier-badge] { display: inline-block; margin: 1px 6px 1px 0; padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 10px; }
+
+/* 技能清单里每行的 harness 标签 */
+.skill-harness-chips { display: inline-flex; flex-wrap: wrap; gap: 3px; }
+.skill-harness-chip { display: inline-flex; align-items: center; padding: 0 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+.skill-harness-chip.is-pi { border-color: var(--accent); color: var(--accent); }
+.skill-harness-chip.is-claude { border-color: rgba(217, 119, 6, 0.45); color: #d97706; }
+
+/* 已退场的导航项：仍可达，但强调它是旧的 */
+.settings-section-tab.is-legacy { font-style: italic; }
+
+/* ---- Polyforge 页 ---- */
+.polyforge-config-package,
+.polyforge-config-install,
+.polyforge-config-cli { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); }
+.polyforge-config-key-name { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
+.polyforge-config-zone.is-memory-policy { border-color: rgba(217, 119, 6, 0.35); }
+.polyforge-config-policy-path { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.polyforge-config-policy-path-title { margin: 0; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.polyforge-config-region { min-width: 0; }
+.polyforge-config-unclassified { min-width: 0; margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; }
+.polyforge-config-unclassified-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 0; color: var(--text-dim); font-size: 11px; }
+.polyforge-workflow-card { min-width: 0; }
+.polyforge-install-card { min-width: 0; }
+.polyforge-config-notifications { min-width: 0; }
+.polyforge-config-notification-permission { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* Host 区的值控件：全局 reset 去掉了原生边框，这里给回可编辑的样子
+   （浅色与深色都跟主题变量）。 */
+.polyforge-config-region-row input,
+.polyforge-config-region-row textarea {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+.polyforge-config-region-row textarea { flex-basis: 100%; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; resize: vertical; }
+.polyforge-config-region-row input:focus-visible,
+.polyforge-config-region-row textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
