@@ -8,15 +8,33 @@ const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconf
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
-const { HarnessModelSettings, HarnessModelTable } = await jiti.import("./HarnessModelSettings.tsx");
+const { HarnessModelSettings, HarnessModelTable, ModelPageNav } = await jiti.import("./HarnessModelSettings.tsx");
 
-test("模型页包含默认模型、三列清单和 pi 编辑区", () => {
-  const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
-  assert.match(html, /data-model-page="unified"/);
-  assert.match(html, /Default model/);
-  assert.match(html, /Model list/);
-  assert.match(html, /Chat availability/);
-  assert.match(html, /pi/);
+test("four model subpages: the sidebar nav carries only the pages, and only the chosen pane renders", () => {
+  const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
+  assert.match(page, /data-model-page="unified"/);
+  assert.ok(!/<h2[\s>]/.test(page), "the page-level 「模型」 h2 is gone (the tab already names the page)");
+  assert.equal((page.match(/data-model-subpage=/g) ?? []).length, 4, "the sidebar holds the four subpages and nothing else");
+  for (const key of ["default", "list", "providers", "claude"]) assert.match(page, new RegExp(`data-model-subpage="${key}"`), `${key} is one of the four subpages`);
+  assert.match(page, /data-model-page-pane="default"/, "the default subpage is the one mounted on open");
+  assert.ok(!page.includes('data-model-page-pane="list"'), "the other panes are not mounted beside it");
+
+  const nav = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ModelPageNav, { page: "list", onSelect: () => {} })));
+  assert.match(nav, /data-model-subpage="list"[^>]*aria-current="page"|aria-current="page"[^>]*data-model-subpage="list"/, "the chosen subpage is marked active");
+  assert.ok(!nav.includes("Opus"), "the sidebar never copies a model row");
+
+  const list = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null, initialSubpage: "list" })));
+  assert.match(list, /data-model-page-pane="list"/);
+  assert.match(list, /Chat availability/, "the model table lives on the list subpage");
+});
+
+test("the Provider subpage is flat: no second split view, only its own form footer", () => {
+  const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null, initialSubpage: "providers" })));
+  assert.match(page, /data-model-page-pane="providers"/);
+  assert.match(page, /data-provider-page="flat"/);
+  assert.equal((page.match(/config-split-view/g) ?? []).length, 1, "the Provider editor renders no nested split view");
+  assert.equal((page.match(/config-footer/g) ?? []).length, 1, "the Provider subpage has one form footer, not a nested one");
+  assert.match(page, /data-provider-footer=""/);
 });
 
 test("unified table renders both harnesses, exact provider identity and unsupported Claude chat", () => {
@@ -127,36 +145,7 @@ test("old pf reason follows locale: version, not-installed and unreadable stay d
   assert.match(en({ pfVersion: null }), /unparseable version/i, "an unknown version is named, never a fake number");
 });
 
-// polyforge#257 (T2 止血) AC2: the model page's two structural leftovers — a
-// page-level 「模型」 h2 that no other tab has, and sidebar provider groups
-// drawn as bare <strong>. The expected markup is the shared settings
-// component's own contract (ConfigSidebarGroupLabel renders a group heading
-// with a `.config-sidebar-group-label-text` name), so the assertion is derived
-// from SettingsUi.tsx, not from this component's output.
-const { HarnessModelSidebar } = await jiti.import("./HarnessModelSettings.tsx");
-
-const SIDEBAR_ROWS = [
-  { provider: "anthropic", id: "opus", name: "Opus", harnesses: ["pi", "claude"], chatAvailable: true, reasoning: [], isDefault: true },
-  { provider: "gateway", id: "sonnet", name: "Sonnet", harnesses: ["pi"], chatAvailable: false, reasoning: [], isDefault: false },
-];
-
-test("the model page has no page-level h2 and its sidebar groups use the shared label", () => {
-  const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
-  assert.ok(!/<h2[\s>]/.test(page), "the page-level 「模型」 h2 is gone (the tab already names the page)");
-  assert.match(page, /data-model-page="unified"/, "the unified page root stays");
-
-  const sidebar = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSidebar, {
-    rows: SIDEBAR_ROWS,
-    selectedProvider: null,
-    onSelect: () => {},
-  })));
-  for (const provider of ["anthropic", "gateway"]) {
-    assert.match(
-      sidebar,
-      new RegExp(`<div class="config-sidebar-group"><div class="config-sidebar-group-label"><span class="config-sidebar-group-label-text">${provider}</span></div>`),
-      `${provider} is a shared sidebar group heading, not a bare <strong>`,
-    );
-  }
-  assert.ok(!/<strong>/.test(sidebar), "no bare <strong> group heading survives");
-  assert.match(sidebar, />Opus · pi, claude</, "each model row keeps its name and harnesses");
-});
+// polyforge#257 (T2 止血) pinned the old provider sidebar's shared group
+// label; polyforge#258 (T3) replaces that sidebar with the four subpages, so
+// the old shape is gone (no compatibility path). The subpage assertions above
+// are the replacement.
