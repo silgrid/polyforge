@@ -1266,11 +1266,14 @@ try {
     let failEffort = false;
     let holdDefault = null;
     let holdCatalog = null;
+    let holdEffort = null;
     let catalogGets = 0;
+    let catalogSentinel = false;
     const modelsAnswer = () => ({
       models: {}, modelList: [
         { id: "m1", name: "Gateway One", provider: "gateway" },
         { id: "m2", name: "Gateway Two", provider: "gateway" },
+        ...(catalogSentinel ? [{ id: "m3", name: "Readback Sentinel", provider: "gateway" }] : []),
       ], defaultModel: { provider: savedDefault.provider, modelId: savedDefault.modelId },
       thinkingLevels: { "gateway:m1": ["low", "medium", "high"], "gateway:m2": ["low", "high"] },
       thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false,
@@ -1296,10 +1299,11 @@ try {
       }
       return route.fulfill({ json: { defaultHarness: "pi", claudeDefaultModel: "default", claudeDefaultEffort: "default" } });
     });
-    await page.route("**/api/harness/pi/model", (route) => {
+    await page.route("**/api/harness/pi/model", async (route) => {
       if (route.request().method() === "PUT") {
         const body = route.request().postDataJSON();
         effortPuts.push(body);
+        if (holdEffort) await holdEffort.promise;
         if (failEffort) return route.fulfill({ status: 500, json: { error: "fixture effort save failed" } });
         const { key, level } = body.modelThinkingLevel;
         if (level === null) delete efforts[key];
@@ -1370,8 +1374,14 @@ try {
     await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the default save never cleared its draft");
     await waitFor(() => catalogGets > catalogBefore, ACTION_MS, "the saved round never re-read the catalog");
     assert.equal(await defaultSelect.inputValue(), expected("m2"), "the landed default shows before the read settles");
+    assert.deepEqual(defaultPuts[0], { provider: "gateway", modelId: "m2" }, "the default request carries the chosen model");
+    // Release the held read with a model that only this response carries: its
+    // appearance proves the page consumed this round, not just that the
+    // request started or that the local draft already showed m2.
+    catalogSentinel = true;
     holdCatalog = null;
     releaseCatalog();
+    await defaultSelect.locator("option").filter({ hasText: /gateway\/m3/ }).waitFor({ state: "attached", timeout: ACTION_MS });
     await waitFor(async () => (await defaultSelect.inputValue()) === expected("m2"),
       ACTION_MS, "the post-save read reverted the default");
 
@@ -1381,8 +1391,14 @@ try {
     await reasoning.waitFor({ state: "visible", timeout: ACTION_MS });
     await reasoning.selectOption("low", { timeout: ACTION_MS });
     assert.equal(effortPuts.length, 0, "a reasoning change writes nothing before Save");
+    let releaseEffort;
+    holdEffort = { promise: new Promise((resolve) => { releaseEffort = resolve; }) };
     await save.click({ timeout: ACTION_MS });
     await waitFor(() => effortPuts.length === 1, ACTION_MS, "the reasoning write never ran");
+    await waitFor(async () => (await reasoning.isDisabled()) && (await save.isDisabled()),
+      ACTION_MS, "the reasoning control and Save stayed editable during the reasoning's own save");
+    holdEffort = null;
+    releaseEffort();
     assert.deepEqual(effortPuts[0], { modelThinkingLevel: { key: "gateway/m1", level: "low" } });
     await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the reasoning save never cleared its draft");
 
