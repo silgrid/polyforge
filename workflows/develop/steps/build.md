@@ -13,6 +13,8 @@ plan, answer every point raised, and keep `units.json` and the plan's `## Covera
 
 {{recall}}
 
+{{readability_checklist}}
+
 ## Sub-agents
 
 {{build_subagents}}
