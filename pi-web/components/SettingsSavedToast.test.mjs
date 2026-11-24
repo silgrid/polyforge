@@ -16,12 +16,15 @@ const TEXTS = { saved: "已保存", undo: "撤销" };
 const render = (props) => renderToStaticMarkup(h(SettingsSavedToast, { texts: TEXTS, onUndo: () => {}, ...props }));
 
 test("a saved toast says 已保存 and offers 撤销", () => {
-  const html = render({ expiresAt: Date.now() + 6000 });
+  // build finding u6#1: the toast takes the window as a write-time fact
+  // (`remainingMs`), never a clock read during render — the React compiler
+  // rule lint enforces, and the reason an expired toast is a pure render.
+  const html = render({ remainingMs: 6000 });
   assert.match(html, /role="status"/, "the toast is not a status");
   assert.match(html, /已保存/);
   assert.match(html, /<button[^>]*>撤销<\/button>/, "the toast offers no undo");
 });
 
 test("an expired toast renders nothing at all", () => {
-  assert.equal(render({ expiresAt: Date.now() - 1 }), "", "an expired toast still shows");
+  assert.equal(render({ remainingMs: 0 }), "", "an expired toast still shows");
 });

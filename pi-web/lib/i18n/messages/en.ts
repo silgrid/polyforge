@@ -13,6 +13,8 @@ export const enLocale: LocalePlugin = {
     "common.agents": "Sub-agents",
     "common.plugins": "Plugins",
     "common.settings": "Settings",
+    "settings.saved": "Saved",
+    "settings.undo": "Undo",
     "settings.title": "Settings",
     "settings.general": "General",
     "settings.generalDescription": "Choose how Pi Web looks and which language it uses.",

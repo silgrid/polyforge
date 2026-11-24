@@ -13,6 +13,8 @@ export const zhCNLocale: LocalePlugin = {
     "common.agents": "子代理",
     "common.plugins": "插件",
     "common.settings": "设置",
+    "settings.saved": "已保存",
+    "settings.undo": "撤销",
     "settings.title": "设置",
     "settings.general": "常规",
     "settings.generalDescription": "选择 Pi Web 的显示方式和界面语言。",

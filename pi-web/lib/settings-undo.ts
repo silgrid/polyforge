@@ -16,22 +16,30 @@ export interface SettingsWrite {
 export const UNDO_LIFETIME_MS = 6000;
 
 /** 登记一次写入；失败的写入不登记（撤销不能把一次失败变成一次成功）。 */
-export function recordWrite(_input: {
+export function recordWrite(input: {
   field: string;
   previous: unknown;
   ok: boolean;
   at: number;
   lifetimeMs?: number;
 }): SettingsWrite | null {
-  return null;
+  if (!input.ok) return null;
+  return {
+    field: input.field,
+    previous: input.previous,
+    at: input.at,
+    lifetimeMs: input.lifetimeMs ?? UNDO_LIFETIME_MS,
+  };
 }
 
 /** 这条记录现在还能撤销吗。 */
-export function undoAvailable(_record: SettingsWrite | null, _now: number): boolean {
-  return false;
+export function undoAvailable(record: SettingsWrite | null, now: number): boolean {
+  if (record === null) return false;
+  return now < record.at + record.lifetimeMs;
 }
 
 /** 撤销要写回的那一项（字段与旧值）；没有记录时为 null。 */
-export function undoWrite(_record: SettingsWrite | null): { field: string; value: unknown } | null {
-  return null;
+export function undoWrite(record: SettingsWrite | null): { field: string; value: unknown } | null {
+  if (record === null) return null;
+  return { field: record.field, value: record.previous };
 }

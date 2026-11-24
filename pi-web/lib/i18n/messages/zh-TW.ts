@@ -13,6 +13,8 @@ export const zhTWLocale: LocalePlugin = {
     "common.agents": "子代理",
     "common.plugins": "外掛",
     "common.settings": "設定",
+    "settings.saved": "已儲存",
+    "settings.undo": "復原",
     "settings.title": "設定",
     "settings.general": "一般",
     "settings.generalDescription": "選擇 Pi Web 的外觀與介面語言。",

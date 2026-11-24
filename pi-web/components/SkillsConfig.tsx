@@ -60,6 +60,8 @@ import {
 } from "./SettingsUi";
 import { projectTrustReloadKey } from "./settings-ui-helpers";
 import { HarnessApplyTo, applyToCanSubmit, applyToTargets, type HarnessApplyToSelection, type HarnessApplyToResult, type HarnessApplyToTarget } from "./HarnessApplyTo";
+import { SettingsSavedToast } from "./SettingsSavedToast";
+import { recordWrite, undoWrite, type SettingsWrite } from "@/lib/settings-undo";
 import { MarkdownBody } from "./MarkdownBody";
 
 type Translate = ReturnType<typeof useI18n>["t"];
@@ -933,6 +935,8 @@ export function SkillsConfig({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [claudeSaveError, setClaudeSaveError] = useState<string | null>(null);
   const [applyResults, setApplyResults] = useState<HarnessApplyToResult[] | null>(null);
+  // The last switch, undoable inside its toast (polyforge#259 T4 AC1).
+  const [undoRecord, setUndoRecord] = useState<{ record: SettingsWrite; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] } | null>(null);
   // The group switch that is running, and what the last one left undone.
   const [bulkGroup, setBulkGroup] = useState<string | null>(null);
   const [groupStatus, setGroupStatus] = useState<{ group: string; error: string } | null>(null);
@@ -1130,7 +1134,24 @@ export function SkillsConfig({
       ok: !result.error,
       text: result.error ?? t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten"),
     })));
+    // A landed switch carries its own undo — the same field, the state it
+    // replaced, for as long as the toast lives (T4 AC1).
+    const record = recordWrite({
+      field: row.key,
+      previous: state === "enabled" ? "disabled" : "enabled",
+      ok: results.every((result) => !result.error),
+      at: Date.now(),
+    });
+    setUndoRecord(record === null ? null : { record, row, harnesses });
   }, [switchRound, t]);
+
+  /** The toast's one click: write the previous state back through the same path. */
+  const undoSwitch = useCallback((entry: { record: SettingsWrite; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] }) => {
+    setUndoRecord(null);
+    const target = undoWrite(entry.record);
+    if (target === null) return;
+    void applySwitch(entry.row, entry.harnesses, target.value === "enabled" ? "enabled" : "disabled");
+  }, [applySwitch]);
 
   /** claude's own partition: one native word through the same gated write. */
   const writeClaudeState = useCallback(async (row: UnifiedSkillRow, state: string) => {
@@ -1325,6 +1346,7 @@ export function SkillsConfig({
                 }}
               />
             ) : loading ? null : selectedRow ? (
+              <>
               <SkillDetail
                 key={selectedRow.key}
                 row={selectedRow}
@@ -1353,6 +1375,15 @@ export function SkillsConfig({
                 onApplySwitch={(row, harnesses, state) => void applySwitch(row, harnesses, state)}
                 onWriteClaudeState={(row, state) => void writeClaudeState(row, state)}
               />
+              {undoRecord && (
+                <SettingsSavedToast
+                  texts={{ saved: t("settings.saved"), undo: t("settings.undo") }}
+                  remainingMs={undoRecord.record.lifetimeMs}
+                  onUndo={() => undoSwitch(undoRecord)}
+                  onExpire={() => setUndoRecord(null)}
+                />
+              )}
+              </>
               ) : (
                 <ConfigEmptyState>{t("i18n.selectSkill")}</ConfigEmptyState>
               )}
