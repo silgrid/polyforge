@@ -15,11 +15,13 @@ package driver
 //     pre-change tree (both said "background it … then poll").
 //  3. TestW111BuildStepsRunTheScopedReport — the build steps call the
 //     written fast_checks.py command before reporting a unit green: it
-//     runs the engine's JSON report, takes its `fast` and `scoped` phase
-//     commands in their report's root and never its `full` phase, and
-//     still leaves the full suite to verification. Red on the pre-change
-//     tree (the per-unit bar named no engine) and on the hand-copied
-//     command lines it replaced (polyforge#24).
+//     runs the engine's JSON report and executes its `fast` phase
+//     commands in their report's root (grouped by the report's declared
+//     group or root), never its `scoped` or `full` phase — the scoped
+//     selection is the close's own — and still leaves the full suite to
+//     verification. Red on the pre-change tree (the per-unit bar named
+//     no engine) and on the hand-copied command lines it replaced
+//     (polyforge#24).
 //  4. TestW111NoSleepOutsideTheWaitingRule — no shipped workflow text
 //     carries the word "sleep" except inside the waiting rule's own
 //     sentences and three named phrases about the code under change (not
@@ -202,7 +204,7 @@ func TestW111ReleaseStepsAwaitInsideOneCall(t *testing.T) {
 // whose key is unchanged.
 var w111ScopedReport = []string{
 	"Before reporting a unit green, also run the written fast check in each repo the unit touched, narrowed to the roots its written `Touched files` reach: `\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/fast_checks.py\" --repo <name> --phase fast --root <dir> [--root <dir> …] --json --out artifacts/build/fast-checks/<repo>.json` (the engine in this lane's snapshot; the command runs the engine itself — no command line of the report is ever copied out by hand; `--root .` names the repository's own root, a nested root its directory, and a name that is neither is a usage error).",
-	"It runs the named roots' fast commands in order — never one whose `phase` is `full` or `scoped` (the scoped selection is the close's own, never the per-unit's) — each in the report's `root`, with each entry's own `timeout`; a command missing its `requires_env` or `requires_cmd` prerequisite is skipped and its reason recorded.",
+	"It runs the named roots' fast commands group by group — a command's group is the group its report bound it to (polyforge#244) else its report's root, the groups side by side at most `--parallel N` at once (the repository's declared `full_parallel` when it names one, else default 2; one group, or `--parallel 1`, is the serial plan), each group's own commands in the plan's order — never one whose `phase` is `full` or `scoped` (the scoped selection is the close's own, never the per-unit's) — each in the report's `root`, with each entry's own `timeout`; a command missing its `requires_env` or `requires_cmd` prerequisite is skipped and its reason recorded.",
 	"A green command whose key — its text, its root's subtree tree hash of the working tree, its sorted `requires_env`/`requires_cmd` declarations — the previous run in the same result file already proved is recorded `reused` and not executed, its evidence (the original log path, `exit_code: 0`) kept; a red, timed-out or flaky-confirmed result, or any changed key dimension, runs again, and a green entry of a root or command the run never plans is carried in the file for a later run or the close to reuse.",
 	"The result file is the artifact: every command's exit code, log and skip reason land in `artifacts/build/fast-checks/<repo>.json`, and any non-zero exit (or a command killed at its own timeout) is a red fast check — unless every failing unit its output locates passed the one targeted re-run the command itself now makes (recorded flaky, its first-red log kept) and the command is confirmed, or the run's baseline phase records every unit still red after it pre-existing on the change's base — read its summary, never re-derive the commands by hand.",
 	"A failure confined to tests an earlier step committed red on purpose (this lane's authored or repro tests) is the work still to do, not a red fast check.",
@@ -218,8 +220,9 @@ var w111PositionalFull = []string{
 }
 
 // TestW111BuildStepsRunTheScopedReport: every build step's per-unit bar
-// runs the engine's JSON report, picks its fast and scoped phases by the
-// reported phase, and keeps the full phase (and the full suite) out of it.
+// runs the engine's JSON report, takes its `fast` phase commands only
+// (grouped by the report's declared group or root), and keeps the `scoped`
+// and `full` phases (and the full suite) out of it.
 func TestW111BuildStepsRunTheScopedReport(t *testing.T) {
 	for _, bs := range [][2]string{
 		{"develop", "build"},
