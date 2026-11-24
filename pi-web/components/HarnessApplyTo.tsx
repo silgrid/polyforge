@@ -29,7 +29,10 @@ export interface HarnessApplyToSelection {
 export interface HarnessApplyToResult {
   harness: string;
   ok: boolean;
+  /** The reader's line — translated, never the server's own English. */
   text: string;
+  /** The server's own words, folded under the line (AC2: the fallback lives in a fold). */
+  details?: string | null;
 }
 
 export interface HarnessApplyToTexts {
@@ -37,6 +40,8 @@ export interface HarnessApplyToTexts {
   title: string;
   all: string;
   specific: string;
+  /** The fold's name for a result's server原文 (「详情」). */
+  detailsLabel?: string;
 }
 
 export interface HarnessApplyToProps {
@@ -128,7 +133,15 @@ export function HarnessApplyTo({ texts, targets, value, onChange, open = false, 
         {results !== null && results.length > 0 && (
           <ul className="harness-apply-to-results">
             {results.map((result) => (
-              <li key={result.harness} data-harness={result.harness} data-ok={result.ok}>{result.text}</li>
+              <li key={result.harness} data-harness={result.harness} data-ok={result.ok}>
+                {result.text}
+                {result.details ? (
+                  <details className="harness-apply-to-result-details">
+                    <summary>{texts.detailsLabel}</summary>
+                    <span className="harness-apply-to-result-original">{result.details}</span>
+                  </details>
+                ) : null}
+              </li>
             ))}
           </ul>
         )}

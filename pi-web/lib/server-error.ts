@@ -32,6 +32,13 @@ const ERROR_SUMMARY_KEYS: Readonly<Record<string, string>> = {
 const FALLBACK_SUMMARY_KEY = "serverError.unknown";
 
 /** 一条 `{code, params}` / 自由文本的服务端错误，拆成主文案与详情原文。 */
-export function serverErrorText(_payload: ServerErrorPayload | string | null | undefined): ServerErrorText {
-  return { summaryKey: "serverError.unknown", details: null };
+export function serverErrorText(payload: ServerErrorPayload | string | null | undefined): ServerErrorText {
+  const raw = typeof payload === "string" ? { message: payload } : payload ?? {};
+  const details = typeof raw.message === "string" && raw.message.trim() !== "" ? raw.message : null;
+  const code = typeof raw.code === "string" && raw.code.trim() !== "" ? raw.code.trim() : null;
+  // A known code speaks Chinese; an unknown one (or a bare text) gets the
+  // generic Chinese line, and whatever English it came with stays in details.
+  const summaryKey = (code !== null ? ERROR_SUMMARY_KEYS[code] : null) ?? FALLBACK_SUMMARY_KEY;
+  const params = raw.params && Object.keys(raw.params).length > 0 ? { ...raw.params } : undefined;
+  return { summaryKey, ...(params ? { summaryParams: params } : {}), details };
 }

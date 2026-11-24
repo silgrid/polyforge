@@ -18,6 +18,7 @@ import {
   type StepTierWrite,
 } from "@/lib/step-tiers";
 import { runStepTierWritePlan } from "@/lib/step-tier-write";
+import { serverErrorText } from "@/lib/server-error";
 import { HarnessApplyTo, applyToCanSubmit, applyToTargets, type HarnessApplyToResult, type HarnessApplyToSelection } from "./HarnessApplyTo";
 import { ConfigButton } from "./SettingsUi";
 import { openStackedDialog } from "@/lib/stacked-dialog";
@@ -97,10 +98,17 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
       // one bounded runner: every step re-reads the catalog and the hash its
       // write expects, and a plan still open at the limit is a failure.
       const result = await runStepTierWritePlan(tierRead, tierWrite, identity, chosen === "" ? null : chosen);
+      // A refusal reads its Chinese line; the server's own words stay folded
+      // under it (polyforge#259 T4 AC2), never the main text.
+      const refusal = result.ok ? null : serverErrorText({ message: result.error });
       const harnessError = result.ok ? null
-        : result.reason === "limit" ? t("models.stepTierIncomplete")
-          : result.error ?? "HTTP";
-      out.push({ harness, ok: !harnessError, text: harnessError ?? t("models.stepTierApplied") });
+        : result.reason === "limit" ? t("models.stepTierIncomplete") : t(refusal!.summaryKey, refusal!.summaryParams);
+      out.push({
+        harness,
+        ok: !harnessError,
+        text: harnessError ?? t("models.stepTierApplied"),
+        details: refusal?.details ?? null,
+      });
       if (harnessError) failed = true;
     }
     setResults(out);
@@ -155,6 +163,7 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
               title: t("models.stepTierApplyTo.title"),
               all: t("models.stepTierApplyTo.all"),
               specific: t("models.stepTierApplyTo.specific"),
+              detailsLabel: t("i18n.detailsLabel"),
             }}
             targets={row.harnesses.map((harness) => ({ harness, label: harness }))}
             value={selection}

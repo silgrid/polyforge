@@ -788,7 +788,17 @@ export function ConfigErrorNotice({ id, summary, detailsLabel, details }: {
   /** The server's own words; rendered inside the details fold only. */
   details?: ReactNode;
 }) {
-  return null;
+  return (
+    <div id={id} role="alert" className="config-error-notice">
+      <div className="config-error-notice-summary">{summary}</div>
+      {details ? (
+        <details className="config-error-notice-details">
+          <summary>{detailsLabel}</summary>
+          <div className="config-error-notice-original">{details}</div>
+        </details>
+      ) : null}
+    </div>
+  );
 }
 
 /** A button; `ref` reaches it (a prop since React 19), so a panel can move focus to it. */

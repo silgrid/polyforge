@@ -16,11 +16,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { AccountCellRow, AccountHarnessRow } from "@/lib/harness/account-rows";
 import { accountTargetName } from "@/lib/settings-display-names";
+import { serverErrorText } from "@/lib/server-error";
 import type { HarnessLoginCommand } from "@/lib/harness/concepts";
 import {
   ConfigButton,
   ConfigDetail,
   ConfigDetailActions,
+  ConfigErrorNotice,
   ConfigDetailHeader,
   ConfigDetailHeaderInfo,
   ConfigDetailTitle,
@@ -133,7 +135,16 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
                 <div><dt>{t("settings.accountConfigRoot")}</dt><dd data-account-field="config-root">{row.configRoot ?? "—"}</dd></div>
                 <div><dt>{t("settings.accountUsable")}</dt><dd data-account-field="usable">{row.usable ? t("settings.accountUsableYes") : t("settings.accountUsableNo")}</dd></div>
                 {(row.reason || cell.executionDisabled) && (
-                  <div><dt>{t("settings.accountReason")}</dt><dd data-account-field="reason">{row.reason ?? cell.executionDisabled}</dd></div>
+                  <div>
+                    <dt>{t("settings.accountReason")}</dt>
+                    <dd data-account-field="reason">
+                      {/* The doctor's own English stays folded (polyforge#259 T4 AC2). */}
+                      <details className="settings-reason-details">
+                        <summary>{t("settings.accountReasonSeeDetails")}</summary>
+                        <span className="settings-reason-original">{row.reason ?? cell.executionDisabled}</span>
+                      </details>
+                    </dd>
+                  </div>
                 )}
                 {row.credentialsFile === "present" && (
                   <div><dt>{t("settings.accountResidualOauthTitle")}</dt><dd>{t("settings.accountResidualOauth")}</dd></div>
@@ -388,6 +399,16 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
     })();
   }, [pane]);
 
+  // A failed write's line: the route's own words when it sent a code, else the
+  // localized line with those words kept for the details fold (T4 AC2).
+  const writeFailureText = (note: string) => {
+    const text = serverErrorText(note.startsWith("settings.") ? null : note);
+    return {
+      summary: note.startsWith("settings.") ? t(note) : t(text.summaryKey, text.summaryParams),
+      details: note.startsWith("settings.") ? null : text.details,
+    };
+  };
+
   const [writeResults, setWriteResults] = useState<{ target: string; status: string; reason?: string }[] | null>(null);
   const [writeNote, setWriteNote] = useState<string | null>(null);
   const saveCredentials = useCallback((body: Record<string, unknown>) => {
@@ -450,7 +471,10 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
             onSaveCredentials={pane === "claude" ? saveCredentials : undefined}
           />
           {writeResults && <CredentialWriteResults results={writeResults} />}
-          {writeNote && <p data-account-field="write-note">{writeNote}</p>}
+          {writeNote && (() => {
+            const failure = writeFailureText(writeNote);
+            return <ConfigErrorNotice summary={failure.summary} detailsLabel={t("i18n.detailsLabel")} details={failure.details} />;
+          })()}
           {loginTerminal && (
             <div data-account-login-terminal className="settings-account-login-terminal">
               {/* Attach, never create: the server already started this
