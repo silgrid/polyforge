@@ -103,3 +103,39 @@ test("the picker groups: default first then alphabetical, an invalid reference m
   // a claude probe failure leaves the alias fallback: default itself is covered
   assert.deepEqual(m.stepTierInvalidReferences([{ tier: "default", candidates: ["claude:default"] }], { pi: [], claude: ["default"] }), []);
 });
+
+// polyforge#258 (T3): the step-tier drawer's write plan, restored after
+// #256 removed the editor. Expected values are hand-computed from pf's
+// [step_tiers] contract and the ticket's settled rules: 先加后删 (a crash
+// between the two keys leaves a duplicate, never a loss), effort entries move
+// exactly as they are, a vacated tier is unset (pf refuses an empty list),
+// and a move that changes nothing plans nothing.
+test("the write plan moves one identity add-before-remove", () => {
+  // pi:a/one sits in default (plain and :high) and fast-chat; moving it to zen
+  // must add both entries to zen first, then strip them from the two others.
+  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "a/one" }, "zen"), [
+    { action: "set", tier: "zen", candidates: ["claude:opus:low", "pi:a/one", "pi:a/one:high"] },
+    { action: "set", tier: "default", candidates: ["claude:sonnet"] },
+    { action: "set", tier: "fast-chat", candidates: ["pi:b/two"] },
+  ], "the add-target write leads; the effort variant moves as it is");
+
+  // a tier the move leaves empty is unset, never written as []
+  assert.deepEqual(m.stepTierWritePlan([{ tier: "only", candidates: ["pi:a/one"] }], { harness: "pi", model: "a/one" }, null), [
+    { action: "unset", tier: "only", candidates: [] },
+  ]);
+
+  // unset: the removals are planned in catalog order, the untouched tier absent
+  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "a/one" }, null), [
+    { action: "set", tier: "default", candidates: ["claude:sonnet"] },
+    { action: "set", tier: "fast-chat", candidates: ["pi:b/two"] },
+  ]);
+
+  // a model no tier names yet still gains the target as itself
+  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "new/model" }, "default"), [
+    { action: "set", tier: "default", candidates: ["pi:a/one", "pi:a/one:high", "claude:sonnet", "pi:new/model"] },
+  ]);
+
+  // moving to the tier it already sits in changes nothing
+  assert.deepEqual(m.stepTierWritePlan(
+    [{ tier: "default", candidates: ["pi:a/one"] }], { harness: "pi", model: "a/one" }, "default"), []);
+});
