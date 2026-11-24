@@ -160,7 +160,13 @@ export function HarnessModelSidebar({ rows, selectedProvider, onSelect }: {
   );
 }
 
-export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: string | null; onClose?: () => void; onOpenAccount?: () => void }) {
+/** Stub (polyforge#258 u2): the four-subpage navigation, filled in by the
+ *  implementation commit. */
+export function ModelPageNav(_props: { page: string; onSelect: (page: string) => void }) {
+  return null;
+}
+
+export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage: _initialSubpage }: { cwd: string | null; onClose?: () => void; onOpenAccount?: () => void; initialSubpage?: string }) {
   const { t } = useI18n();
   const enabled = useEnabledModels(cwd);
   const [models, setModels] = useState<ModelViewInput[]>([]);
