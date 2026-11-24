@@ -1322,6 +1322,8 @@ export const zhCNLocale: LocalePlugin = {
     "mcp.unified.diff": "{field}——pi：{pi}，claude：{claude}",
     "mcp.unified.unify": "统一成当前值",
     "mcp.claude.side": "claude",
+    "mcp.danger.menu": "更多操作",
+    "mcp.danger.confirmRemove": "确认从 Claude 移除「{name}」？",
     "mcp.claude.remove": "从 Claude 移除",
     "mcp.claude.disabled": "已在 claude 自己的 disabledMcpServers 里关掉；Pi Web 只读显示。",
     "mcp.claude.notHeld": "Claude 未持有此条目；「应用到」会在那一侧补上它。",

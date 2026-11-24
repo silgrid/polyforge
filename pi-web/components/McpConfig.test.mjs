@@ -1531,9 +1531,11 @@ test("a row both sides hold shows its apply-to and its difference, with 统一�
   assert.match(markup, /-y v1/);
   assert.match(markup, /-y v2/);
   assert.match(markup, new RegExp(`>${messages["mcp.unified.unify"]}<`), "the unify button is offered");
-  // The claude partition names its side and its removal.
+  // The claude partition names its side, and its removal sits behind the
+  // details header's ⋯ menu (polyforge#259 T4 AC1: a dangerous action asks first).
   assert.match(markup, new RegExp(messages["mcp.claude.side"]));
-  assert.match(markup, new RegExp(messages["mcp.claude.remove"]));
+  assert.match(markup, new RegExp(`aria-label="${messages["mcp.danger.menu"]}"`), "the ⋯ menu is missing");
+  assert.doesNotMatch(markup, new RegExp(`>${messages["mcp.claude.remove"]}<`), "the removal is a bare button again");
 });
 
 test("a row only claude holds offers pi as disabled in its apply-to, and claude's local row never offers pi (Q5)", () => {
@@ -1547,7 +1549,7 @@ test("a row only claude holds offers pi as disabled in its apply-to, and claude'
   });
   const markup = decode(html);
   assert.match(markup, new RegExp(messages["mcp.applyTo.piUnsupported"]), "pi takes no sse/ws or local entry");
-  assert.match(markup, new RegExp(messages["mcp.claude.remove"]));
+  assert.match(markup, new RegExp(`aria-label="${messages["mcp.danger.menu"]}"`), "the removal moved into the ⋯ menu");
 
   const localHtml = view({
     cwd: "/Users/me/repo",
@@ -1556,7 +1558,7 @@ test("a row only claude holds offers pi as disabled in its apply-to, and claude'
   });
   const localMarkup = decode(localHtml);
   assert.match(localMarkup, new RegExp(messages["mcp.applyTo.piUnsupportedLocal"]), "the local group is Claude's alone");
-  assert.match(localMarkup, new RegExp(messages["mcp.claude.remove"]));
+  assert.match(localMarkup, new RegExp(`aria-label="${messages["mcp.danger.menu"]}"`), "the local row's removal moved into the ⋯ menu");
 });
 
 test("claude's disabledMcpServers entries read as off, read-only (Q1 A)", () => {

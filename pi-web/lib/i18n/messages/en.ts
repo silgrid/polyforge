@@ -1322,6 +1322,8 @@ export const enLocale: LocalePlugin = {
     "mcp.unified.diff": "{field} — pi: {pi}, claude: {claude}",
     "mcp.unified.unify": "Unify to the current value",
     "mcp.claude.side": "claude",
+    "mcp.danger.menu": "More actions",
+    "mcp.danger.confirmRemove": "Remove “{name}” from Claude?",
     "mcp.claude.remove": "Remove from Claude",
     "mcp.claude.disabled": "Turned off in claude's own disabledMcpServers; Pi Web shows it read-only.",
     "mcp.claude.notHeld": "Claude does not hold this entry; its apply-to would add it there.",

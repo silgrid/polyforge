@@ -35,6 +35,47 @@ export function dangerConfirmAllowed(stage: ConfigDangerStage): boolean {
   return stage === "confirm";
 }
 
-export function ConfigDangerMenu(_props: ConfigDangerMenuProps) {
-  return null;
+export function ConfigDangerMenu({ texts, stage, onStageChange, onConfirm, busy = false }: ConfigDangerMenuProps) {
+  if (stage === "closed") {
+    return (
+      <button
+        type="button"
+        className="config-danger-menu-trigger"
+        aria-label={texts.menu}
+        title={texts.menu}
+        onClick={() => onStageChange("menu")}
+      >
+        ⋯
+      </button>
+    );
+  }
+  if (stage === "menu") {
+    return (
+      <div className="config-danger-menu" role="group" aria-label={texts.menu}>
+        <button
+          type="button"
+          className="config-danger-menu-item"
+          onClick={() => onStageChange("confirm")}
+        >
+          {texts.action}
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="config-danger-confirm" role="group" aria-label={texts.confirmText}>
+      <span className="config-danger-confirm-text">{texts.confirmText}</span>
+      <ConfigButton
+        size="small"
+        variant="danger"
+        disabled={busy || !dangerConfirmAllowed(stage)}
+        onClick={onConfirm}
+      >
+        {texts.confirm}
+      </ConfigButton>
+      <ConfigButton size="small" disabled={busy} onClick={() => onStageChange("closed")}>
+        {texts.cancel}
+      </ConfigButton>
+    </div>
+  );
 }

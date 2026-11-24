@@ -20,6 +20,7 @@ import type {
   ProjectTrustStatus,
 } from "@/lib/api-types";
 import { HarnessApplyTo, applyToCanSubmit, type HarnessApplyToSelection, type HarnessApplyToTarget } from "./HarnessApplyTo";
+import { ConfigDangerMenu, dangerConfirmAllowed, type ConfigDangerStage } from "./ConfigDangerMenu";
 import { useI18n } from "@/hooks/useI18n";
 import { displayPathWithin, shortenPath } from "@/lib/display-path";
 import {
@@ -2482,8 +2483,11 @@ function McpUnifiedSection({
 }) {
   const { t } = useI18n();
   const [selection, setSelection] = useState(() => mcpApplyToSelection(row));
+  // 「⋯」 holds the irreversible removal, and it asks before it writes (T4 AC1).
+  const [dangerStage, setDangerStage] = useState<ConfigDangerStage>("closed");
   useEffect(() => {
     setSelection(mcpApplyToSelection(row));
+    setDangerStage("closed");
   }, [row]);
   const piUnsupported = row.scope === "local"
     ? t("mcp.applyTo.piUnsupportedLocal")
@@ -2531,9 +2535,23 @@ function McpUnifiedSection({
           )}
           {onRemoveClaude && (
             <p className="mcp-config-line">
-              <ConfigButton variant="danger" size="small" disabled={controlsBusy} onClick={() => onRemoveClaude(claudeSide)}>
-                {t("mcp.claude.remove")}
-              </ConfigButton>
+              <ConfigDangerMenu
+                texts={{
+                  menu: t("mcp.danger.menu"),
+                  action: t("mcp.claude.remove"),
+                  confirmText: t("mcp.danger.confirmRemove", { name: row.name }),
+                  confirm: t("i18n.remove"),
+                  cancel: t("i18n.cancel"),
+                }}
+                stage={dangerStage}
+                onStageChange={setDangerStage}
+                busy={controlsBusy}
+                onConfirm={() => {
+                  if (!dangerConfirmAllowed(dangerStage)) return;
+                  setDangerStage("closed");
+                  onRemoveClaude(claudeSide);
+                }}
+              />
             </p>
           )}
         </>
@@ -2600,8 +2618,11 @@ function McpClaudeServerDetail({
     otherScopes: [],
   }, [entry.scope, entry.name, unifiedRow]);
   const [selection, setSelection] = useState(() => mcpApplyToSelection(row));
+  // 「⋯」 holds the irreversible removal, and it asks before it writes (T4 AC1).
+  const [dangerStage, setDangerStage] = useState<ConfigDangerStage>("closed");
   useEffect(() => {
     setSelection(mcpApplyToSelection(row));
+    setDangerStage("closed");
   }, [row]);
   const piUnsupported = entry.scope === "local"
     ? t("mcp.applyTo.piUnsupportedLocal")
@@ -2620,14 +2641,23 @@ function McpClaudeServerDetail({
           </ConfigDetailHeaderInfo>
           <ConfigDetailActions>
             {onRemoveClaude && (
-              <ConfigButton
-                variant="danger"
-                size="small"
-                disabled={controlsBusy}
-                onClick={() => onRemoveClaude(entry)}
-              >
-                {removeBusy ? t("i18n.removing") : t("mcp.claude.remove")}
-              </ConfigButton>
+              <ConfigDangerMenu
+                texts={{
+                  menu: t("mcp.danger.menu"),
+                  action: t("mcp.claude.remove"),
+                  confirmText: t("mcp.danger.confirmRemove", { name }),
+                  confirm: t("i18n.remove"),
+                  cancel: t("i18n.cancel"),
+                }}
+                stage={dangerStage}
+                onStageChange={setDangerStage}
+                busy={controlsBusy || removeBusy}
+                onConfirm={() => {
+                  if (!dangerConfirmAllowed(dangerStage)) return;
+                  setDangerStage("closed");
+                  onRemoveClaude(entry);
+                }}
+              />
             )}
           </ConfigDetailActions>
         </ConfigDetailHeader>
