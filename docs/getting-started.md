@@ -8,8 +8,9 @@ links there and never restates it.
 
 ## Platform support
 
-- **Linux is the verified platform.** The engine, the image build and every
-  acceptance pass of the workstation smoke run there.
+- **Linux amd64 is the verified platform.** The engine, the image build and
+  every acceptance pass of the workstation smoke run there; the arm64 image is
+  published, but no acceptance pass has run on it yet.
 - **macOS and Windows are not verified for the workstation image.** The
   container runs under Docker Desktop in principle, but no acceptance pass has
   booted it on either, and this page makes no Windows support promise. The
@@ -24,10 +25,10 @@ The workstation is a container, so the host needs Docker with compose v2:
 
 ## 2. Pull the image
 
-The workstation image is published as a container image (polyforge#86 delivers
-it). Until that delivery lands, this page carries greppable placeholders —
-replace each `<PF_...>` with the value the release notes name; a placeholder
-never sits in a `pf` command:
+The workstation image ships as a release bundle (polyforge#86's release
+pipeline builds it). Until a published release lands the bundle, this page
+carries greppable placeholders — replace each `<PF_...>` with the value the
+release notes name; a placeholder never sits in a `pf` command:
 
 ```sh
 docker pull <PF_IMAGE>
@@ -74,10 +75,20 @@ identity, so the workstation is a single-user machine by design — are
 Pi Web answers on the host's loopback at `http://127.0.0.1:30141`. Sign in
 with the password above; the Polyforge panel is where every human decision
 lands. The harness login (pi and Claude Code) is
-[harness login](workstation.md#harness-login). An interactive wizard that asks
-for a remote AIHub is a later unit: the external mode is set through the
-container environment today, and nothing here fabricates a screen it does not
-have.
+[harness login](workstation.md#harness-login).
+
+The first time Pi Web opens in the image it shows first-time setup — four
+short steps in the order the machine needs them: the **AIHub connection**
+(the local hub the first boot established, already shown and confirmed, or a
+team AIHub's profile, server and key), the **account** (Settings › Account
+signs each harness in), the **workspace**, and the **first ticket** (filed in
+the develop lane's new-ticket dialog). Every step can be skipped, and a
+skipped step stays **Not done**; the wizard saves no configuration of its own
+— each step reads and writes the page it reuses. Finishing or closing it keeps
+it away, and Settings › General's **Reopen first-time setup** brings it back at
+any time. The wizard belongs to the image: a host-installed Pi Web does not
+show it, and the shell flow in the next section is the same four steps without
+it.
 
 ## 5. Your first work item
 
@@ -118,7 +129,7 @@ per-version history is [upgrade](upgrade.md).
 
 ## Delivery placeholder registry
 
-Until polyforge#86 publishes the delivery, three placeholders stand in for
+Until a published release lands the bundle, three placeholders stand in for
 values this page may not guess. Replace each with the release note's value;
 each appears only in the docker/compose commands above, never in a `pf`
 command:
