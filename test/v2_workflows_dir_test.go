@@ -43,6 +43,11 @@ var deliverStepBlock = regexp.MustCompile(`(?m)^  - id: (sync|verification|evide
 // (children_branch stays: a lane may declare it without epic).
 var epicResetKeys = regexp.MustCompile(`(?m)^epic: true\n(?:(?:#[^\n]*)?\n)*|^resume_reset: [^\n]*\n`)
 
+// landingLockKey matches the lane-declared landing-lock interval
+// (polyforge#245): its endpoints are the stripped sync and merge steps, so
+// the key leaves with them and the copy is a plain lane.
+var landingLockKey = regexp.MustCompile(`(?m)^landing_lock: [^\n]*\n`)
+
 // microFixOutputs matches micro fix's declared artifacts — the evidence
 // plan the stripped evidence step would run and fix's own micro-bounds
 // result, both written by the pre-written commands a scripted fix does
@@ -168,6 +173,7 @@ func copyWorkflowsDir(t testing.TB, shipped string, stripDeliver bool) string {
 		if stripDeliver {
 			raw = deliverStepBlock.ReplaceAll(raw, nil)
 			raw = epicResetKeys.ReplaceAll(raw, nil)
+			raw = landingLockKey.ReplaceAll(raw, nil)
 			raw = microFixOutputs.ReplaceAll(raw, nil)
 			raw = microReviewVerifies.ReplaceAll(raw, nil)
 		}
