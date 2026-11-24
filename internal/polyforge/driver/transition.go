@@ -615,33 +615,16 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 		d.exec.WorkflowStatus = StatusFailedGate
 		return nil
 	}
-	class := capsule.RewindCharged
-	// Q7's lost cycle is DRIVER state, not the agent's wording: only a gate
-	// inside the declared interval, settled while the driver had recorded a
-	// lost lease (`leaseLost`), re-enters at the declared enter step and
-	// counts toward no rewind budget. Every other gate FAIL keeps its
-	// on_fail target and is charged as before (Q8: a real verification FAIL
-	// returns to build; review, before enter, is never pushed forward).
-	if enter, exit, ok := d.leaseInterval(); ok && d.leaseLost.Load() {
-		if gi, ok := d.workflow.indexOf(gate); ok && gi >= enter && gi <= exit {
-			target = d.workflow.Steps[enter].ID
-			class = capsule.RewindLockCycle
-		}
-	}
-	if class == capsule.RewindCharged {
-		switch {
-		case v.PerOwner:
-			class = capsule.RewindOwner
-		case uncountedFail(d.workflow, v.FailReason):
-			class = capsule.RewindUncounted
-		}
-	}
 	tIdx, _ := d.workflow.indexOf(target)
 	gIdx, _ := d.workflow.indexOf(gate)
-	d.applyRewindRangeLocked(tIdx, gIdx, target, gate, CauseGateFailRewind, class, info)
-	if class == capsule.RewindLockCycle {
-		d.exec.LeaseReentry = ""
+	class := capsule.RewindCharged
+	switch {
+	case v.PerOwner:
+		class = capsule.RewindOwner
+	case uncountedFail(d.workflow, v.FailReason):
+		class = capsule.RewindUncounted
 	}
+	d.applyRewindRangeLocked(tIdx, gIdx, target, gate, CauseGateFailRewind, class, info)
 	d.closeGateRoundLocked(gate, out, "FAIL verdict rewound the workflow to "+target)
 	return nil
 }

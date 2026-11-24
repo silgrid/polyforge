@@ -33,7 +33,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
@@ -291,11 +290,6 @@ type Driver struct {
 	// no lock guards them.
 	leaseHold    IntervalLease
 	leaseReentry bool
-	// leaseLost records a lost lease observed while a dispatch ran (the
-	// renewal watcher or ensureLease): a gate FAIL settled in that state
-	// re-enters at the lane's declared enter step, charged to nothing. It
-	// is driver state, never the agent's free-text reason.
-	leaseLost atomic.Bool
 }
 
 // New builds a Driver: it resolves paths, loads the workflow graph from
@@ -666,7 +660,6 @@ func (d *Driver) Run(ctx context.Context) error {
 		if heldLease != nil && heldLease.Err() != nil {
 			// Q7: the lease was lost while this dispatch ran. Drop its
 			// result, release and re-queue at the declared enter step.
-			d.leaseLost.Store(true)
 			d.markLeaseReentry()
 			d.releaseLease("lost")
 			d.leaseReentry = true

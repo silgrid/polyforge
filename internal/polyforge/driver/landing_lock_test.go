@@ -77,6 +77,13 @@ func (f *fakeLander) lose(err error) {
 	f.mu.Unlock()
 }
 
+// clear makes the lander healthy again.
+func (f *fakeLander) clear() {
+	f.mu.Lock()
+	f.lost, f.sticky = nil, false
+	f.mu.Unlock()
+}
+
 // loseSticky keeps answering the loss (a renewal that stays failed).
 func (f *fakeLander) loseSticky(err error) {
 	f.mu.Lock()
@@ -304,25 +311,39 @@ func TestLandingGateFailReleases(t *testing.T) {
 	}
 }
 
-// TestLandingLockFailRoutesToEnterUncharged: a gate FAIL naming the landing
-// lock is a lost cycle: it re-enters at enter and counts toward no budget.
-func TestLandingLockFailRoutesToEnterUncharged(t *testing.T) {
-	merge := spec("merge")
-	merge.Gate = true
-	merge.OnFail = &OnFail{Target: "build"}
-	d, sp, _, _ := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), merge)
-	lost := fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusFail, "the landing lock was lost (renewing app)")}}
-	lost.act = func() { d.leaseLost.Store(true) }
-	sp.script = []fakeEntry{done(""), done(""), lost, done(""), done("")}
+// TestLandingLaterGateFailChargedAfterLoss: a lost lease re-enters at
+// enter through the Q7 path (the dispatch's result is dropped); a LATER
+// verification FAIL in the same run still follows on_fail to build and is
+// charged (review r3#1: a lost-cycle marker must not leak into the next
+// cycle).
+func TestLandingLaterGateFailChargedAfterLoss(t *testing.T) {
+	ver := spec("verification")
+	ver.Gate = true
+	ver.OnFail = &OnFail{Target: "build"}
+	d, sp, _, fl := landingEnv(t, "sync", "verification", spec("build"), spec("sync"), ver)
+	build := done("")
+	build.act = func() { fl.loseSticky(errors.New("the landing lock was lost (renewing app)")) }
+	held := done("")
+	held.hold = true
+	failing := fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusFail, "the landing lock test case failed")}}
+	// cycle 1: build (loses), sync (held, stopped), then cycle 2: build,
+	// sync, verification FAIL -> build, then verification done.
+	reentered := done("")
+	reentered.act = func() { fl.clear() }
+	sp.script = []fakeEntry{build, held, reentered, failing, done(""), done(""), done("")}
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	exec := readExec(t, d.execPath)
-	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].ToStep != "sync" || exec.RewindStats.Rewinds[0].Class != capsule.RewindLockCycle {
-		t.Fatalf("rewinds %+v, want one landing-class rewind to sync", exec.RewindStats.Rewinds)
+	if len(exec.RewindStats.Rewinds) != 1 {
+		t.Fatalf("rewinds %+v, want only the verification FAIL", exec.RewindStats.Rewinds)
 	}
-	if AgentRewindCount(exec.RewindStats.Rewinds) != 0 {
-		t.Fatal("the lost landing lock was charged to the rewind budget")
+	last := exec.RewindStats.Rewinds[0]
+	if last.ToStep != "build" || last.Class != capsule.RewindCharged || last.Gate != "verification" {
+		t.Fatalf("rewind %+v, want the verification FAIL charged to build", last)
+	}
+	if AgentRewindCount(exec.RewindStats.Rewinds) != 1 {
+		t.Fatalf("charged rewinds %d, want exactly the verification FAIL", AgentRewindCount(exec.RewindStats.Rewinds))
 	}
 }
 
@@ -373,7 +394,6 @@ func TestLandingGateFailOutsideIntervalStaysCharged(t *testing.T) {
 	review.Gate = true
 	review.OnFail = &OnFail{Target: "build"}
 	d, sp, _, _ := landingEnv(t, "sync", "merge", spec("build"), review, spec("sync"), spec("merge"))
-	d.leaseLost.Store(true)
 	lost := fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusFail, "the landing lock was lost (renewing app)")}}
 	sp.script = []fakeEntry{done(""), lost, done(""), done(""), done("")}
 	if err := d.Run(context.Background()); err != nil {

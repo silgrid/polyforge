@@ -17,6 +17,7 @@ package test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -331,14 +332,15 @@ func leaseableProjectRepos(t *testing.T, repos []api.ProjectRepo) []api.ProjectR
 	cfgPath := filepath.Join(home, ".gitconfig")
 	out := make([]api.ProjectRepo, 0, len(repos))
 	var add strings.Builder
-	for i, r := range repos {
+	for _, r := range repos {
 		local := strings.TrimSpace(r.URL)
 		abs := strings.TrimPrefix(local, "file://")
 		if !strings.HasPrefix(local, "file://") && !strings.HasPrefix(local, "/") {
 			out = append(out, r)
 			continue
 		}
-		host := fmt.Sprintf("https://forge.invalid/e2e-%d/", i)
+		sum := sha256.Sum256([]byte(filepath.Dir(abs)))
+		host := fmt.Sprintf("https://forge.invalid/%s/", hex.EncodeToString(sum[:6]))
 		dir := filepath.Dir(abs) + "/"
 		add.WriteString(fmt.Sprintf("[url \"file://%s\"]\n\tinsteadOf = %s\n", dir, host))
 		out = append(out, api.ProjectRepo{Name: r.Name, URL: host + filepath.Base(abs)})
@@ -2318,4 +2320,40 @@ func v1CellStateDir(dataDir string) string {
 		return cell
 	}
 	return dataDir
+}
+
+// TestLeaseableProjectReposMapPerCall pins the fixture's own rule (review
+// r3#2): every install's local origin gets a UNIQUE forge-shaped host, so
+// two tests of one process never share a git url.insteadOf mapping. The
+// first mapping wins on an equal-length tie, so a shared host would send
+// the second test to the first one's deleted directory.
+func TestLeaseableProjectReposMapPerCall(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dirs := []string{t.TempDir(), t.TempDir()}
+	var repos []api.ProjectRepo
+	for _, d := range dirs {
+		bare := filepath.Join(d, "demo.git")
+		cmd := exec.Command("git", "init", "-q", "--bare", "-b", "main", bare)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git init --bare: %v\n%s", err, out)
+		}
+		repos = append(repos, api.ProjectRepo{Name: "demo", URL: "file://" + bare})
+	}
+	for round := 0; round < 2; round++ {
+		got := leaseableProjectRepos(t, repos)
+		for i, r := range got {
+			if !strings.HasPrefix(r.URL, "https://forge.invalid/") {
+				t.Fatalf("round %d repo %d URL %q, want a forge-shaped URL", round, i, r.URL)
+			}
+			out, err := exec.Command("git", "ls-remote", "--get-url", r.URL).Output()
+			if err != nil {
+				t.Fatalf("git ls-remote --get-url %s: %v", r.URL, err)
+			}
+			if want := "file://" + filepath.Join(dirs[i], "demo.git"); strings.TrimSpace(string(out)) != want {
+				t.Fatalf("round %d repo %d resolves to %q, want %q (a shared insteadOf host across calls)", round, i, strings.TrimSpace(string(out)), want)
+			}
+		}
+	}
 }
