@@ -20,6 +20,6 @@ gate checks before `done`. A real conflict never sends the work back to
 `done` only when every item below holds, each over the set it names:
 
 1. **Every repo** of `artifacts/sync/result.json`'s `details.repos[]` stands at its `after` commit with an empty `conflicts[]`, and the start line (or, after a conflict, the continue line) exited 0.
-2. **Every file the script resolved mechanically** — `details.repos[].mechanical[]` — and every file under `resolved[]` is named verbatim in the hand-off body.
+2. **Every file the script resolved mechanically** — `details.repos[].mechanical[]` — and **every conflict file you resolved** (`resolved[]`) are named verbatim in the hand-off body.
 3. **Every repo the merge moved** has a passing fast-check result at HEAD; the daemon's hand-off gate reads `artifacts/sync/fast-checks/<repo>.json`.
-4. **Every conflict you resolved by hand** is in `details.repos[].resolved[]`, and the `{{verifying_gate}}` step is told the files so it tests the tree you leave.
+4. The `{{verifying_gate}}` step is told **every file you resolved** (`resolved[]`), so it tests the tree this step leaves.

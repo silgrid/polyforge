@@ -60,7 +60,7 @@ run script with `--isolation host`), and `review` judges it.
 1. **Every changed path of every changed repo** is inside that repository's `micro_path=` declarations — `artifacts/facts/micro-bounds.json`'s `changed_paths` against its `declared_paths`.
 2. **Every command** `verify-scope --micro --json` lists for a changed repo appears once in `artifacts/fix/evidence.json`, in the engine's order and exactly as written.
 3. **Every command of that list** exited 0 in this step's `verify-scope --micro --run`.
-4. **The bounds gate** `facts.py micro-bounds` on the plan as written exited 0.
+4. **The bounds check** `facts.py micro-bounds` on the plan as written exited 0.
 
 Out of bounds is not this lane's: ask the owner to re-file it on `develop` (`pf step ask`), end your turn, and act on the reply — `cancel`, citing it, when the owner agrees. You never hand off `done` out of bounds.
 

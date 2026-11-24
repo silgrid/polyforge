@@ -53,7 +53,7 @@ continue line, ask the owner when a resolution is not yours to make.
 `done` only when every item below holds:
 
 1. `artifacts/sync/result.json` exited 0, and **every repo** of its `details.repos[]` stands at its `after` commit with an empty `conflicts[]`.
-2. **Every repo** in the hand-off body names the default branch's merged commit (`default_head`) and every file of its `resolved[]`.
+2. **Every repo's line** in the hand-off body names the default branch's merged commit (`default_head`) and every file of its `resolved[]`.
 3. The epic branch's own incoming commits were merged first, then the default branch, and the `{{verifying_gate}}` step runs over the tree this step leaves.
 
 ## 交接要写什么 — what your hand-off carries
