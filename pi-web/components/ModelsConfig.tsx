@@ -320,6 +320,8 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
   onChange: (p: ProviderEntry) => void; onEditingNameChange: (n: string) => void;
   onRename: (n: string) => void; onDelete: () => void;
   onAddModels: (models: DiscoveredModel[]) => void; enabledModels: EnabledModelsController;
+  /** The Provider subpage edits context windows only: the chat switches live in the model table (T3). */
+  contextOnly?: boolean;
 }) {
   const { t } = useI18n();
   const [discoveryState, setDiscoveryState] = useState<ModelDiscoveryState>({ phase: "idle" });
@@ -1371,8 +1373,6 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
  * hold two views of pi's enabledModels, or a Save's resync would re-enable
  * what the table just switched off (review r1#1). */
   enabledModels: EnabledModelsController;
-  /** The Provider subpage edits context windows only: the chat switches live in the model table (T3). */
-  contextOnly?: boolean;
 }) {
   const { t } = useI18n();
   const { closeDetail, openDetail } = useConfigDetailNavigation();
@@ -1722,6 +1722,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
                 <span>{t("i18n.model")}</span>
                 <select aria-label={t("i18n.model")} value={selection?.type === "model" ? String(selection.index) : ""}
                   onChange={(event) => {
+                    if (!customProvider) return;
                     if (event.target.value === "__new__") { addModel(customProvider); openDetail(); return; }
                     setSelection({ type: "model", providerName: customProvider, index: Number(event.target.value) });
                     openDetail();
