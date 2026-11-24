@@ -2755,7 +2755,7 @@ slow-model latency bounds as one-line rows — `HOST_SCALAR_KEYS` — and the
 two failure-classification pattern lists as one-regex-per-line editors —
 `HOST_LIST_KEYS`, `data-pf-pattern-list`, saved as one JSON array on the
 Host scope —, polyforge#51) through
-`GET /api/polyforge/config?host=1` and `{host: true}` writes (
+`GET /api/polyforge/config?host=1` and `{host: true}` writes — since polyforge#259 T4 the region's editable fields are one draft behind a single footer 「保存（n 项改动）」 (`lib/settings-dirty` + `ConfigSaveFooter`; it writes exactly the changed keys and a connection key keeps its own confirmation) — (
 removed the read-only `HOST_READ_ONLY_KEYS` row with the per-repository bar
 ceiling) — no Cell's file card renders them; every
 Cell's own keys are its file card (`?profile=` reads, `{profile}` writes —
