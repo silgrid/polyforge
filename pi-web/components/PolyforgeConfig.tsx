@@ -302,7 +302,7 @@ type Translate = (key: string, params?: TranslationParams) => string;
 /** pf's reload class, localized (an unknown class keeps pf's own name). */
 /** A failed read or write as the page shows it (polyforge#259 T4 AC2): the Chinese
  *  line first, the server's own words kept for the details fold. */
-function failureLine(t: Translate, error: unknown, withDetails = true): { text: string; details?: string } {
+export function failureLine(t: Translate, error: unknown, withDetails = true): { text: string; details?: string } {
   const split = serverErrorText(error instanceof Error ? error.message : String(error));
   return {
     text: t(split.summaryKey, split.summaryParams),
@@ -327,7 +327,7 @@ function regionToggles(disclosure: Record<PolyforgeDisclosureRegion, boolean>, s
 }
 
 /** One row's (or history entry's) inline result; an error is an alert. */
-function RowFeedbackLine({ feedback }: { feedback: RowFeedback | undefined }) {
+export function RowFeedbackLine({ feedback }: { feedback: RowFeedback | undefined }) {
   if (!feedback) return null;
   return (
     <p
