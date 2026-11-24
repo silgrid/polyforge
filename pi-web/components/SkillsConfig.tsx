@@ -62,6 +62,7 @@ import { projectTrustReloadKey } from "./settings-ui-helpers";
 import { HarnessApplyTo, applyToCanSubmit, applyToTargets, type HarnessApplyToSelection, type HarnessApplyToResult, type HarnessApplyToTarget } from "./HarnessApplyTo";
 import { SettingsSavedToast } from "./SettingsSavedToast";
 import { recordWriteItems, undoPlan, type SettingsWriteItem, type SettingsWriteItems } from "@/lib/settings-undo";
+import { serverErrorText } from "@/lib/server-error";
 import { MarkdownBody } from "./MarkdownBody";
 
 type Translate = ReturnType<typeof useI18n>["t"];
@@ -91,6 +92,19 @@ export function rowSwitchTargets(
       ...(row.claude ? {} : { disabled: true, disabledReason: texts.notListed }),
     },
   ];
+}
+
+
+/** A refusal as a result row: the Chinese line, with the server's own words folded (T4 AC2). */
+function refusalResult(t: Translate, harness: "pi" | "claude", failure: string | { message?: string; code?: string; params?: Record<string, string | number> }): HarnessApplyToResult {
+  const payload = typeof failure === "string" ? { message: failure } : failure;
+  const text = serverErrorText(payload);
+  return {
+    harness,
+    ok: false,
+    text: t(text.summaryKey, text.summaryParams),
+    ...(text.details ? { details: text.details } : {}),
+  };
 }
 
 /**
@@ -1156,11 +1170,9 @@ export function SkillsConfig({
       ...(row.pi && harnesses.includes("pi") ? { pi: state } : {}),
       ...(row.claude && harnesses.includes("claude") ? { claude: state === "disabled" ? "user-invocable-only" : "enabled" } : {}),
     }));
-    setApplyResults(results.map((result) => ({
-      harness: result.harness,
-      ok: !result.error,
-      text: result.error ?? t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten"),
-    })));
+    setApplyResults(results.map((result) => (result.error
+      ? refusalResult(t, result.harness as "pi" | "claude", result.error)
+      : { harness: result.harness, ok: true, text: t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten") })));
     // A landed switch carries its own undo: each harness's real previous value
     // (pi's effective state, claude's native word), captured before the write
     // (review #5), for as long as the toast lives (T4 AC1).
@@ -1206,11 +1218,9 @@ export function SkillsConfig({
     }
     setRows((prev) => applyRowSwitchResults(prev, results, applied));
     // A refused harness on the way back is shown like any other round's result.
-    setApplyResults(results.map((result) => ({
-      harness: result.harness,
-      ok: !result.error,
-      text: result.error ?? t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten"),
-    })));
+    setApplyResults(results.map((result) => (result.error
+      ? refusalResult(t, result.harness as "pi" | "claude", result.error)
+      : { harness: result.harness, ok: true, text: t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten") })));
   }, [loadSkills, switchRound, t]);
 
   /** claude's own partition: one native word through the same gated write. */
@@ -1222,7 +1232,7 @@ export function SkillsConfig({
     if (results === null) return;
     const failed = results.find((result) => result.error);
     if (failed) {
-      setClaudeSaveError(failed.error ?? "the write was not made");
+      setClaudeSaveError(failed.error ?? t("serverError.unknown"));
       return;
     }
     setRows((prev) => applyRowSwitchResults(prev, results, { claude: state }));

@@ -34,6 +34,22 @@ const ERROR_SUMMARY_KEYS: Readonly<Record<string, string>> = {
 
 const FALLBACK_SUMMARY_KEY = "serverError.unknown";
 
+/**
+ * 一条服务端/适配器错误文本里的代码（polyforge#259 T4，owner 2A）：route 把它们
+ * 已有的拒绝原话补成 `code` 字段，前端就能按 code 说中文。识别不了的返回 null。
+ */
+export function codeFromError(message: string | null | undefined): string | null {
+  if (typeof message !== "string") return null;
+  const text = message.trim();
+  if (text === "") return null;
+  if (/config-cas-409|changed since (it|the file) was read|CAS/i.test(text)) return "config-cas-409";
+  if (/request-denied|untrusted|forbidden/i.test(text)) return "http-403";
+  if (/unauthori[sz]ed|not signed in/i.test(text)) return "http-401";
+  if (/not found|missing|no such/i.test(text)) return "http-404";
+  if (/conflict|already exists/i.test(text)) return "http-409";
+  return null;
+}
+
 /** 一条 `{code, params}` / 自由文本的服务端错误，拆成主文案与详情原文。 */
 export function serverErrorText(payload: ServerErrorPayload | string | null | undefined): ServerErrorText {
   const raw = typeof payload === "string" ? { message: payload } : payload ?? {};
