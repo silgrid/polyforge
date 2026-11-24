@@ -1339,6 +1339,19 @@ try {
     await defaultSelect.selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
     assert.equal(defaultPuts.length, 0, "a default model change writes nothing before Save");
 
+    // the unsaved draft guards a tab switch: cancel stays, accept leaves (run
+    // before any other dialog, so this asserts the guard alone)
+    answerNextDialog("dismiss");
+    await tab(page, /^General$/).click({ timeout: ACTION_MS });
+    await waitFor(() => dismissed === 1, ACTION_MS, "leaving the model page with a draft asked nothing");
+    assert.ok(await host.isVisible(), "a cancelled leave keeps the model page");
+    answerNextDialog("accept");
+    await tab(page, /^General$/).click({ timeout: ACTION_MS });
+    await waitFor(async () => !(await host.isVisible()), ACTION_MS, "an accepted leave never switched the section");
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(await defaultSelect.inputValue(), expected("m2"), "the model page keeps its draft after the asked leave");
+
     // #2/#4: the default control itself is locked while its own save runs, and
     // the saved value survives the held post-save read (a bounded poll, never
     // one read after Save's text settled).
@@ -1397,16 +1410,6 @@ try {
     await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the retried reasoning never landed");
     assert.equal(efforts["gateway/m1"], "high");
 
-    // the unsaved draft guards a tab switch: cancel stays, accept leaves
-    await openModelSubpage(page, "default");
-    await defaultSelect.selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
-    answerNextDialog("dismiss");
-    await tab(page, /^General$/).click({ timeout: ACTION_MS });
-    await waitFor(() => dismissed === 1, ACTION_MS, "leaving the model page with a draft asked nothing");
-    assert.ok(await host.isVisible(), "a cancelled leave keeps the model page");
-    answerNextDialog("accept");
-    await tab(page, /^General$/).click({ timeout: ACTION_MS });
-    await waitFor(async () => !(await host.isVisible()), ACTION_MS, "an accepted leave never switched the section");
     await page.context().close();
   });
 
