@@ -129,7 +129,7 @@ test("tier cells are read-only badges: a shared tier by name, differing harnesse
   assert.ok(!html.includes("<button"), "no button renders in the tier column");
   // the other columns are untouched
   assert.match(html, /Chat availability/);
-  assert.match(html, /Not supported/);
+  assert.match(html, /Always available/);
 });
 
 test("a harness in several tiers keeps every real 归属, default first and the rest alphabetical", () => {
