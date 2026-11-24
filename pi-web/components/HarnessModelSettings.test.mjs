@@ -57,6 +57,17 @@ test("unified table renders both harnesses, exact provider identity and always-a
 });
 
 
+// polyforge#258 (T3) AC2: the default model and reasoning are not written on
+// change; the subpage offers one explicit save action, disabled while the
+// draft is empty (owner plan review item 1 A: dirty + 「保存（N）」).
+test("the default model is saved explicitly, never on change", () => {
+  const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null, initialSubpage: "default" })));
+  const tag = html.match(/<button[^>]*data-model-save=""[^>]*>/)?.[0] ?? "";
+  assert.ok(tag, "the default subpage carries the explicit save action");
+  assert.match(tag, /disabled/, "nothing changed yet, so the save action is disabled");
+  assert.match(html, /Save/, "the action is named as a save");
+});
+
 // polyforge#258 (T3) AC1/AC2: claude's chat cell says 「始终可用」 with the
 // reason in its tooltip (owner plan review item 4: never 「不支持」), and pi's
 // reasoning select names the global level it follows instead of printing a
