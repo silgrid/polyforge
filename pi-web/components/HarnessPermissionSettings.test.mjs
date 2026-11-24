@@ -196,3 +196,33 @@ test("the Claude Code report block renders claude's version, capabilities and th
   const failed = renderToStaticMarkup(h(I18nProvider, null, h(ClaudeCodeReport, { report: null, error: "HTTP 500" })));
   assert.ok(failed.includes("HTTP 500"), "the failed read is not shown");
 });
+
+// polyforge#259 T4 AC2 (u3, review r3#1): claude's own approval modes read by
+// their display names, the raw mode id only as the second line. Expected names
+// hand-copied from lib/i18n/messages/en.ts (settings.permissionMode*), the ids
+// from claude's modes (lib/harness/concepts.ts). Caught change: an option whose
+// main text is the raw id again (e.g. `acceptEdits`), or one losing its id line.
+test("claude's approval modes read by their display names, the raw id only on the second line (T4 AC2, review r3#1)", () => {
+  const html = renderToStaticMarkup(h(I18nProvider, null, h(HarnessPermissionSettings, { cwd: null, sessionId: null })))
+    .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+  const zone = html.slice(html.indexOf('data-permission-zone="claude"'));
+  assert.ok(html.includes('data-permission-zone="claude"'), "the page renders no Claude zone");
+  const group = zone.match(/<div role="radiogroup" aria-label="[^"]*" class="settings-agent-language-options">([\s\S]*?)<\/div>/)?.[1];
+  assert.ok(group, "the page renders no radio group for claude's modes");
+  const options = [...group.matchAll(/<button[^>]*role="radio"[^>]*>([\s\S]*?)<\/button>/g)].map((match) => match[1]);
+  const lines = options.map((option) => {
+    const stack = option.match(/<span class="settings-name-stack"><span>([^<]*)<\/span><code class="settings-secondary-id">([^<]*)<\/code><\/span>/);
+    return stack ? { name: stack[1], id: stack[2] } : { unstacked: option.replace(/<[^>]+>/g, "") };
+  });
+  assert.deepEqual(lines, [
+    { name: "Default (ask each time)", id: "default" },
+    { name: "Accept edits", id: "acceptEdits" },
+    { name: "Plan mode (read-only)", id: "plan" },
+    { name: "Auto review", id: "auto" },
+    { name: "Don't ask, deny", id: "dontAsk" },
+    { name: "Bypass permissions", id: "bypassPermissions" },
+  ]);
+  // `acceptEdits` appears once in the group, and that once is the id line.
+  assert.equal(group.split("acceptEdits").length - 1, 1, "acceptEdits shows outside its id line");
+  assert.match(group, /<code class="settings-secondary-id">acceptEdits<\/code>/);
+});
