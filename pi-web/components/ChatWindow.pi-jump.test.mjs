@@ -111,3 +111,81 @@ test("polyforge#255 r3: a history searched to its end reports missing; the panel
   })();
   assert.deepEqual(plain(calls), [["close", null]], "a found Jump closes the panel before scrolling");
 });
+
+// polyforge#275: the turn's process loop itself is executed from ChatWindow's
+// source (TS-AST), its helpers the real lib implementations. A turn that settles
+// before the reload brings its entry ids has live steps with no entry id; with no
+// Jump pending, nothing may force its answered fold open (claude-session-219 S3).
+const { createJiti } = await import("jiti");
+const jiti = createJiti(import.meta.url);
+const messageDisplay = await jiti.import("../lib/message-display.ts");
+const subagentView = await jiti.import("../lib/claude-subagent-view.ts");
+const transcriptNotices = await jiti.import("../lib/transcript-notices.ts");
+const turnViews = await jiti.import("../lib/turn-views.ts");
+const processLoop = (() => {
+  const start = source.indexOf("const processViews: ReactNode[] = [];");
+  assert.ok(start >= 0, "ChatWindow has no process-views loop");
+  const forStart = source.indexOf("for (let processIdx = userIdx + 1;", start);
+  let loop = null;
+  const walk = (node) => {
+    if (ts.isForStatement(node) && node.getStart(ast) === forStart) loop = node;
+    ts.forEachChild(node, walk);
+  };
+  walk(ast);
+  assert.ok(loop, "ChatWindow has no process loop over the turn's steps");
+  const body = `${source.slice(start, loop.getEnd())}\nreturn { revealProcess, processMessageCount, processToolCount };`;
+  return new Script(ts.transpileModule(`(() => {${body}})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText);
+})();
+function runProcessLoop({ messages, entryIds, pendingPiSubagentJump = null, pendingSubagentJump = null }) {
+  const finalAssistantIdx = messages.length - 1;
+  const finalViews = turnViews.getFinalAnswerViews(new WeakMap(), messages[finalAssistantIdx]);
+  const result = processLoop.runInNewContext({
+    messages, entryIds, userIdx: 0, finalAssistantIdx, finalViews, finalAnswerMessage: finalViews.answer,
+    pendingSearchScroll: null, searchBlock: null, pendingSubagentJump, pendingPiSubagentJump,
+    claudeSubagents: {}, visibleRefIndexByMessage: new Map(), messageKeys: messages.map((_, index) => `k${index}`),
+    renderMessage: () => ({}), React: { createElement: () => ({}) }, TranscriptNoticeLines: () => null,
+    isHiddenCustomMessage: messageDisplay.isHiddenCustomMessage,
+    getDisplayableAssistantBlocks: messageDisplay.getDisplayableAssistantBlocks,
+    countToolCallBlocks: messageDisplay.countToolCallBlocks,
+    getTranscriptNotices: transcriptNotices.getTranscriptNotices,
+    isRunningBackgroundAgentMessage: subagentView.isRunningBackgroundAgentMessage,
+    isSubagentJumpTarget: subagentView.isSubagentJumpTarget,
+    Boolean,
+  });
+  return { ...plain(result), answered: messageDisplay.collapsesProcessDetails(finalViews.answer) };
+}
+// The S3 turn: the user's message, a step with streamed text and a Read call, its
+// result, then the final reply. One process step, one tool call (counted by hand).
+const settledTurn = [
+  { role: "user", content: "E2E second message" },
+  { role: "assistant", content: [{ type: "text", text: "E2E streamed reply" }, { type: "toolCall", id: "t1", name: "Read", arguments: { file_path: "e2e-probe.txt" } }] },
+  { role: "toolResult", toolCallId: "t1", toolName: "Read", content: [{ type: "text", text: "E2E tool output" }] },
+  { role: "assistant", content: [{ type: "text", text: "E2E final reply" }] },
+];
+const reloadedEntryIds = ["e1", "e2", "e3", "e4"];
+
+test("polyforge#275: a settled turn folds while its steps still lack entry ids, and after the reload brings them", () => {
+  const live = runProcessLoop({ messages: settledTurn, entryIds: [] });
+  assert.equal(live.revealProcess, false, "with no Jump pending, a settled live turn (no entry ids yet) must not force its process details open");
+  assert.equal(live.processMessageCount, 1);
+  assert.equal(live.processToolCount, 1);
+  assert.equal(live.answered, true, "the answered turn folds by default");
+  const reloaded = runProcessLoop({ messages: settledTurn, entryIds: reloadedEntryIds });
+  assert.equal(reloaded.revealProcess, false, "after the reload, with no Jump pending, the fold stays closed");
+  assert.equal(reloaded.processMessageCount, 1);
+  assert.equal(reloaded.processToolCount, 1);
+});
+
+test("polyforge#275: a pi Jump still reveals the step it targets, and only that step", () => {
+  const jump = { toolCallId: "t1", entryId: "e2" };
+  assert.equal(runProcessLoop({ messages: settledTurn, entryIds: reloadedEntryIds, pendingPiSubagentJump: jump }).revealProcess, true, "a pi Jump to the launch step reveals it");
+  assert.equal(runProcessLoop({ messages: settledTurn, entryIds: [], pendingPiSubagentJump: jump }).revealProcess, false, "a step with no entry id is no Jump target");
+  assert.equal(runProcessLoop({ messages: settledTurn, entryIds: reloadedEntryIds, pendingPiSubagentJump: { toolCallId: "t9", entryId: "e9" } }).revealProcess, false, "a Jump elsewhere does not reveal this turn");
+  assert.equal(runProcessLoop({ messages: settledTurn, entryIds: reloadedEntryIds, pendingSubagentJump: { entryId: "e2" } }).revealProcess, true, "a claude Jump to the launch step reveals it");
+});
+
+test("polyforge#275: a turn with only its final answer has no process steps to fold", () => {
+  const result = runProcessLoop({ messages: [settledTurn[0], settledTurn[3]], entryIds: [] });
+  assert.equal(result.processMessageCount, 0);
+  assert.equal(result.revealProcess, false);
+});
