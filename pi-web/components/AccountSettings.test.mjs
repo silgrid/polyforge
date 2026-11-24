@@ -350,3 +350,26 @@ test("B3: the shell renders the pending status and the retry line, and a finishe
   })));
   assert.match(withClaude, /data-claude-status="logged-in"/);
 });
+
+// polyforge#259 T4 AC2 (review r3#1, owner 2A: 前端按 code i18n): a refused
+// target's row on a Chinese page reads 「拒写」 plus the line its route code
+// names; the server's English reason sits only in the 详情 fold. Expected
+// texts hand-copied from lib/i18n/messages/zh-CN.ts (settings.accountWriteNo,
+// serverError.forbidden, i18n.detailsLabel). Caught change: `entry.reason`
+// back outside the fold, or the line not taken from the code.
+test("the refusal's own words stay folded, the row reads in Chinese by its code (T4 AC2, review r3#1)", async () => {
+  const { zhCNLocale } = await jiti.import("@/lib/i18n/messages/zh-CN.ts");
+  const { translateMessage } = await jiti.import("@/lib/i18n/format.ts");
+  const t = (key, params) => translateMessage("zh-CN", key, { "zh-CN": zhCNLocale.messages }, params);
+  const html = renderToStaticMarkup(h(I18nProvider, null, h(CredentialWriteResults, {
+    t,
+    results: [{ target: "auth.json", status: "refused", reason: "target file is not writable", code: "account-write-refused" }],
+  })));
+  const outside = html.replace(/<details[\s\S]*?<\/details>/g, "");
+  const folds = (html.match(/<details[\s\S]*?<\/details>/g) ?? []).join("");
+  assert.ok(!outside.includes("target file is not writable"), "the refusal's English reason shows outside the fold");
+  assert.ok(folds.includes("target file is not writable"), "the refusal's English reason is not in the fold");
+  assert.ok(folds.includes("详情"), "the fold is not labelled 详情");
+  assert.ok(outside.includes("拒写"), "the refused status line is missing");
+  assert.ok(outside.includes("服务端拒绝了这次改动，原文在「详情」里。"), "the row does not read by its code");
+});
