@@ -1264,6 +1264,8 @@ try {
     const effortPuts = [];
     let failEffort = false;
     let holdDefault = null;
+    let holdCatalog = null;
+    let catalogGets = 0;
     const modelsAnswer = () => ({
       models: {}, modelList: [
         { id: "m1", name: "Gateway One", provider: "gateway" },
@@ -1278,7 +1280,11 @@ try {
       perModelReasoningEffort: Object.fromEntries(Object.entries(efforts).map(([key, level]) => [key, { neutral: level, raw: level }])),
       providers: [], customModels: [],
     } });
-    await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: modelsAnswer() }));
+    await page.route(/\/api\/models\?scope=all/, async (route) => {
+      catalogGets += 1;
+      if (holdCatalog) await holdCatalog.promise;
+      return route.fulfill({ json: modelsAnswer() });
+    });
     await page.route("**/api/models/default", async (route) => {
       if (route.request().method() === "PUT") {
         const body = route.request().postDataJSON();
@@ -1313,10 +1319,6 @@ try {
     await page.route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: { providers: [], oauthProviders: [], apiKeyProviders: [] } }));
     await page.route("**/api/claude-models-migration", (route) => route.fulfill({ json: { status: "none" } }));
     await page.route("**/api/provider-usage/query", (route) => route.fulfill({ json: { providers: [] } }));
-
-    // One dialog listener with an answer queue: a `once` listener left over
-    // from a switch that turned out clean would otherwise answer a later
-    // dialog too (the "already handled" race this suite hit).
     let dismissed = 0;
     const dialogAnswers = [];
     page.on("dialog", (dialog) => {
@@ -1325,6 +1327,8 @@ try {
       else void dialog.accept();
     });
     const answerNextDialog = (answer) => { dialogAnswers.push(answer); };
+    const expected = (model) => JSON.stringify({ harness: "pi", provider: "gateway", id: model });
+
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const host = sectionHost(page, "models");
@@ -1334,36 +1338,45 @@ try {
     await defaultSelect.selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
     assert.equal(defaultPuts.length, 0, "a default model change writes nothing before Save");
 
+    // #2/#4: the default control itself is locked while its own save runs, and
+    // the saved value survives the held post-save read (a bounded poll, never
+    // one read after Save's text settled).
+    let releaseDefault;
+    holdDefault = { promise: new Promise((resolve) => { releaseDefault = resolve; }) };
+    let releaseCatalog;
+    holdCatalog = { promise: new Promise((resolve) => { releaseCatalog = resolve; }) };
+    const save = host.locator("[data-model-save]");
+    const catalogBefore = catalogGets;
+    await save.click({ timeout: ACTION_MS });
+    await waitFor(() => defaultPuts.length === 1, ACTION_MS, "the default write never started");
+    await waitFor(async () => (await defaultSelect.isDisabled()) && (await save.isDisabled()),
+      ACTION_MS, "the default control and Save stayed editable during the default's own save");
+    holdDefault = null;
+    releaseDefault();
+    await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the default save never cleared its draft");
+    await waitFor(() => catalogGets > catalogBefore, ACTION_MS, "the saved round never re-read the catalog");
+    assert.equal(await defaultSelect.inputValue(), expected("m2"), "the landed default shows before the read settles");
+    holdCatalog = null;
+    releaseCatalog();
+    await waitFor(async () => (await defaultSelect.inputValue()) === expected("m2"),
+      ACTION_MS, "the post-save read reverted the default");
+
     answerNextDialog("accept");
     await openModelSubpage(page, "list");
     const reasoning = host.getByLabel("Reasoning / thinking — gateway/m1", { exact: true });
     await reasoning.waitFor({ state: "visible", timeout: ACTION_MS });
     await reasoning.selectOption("low", { timeout: ACTION_MS });
     assert.equal(effortPuts.length, 0, "a reasoning change writes nothing before Save");
-
-    // #2: hold the first write; the draft controls must not accept a newer edit
-    let release;
-    const gate = new Promise((resolve) => { release = resolve; });
-    holdDefault = { promise: gate };
-    const save = host.locator("[data-model-save]");
     await save.click({ timeout: ACTION_MS });
-    await waitFor(() => defaultPuts.length === 1, ACTION_MS, "the default write never started");
-    await waitFor(async () => (await reasoning.isDisabled()) && (await save.isDisabled()),
-      ACTION_MS, "the draft controls stayed editable while the save was in flight");
-    holdDefault = null;
-    release();
-    await waitFor(() => effortPuts.length === 1, ACTION_MS, "the reasoning write never followed the default");
-    assert.deepEqual(defaultPuts[0], { provider: "gateway", modelId: "m2" });
+    await waitFor(() => effortPuts.length === 1, ACTION_MS, "the reasoning write never ran");
     assert.deepEqual(effortPuts[0], { modelThinkingLevel: { key: "gateway/m1", level: "low" } });
-    await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the save action never cleared its draft");
-    await openModelSubpage(page, "default");
-    assert.equal(await host.locator(".settings-model-default-select").inputValue(),
-      JSON.stringify({ harness: "pi", provider: "gateway", id: "m2" }), "the saved default shows");
+    await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the reasoning save never cleared its draft");
 
     // #3: two writes, the second fails — the landed default shows its saved
     // value, the failed reasoning stays in the draft and retries.
     failEffort = true;
-    await host.locator(".settings-model-default-select").selectOption({ label: "pi · gateway/m1" }, { timeout: ACTION_MS });
+    await openModelSubpage(page, "default");
+    await defaultSelect.selectOption({ label: "pi · gateway/m1" }, { timeout: ACTION_MS });
     answerNextDialog("accept");
     await openModelSubpage(page, "list");
     await reasoning.selectOption("high", { timeout: ACTION_MS });
@@ -1373,8 +1386,8 @@ try {
     assert.equal((await save.innerText()).trim(), "Save (1)", "only the failed reasoning stays in the draft");
     answerNextDialog("accept");
     await openModelSubpage(page, "default");
-    assert.equal(await host.locator(".settings-model-default-select").inputValue(),
-      JSON.stringify({ harness: "pi", provider: "gateway", id: "m1" }), "the landed default shows the saved value");
+    await waitFor(async () => (await defaultSelect.inputValue()) === expected("m1"),
+      ACTION_MS, "the landed default never showed its saved value");
     answerNextDialog("accept");
     await openModelSubpage(page, "list");
     assert.equal(await reasoning.inputValue(), "high", "the failed reasoning keeps its draft");
@@ -1385,7 +1398,7 @@ try {
 
     // the unsaved draft guards a tab switch: cancel stays, accept leaves
     await openModelSubpage(page, "default");
-    await host.locator(".settings-model-default-select").selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
+    await defaultSelect.selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
     answerNextDialog("dismiss");
     await tab(page, /^General$/).click({ timeout: ACTION_MS });
     await waitFor(() => dismissed === 1, ACTION_MS, "leaving the model page with a draft asked nothing");
@@ -1457,6 +1470,66 @@ try {
       "Escape closed Settings instead of only the drawer");
     await waitFor(async () => await page.evaluate(() => document.activeElement?.hasAttribute("data-step-tier-open") ?? false),
       ACTION_MS, "focus never returned to the tier label");
+    await page.context().close();
+  });
+
+
+  // S85-38 — polyforge#258 r3 #1: the Provider editor's models.json draft
+  // survives a subpage switch. The editor stays mounted once visited, so a
+  // Base URL edit is still there after 模型清单 → pi Providers, and no save
+  // was sent to keep it.
+  await part("S38", "provider draft across subpages", async () => {
+    const page = await newPage();
+    const config = { providers: { gateway: {
+      baseUrl: "https://gw.example/v1", api: "openai-completions",
+      models: [{ id: "m1", name: "Gateway One" }],
+    } } };
+    let configPuts = 0;
+    await page.route("**/api/models-config", (route) => {
+      if (route.request().method() === "PUT") {
+        configPuts += 1;
+        return route.fulfill({ json: { success: true } });
+      }
+      return route.fulfill({ json: config });
+    });
+    await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: {
+      models: {}, modelList: [{ id: "m1", name: "Gateway One", provider: "gateway" }],
+      defaultModel: { provider: "gateway", modelId: "m1" }, thinkingLevels: {},
+      thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false,
+    } }));
+    await page.route("**/api/models/default", (route) => route.fulfill({ json: {
+      defaultHarness: "pi", claudeDefaultModel: "default", claudeDefaultEffort: "default" } }));
+    await page.route("**/api/claude", (route) => route.fulfill({ json: { models: [] } }));
+    await page.route("**/api/harness/pi/model", (route) => route.fulfill({ json: { harness: "pi", concept: "model", data: {
+      defaultProvider: "gateway", defaultModel: "m1", reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: [] } } }));
+    await page.route("**/api/harness/claude/model", (route) => route.fulfill({ json: { harness: "claude", concept: "model", data: {
+      defaultProvider: null, defaultModel: null, reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: [] } } }));
+    await page.route("**/api/models/enabled*", (route) => route.fulfill({ json: {
+      allEnabled: true, patterns: null, stalePatterns: [], enabledTotal: 1, availableTotal: 1,
+      scope: "global", settingsPath: "fixture/settings.json", editable: true,
+      providers: [{ id: "gateway", name: "Gateway", kind: "custom", enabledCount: 1,
+        models: [{ id: "m1", name: "Gateway One", ref: "gateway/m1", enabled: true, contextWindow: 128000 }] }],
+    } }));
+    await page.route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: { providers: [], oauthProviders: [], apiKeyProviders: [] } }));
+    await page.route("**/api/claude-models-migration", (route) => route.fulfill({ json: { status: "none" } }));
+    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
+      pfPresent: true, pfVersion: "v0.2.3", capable: false, stepTiersReason: "old", items: [],
+      file: { sha256: "x", exists: true } } }));
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "providers");
+    const baseUrl = host.locator(".config-field-label").filter({ hasText: /^Base URL$/ }).locator("..").locator("input");
+    await baseUrl.waitFor({ state: "visible", timeout: ACTION_MS });
+    await baseUrl.fill("https://changed.example/v1");
+    await openModelSubpage(page, "list");
+    await openModelSubpage(page, "providers");
+    await waitFor(async () => (await baseUrl.inputValue()) === "https://changed.example/v1",
+      ACTION_MS, "the Provider draft was lost on the subpage round trip");
+    assert.equal(configPuts, 0, "the draft round trip must not save");
     await page.context().close();
   });
 

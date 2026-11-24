@@ -3,6 +3,14 @@ import assert from "node:assert/strict";
 // The UI must preserve omitted protocols so discovery can resolve them through
 // pi's catalogue. These routes isolate the panel from credentials and upstreams.
 export async function checkModelDiscovery(page) {
+  const waitForModelId = async (locator, expected) => {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      if ((await locator.inputValue().catch(() => "")) === expected) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`the edited model id never read back as ${expected}`);
+  };
   const config = { providers: {
     anthropic: { models: [{ id: "claude-existing" }] },
     relay: { baseUrl: "https://example.invalid/v1", api: "openai-responses", models: [{ id: "relay-existing", name: "Relay Existing" }] },
@@ -39,6 +47,17 @@ export async function checkModelDiscovery(page) {
     await providerSelect.selectOption("provider:anthropic");
     await modelSelect.locator("option").first().waitFor({ state: "attached" });
     assert.equal(await modelSelect.locator("option").filter({ hasText: /^claude-existing$/ }).count(), 1, "A model without a name is listed by its id");
+    // A real Provider -> model -> Provider round trip: enter the model form,
+    // edit its id draft, then return through the picker's Provider settings.
+    await modelSelect.selectOption("0");
+    const modelId = settings.getByPlaceholder("model-id", { exact: true });
+    await modelId.waitFor({ state: "visible" });
+    await modelId.fill("claude-edited");
+    await modelSelect.selectOption("__provider__");
+    await api.waitFor({ state: "visible" });
+    await modelSelect.selectOption("0");
+    await waitForModelId(modelId, "claude-edited");
+    await modelSelect.selectOption("__provider__");
     await providerSelect.selectOption("provider:relay");
     await modelSelect.locator("option").filter({ hasText: /^Relay Existing$/ }).first().waitFor({ state: "attached" });
     assert.equal(await modelSelect.locator("option").filter({ hasText: /^Relay Existing$/ }).count(), 1, "A model is listed by its models.json name");
