@@ -873,6 +873,8 @@ try {
   // row keeps a Save of its own. The expected count and the written keys come
   // from the fields the scenario types into, never from the page's own numbers.
   await check("S259-HOST-SAVE — Host 区的改动由一个 footer 保存", async () => {
+    // The section is already open on the Polyforge pane (open()): the Host
+    // routes go in before the Host pane mounts, and nothing reloads.
     const { context, page, dialog } = await open({ width: 1280, locale: "en" });
     const writes = [];
     const hostItems = [
@@ -896,14 +898,9 @@ try {
       }
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "saved", entry: null }) });
     });
-    await page.goto(`${base}/?session=${SESSION}`, { waitUntil: "domcontentloaded", timeout: NAV_MS });
-    await page.getByText("E2E polyforge layout host session").first().waitFor({ state: "attached", timeout: NAV_MS });
-    await page.locator('button[aria-label="Settings"], button[aria-label="设置"]').first().click();
-    await dialog.waitFor({ state: "visible", timeout: NAV_MS });
-    await dialog.getByRole("button", { name: "Polyforge", exact: true }).click();
     await selectPane(page, "host");
     const region = dialog.locator('[data-pf-settings-region="host"]').first();
-    await region.waitFor({ state: "visible", timeout: 30_000 });
+    await region.waitFor({ state: "visible", timeout: 60_000 });
     const jobs = region.locator('[data-pf-region-key="max_concurrent_jobs"] input');
     // Two non-connection keys: a connection key keeps its own confirmation, so
     // the batch written by one click is these two (build finding u11#3).
