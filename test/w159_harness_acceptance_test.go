@@ -1,3 +1,4 @@
+// carries: internal/common/capsule/spawnjournal*.go
 package test
 
 // w159_harness_acceptance_test.go: polyforge#159 — per-step harness

@@ -1,3 +1,4 @@
+// carries: internal/common/capsule/capsule.go
 package test
 
 // v1_s27: the polyforge#106 near-miss end-to-end. A gate-flagged step
