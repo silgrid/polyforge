@@ -23,9 +23,23 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { createCheck, createHarness, createWaitUntil, errorText, launchBrowser, root } from "./harness.mjs";
+import { createCheck, createHarness, createWaitUntil, e2eOnlySelection, errorText, launchBrowser, root } from "./harness.mjs";
 
 const SUITE = "pi-subagent-panel";
+// E2E_ONLY=<id>[,<id>…] (e2e/README.md) runs only the named scenarios; unset
+// keeps every one. Each id is its scenario title, so a targeted re-run names
+// the same title the suite prints. An unknown id throws here, before the
+// scratch tree exists — never a silent zero-scenario run.
+const TITLES = {
+  P1P2: "P1P2",
+  P3: "P3",
+  "P1-split": "P1-split",
+  "P1-mobile": "P1-mobile",
+  "P3-drag": "P3-drag",
+  "P3-history": "P3-history",
+  "P1-topbar": "P1-topbar",
+};
+const ONLY = e2eOnlySelection(TITLES);
 const distDir = process.env.PI_WEB_DIST_DIR || `.next/e2e/${SUITE}`;
 const scratch = mkdtempSync(join(tmpdir(), `${SUITE}-`));
 const home = join(scratch, "home");
@@ -38,9 +52,19 @@ writeFileSync(join(agentDir, "agents/settings.json"), JSON.stringify({ builtInEn
 
 // ---- fake model ------------------------------------------------------------
 let scripted = [];
-// P1P2 holds the child's answer until the test has steered the running run.
-let releaseChild = null;
-const childGate = new Promise((resolve) => { releaseChild = resolve; });
+// The parent's running list holds only running and queued runs (polyforge#173),
+// so a scenario can read its child there only while the child still runs: every
+// child answer is held until the scenario releases it. `childReleased` keeps a
+// release made before the child's request reached this server effective, and
+// `pendingRelease` wakes the requests that are already waiting.
+let childReleased = false;
+let pendingRelease = [];
+const releaseChild = () => {
+  childReleased = true;
+  const waiting = pendingRelease;
+  pendingRelease = [];
+  for (const resolve of waiting) resolve();
+};
 const OK = { kind: "text", text: "OK-ANSWER" };
 const model = createHttpServer(async (request, response) => {
   await new Promise((resolve) => {
@@ -50,7 +74,7 @@ const model = createHttpServer(async (request, response) => {
   });
   const reply = scripted.length > 0 ? scripted.shift() : OK;
   if (reply.delay) await new Promise((resolve) => setTimeout(resolve, reply.delay));
-  if (reply.gate) await childGate;
+  if (reply.gate && !childReleased) await new Promise((resolve) => pendingRelease.push(resolve));
   response.writeHead(200, { "Content-Type": "text/event-stream" });
   const chunk = (delta, finish = null, extra = {}) => `data: ${JSON.stringify({
     id: "fake", object: "chat.completion.chunk", created: 0, model: "fake-model",
@@ -85,7 +109,7 @@ writeFileSync(join(agentDir, "models.json"), JSON.stringify({
 
 const h = createHarness();
 const failures = [];
-const scenario = createCheck({ failures, message: errorText, record: ([id], text) => `${id}: ${text}`, fail: ([id], text) => console.log(`FAIL ${id}: ${text}`) });
+const scenario = createCheck({ failures, message: errorText, record: ([id], text) => `${id}: ${text}`, fail: ([id], text) => console.log(`FAIL ${id}: ${text}`), skip: ([id]) => ONLY.skip(TITLES[id]) });
 const waitFor = createWaitUntil({ every: 200, withLast: true });
 
 const serverEnv = () => ({
@@ -120,11 +144,20 @@ async function postJson(pathname, body) {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
-/** Starts one session whose first turn dispatches a subagent; returns its id and the child's. */
-async function newSessionWithSubagent(delayMs) {
+/**
+ * Starts one session whose first turn dispatches a subagent; returns its id
+ * and the child's. The child's answer is held until released: the running
+ * list holds only running and queued runs (#173), so its row exists only while
+ * the child runs and is the only place the child id is readable before the run
+ * settles. A scenario that needs the child running afterwards (P1P2 steers it
+ * first) passes holdChild; every other one releases it on return.
+ */
+async function newSessionWithSubagent({ holdChild = false } = {}) {
+  childReleased = false;
+  pendingRelease = [];
   scripted = [
     { kind: "agent" },
-    { kind: "text", text: "CHILD-ANSWER", ...(delayMs > 1000 ? { gate: true } : { delay: delayMs }) },
+    { kind: "text", text: "CHILD-ANSWER", gate: true },
     { kind: "text", text: "PARENT-DONE" },
   ];
   const created = await postJson("/api/agent/new", { cwd: project, type: "prompt", message: "delegate to a subagent", provider: "fake", modelId: "fake-model" });
@@ -135,6 +168,7 @@ async function newSessionWithSubagent(delayMs) {
     const body = await getJson(`/api/agent/${encodeURIComponent(sessionId)}/subagent-runs`);
     return (body.runs ?? [])[0] ?? null;
   }, 45_000, "the subagent run never appeared in the parent's list");
+  if (!holdChild) releaseChild();
   return { sessionId, childId: run.sessionId };
 }
 
@@ -178,7 +212,7 @@ try {
 
   // P1 + P2 — the three entries, the live transcript and a real steer.
   await scenario("P1P2", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(20_000);
+    const { sessionId, childId } = await newSessionWithSubagent({ holdChild: true });
     const page = await openSession(sessionId);
     // The running list's row appears while the child runs.
     await waitFor(async () => (await runningItem(page, childId).count()) === 1, 30_000, "the running subagent never appeared in the list");
@@ -214,7 +248,7 @@ try {
 
   // P3 — the Agent card opens it; Jump closes it and keeps the launch card.
   await scenario("P3", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const { sessionId, childId } = await newSessionWithSubagent();
     const page = await openSession(sessionId);
     await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
     await waitFor(async () => (await page.locator(`[data-pi-subagent-panel="${childId}"]`).count()) === 0, 5_000, "the panel opened by itself");
@@ -233,9 +267,9 @@ try {
 
   // P1 split — two panes, each card opens its own pane's panel.
   await scenario("P1-split", async () => {
-    const a = await newSessionWithSubagent(50);
+    const a = await newSessionWithSubagent();
     await waitFor(async () => (await pageText(a.sessionId)).includes("PARENT-DONE"), 45_000, "the first split session never settled");
-    const b = await newSessionWithSubagent(50);
+    const b = await newSessionWithSubagent();
     await waitFor(async () => (await pageText(b.sessionId)).includes("PARENT-DONE"), 45_000, "the second split session never settled");
     const page = await openSession(a.sessionId, {
       storage: {
@@ -272,7 +306,7 @@ try {
 
   // P1 mobile — the panel stays inside a 375px viewport, its close button on screen.
   await scenario("P1-mobile", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const { sessionId, childId } = await newSessionWithSubagent();
     const page = await openSession(sessionId, { viewport: { width: 375, height: 667 } });
     await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
     await revealToolCards(page);
@@ -289,7 +323,7 @@ try {
 
   // P3 drag — the top edge clamps to [160, bounds-14] and double-click resets.
   await scenario("P3-drag", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const { sessionId, childId } = await newSessionWithSubagent();
     const page = await openSession(sessionId);
     await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
     await revealToolCards(page);
@@ -339,7 +373,7 @@ try {
   // P3 history — a launch card outside the loaded 50-entry window is paged
   // into view, and Jump brings it on screen.
   await scenario("P3-history", async () => {
-    const { sessionId } = await newSessionWithSubagent(50);
+    const { sessionId } = await newSessionWithSubagent();
     scripted.push(...Array.from({ length: 50 }, (_, i) => ({ kind: "text", text: `FILL-${i}` })));
     await waitFor(async () => (await pageText(sessionId)).includes("PARENT-DONE"), 45_000, "the first parent turn never finished");
     for (let i = 0; i < 50; i += 1) {
@@ -369,7 +403,7 @@ try {
 
   // P1 top bar — the subagent row opens the panel; no right-panel agent tab.
   await scenario("P1-topbar", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const { sessionId, childId } = await newSessionWithSubagent();
     const page = await openSession(sessionId);
     await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
     await page.getByRole("button", { name: /^Agents/ }).click();
@@ -386,9 +420,8 @@ try {
   await h.close().catch(() => {});
   model.close();
   rmSync(scratch, { recursive: true, force: true });
-  for (const [title, list] of failures) {
-    console.log(list.length ? `FAIL ${title}: ${list[0]}` : `PASS ${title}`);
-    if (list.length) process.exitCode = 1;
-  }
+  // Each scenario already printed its own PASS/FAIL line; this only sets the
+  // run's exit code (and the suite's own PASS line when nothing failed).
+  if (failures.length) process.exitCode = 1;
   if (!process.exitCode) console.log(`PASS ${SUITE}`);
 }
