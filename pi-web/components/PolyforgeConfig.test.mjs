@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
+import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const fixture = (name) => fileURLToPath(new URL(`../hooks/__fixtures__/${name}`, import.meta.url));
@@ -232,7 +233,7 @@ test("visible reasons: capability floor and an incomplete workflow read are text
   assert.doesNotMatch(source, /config\.mapped|configUnmapped/);
   // the step facts moved to the workflow card, whose failed or
   // daemon-less read is a visible alert line (the old steps_complete note's role).
-  assert.match(source, /\{readError && <p role="alert" className="config-add-source-error">\{readError\}<\/p>\}/);
+  assert.match(source, /<FailureNotice failure=\{readError\} t=\{t\} \/>/);
   assert.match(source, /polyforge\.settings\.configMachineScope/);
 });
 
@@ -623,7 +624,7 @@ test("per-key results render under their own row; the footer keeps page-level st
   assert.match(source, /setInstallMessage\(t\("polyforge\.settings\.installCopied"\)\)/);
   assert.doesNotMatch(source, /setActionMessage\(t\("polyforge\.settings\.installCopied"\)\)/);
   // The footer's summary is the page-level status.
-  assert.match(source, /summary=\{actionError \?\? actionMessage \?\? \(detect \? t\("polyforge\.settings\.detected"\) : t\("polyforge\.loading"\)\)\}/);
+  assert.match(source, /summary=\{actionError\?\.text \?\? actionMessage \?\? \(detect \? t\("polyforge\.settings\.detected"\) : t\("polyforge\.loading"\)\)\}/);
   // Element budget: still exactly one switch; numeric inputs only via the two preference rows plus pf's own int keys.
   assert.equal((source.match(/<ConfigSwitch\b/g) ?? []).length, 1, "exactly one role=switch");
   const css = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
@@ -658,7 +659,7 @@ test("the workflow card reads its own route afresh per click with the #204 refre
   // A failed read keeps the last good list: it never clears `read`.
   assert.doesNotMatch(workflowCard, /setRead\(null\)/);
   assert.match(workflowCard, /if \(!good\) \{\s*\n\s*\/\/ Keep the list on screen; the error sits above it\.\s*\n\s*setReadError\(/);
-  assert.match(workflowCard, /\{readError && <p role="alert" className="config-add-source-error">\{readError\}<\/p>\}/);
+  assert.match(workflowCard, /<FailureNotice failure=\{readError\} t=\{t\} \/>/);
   // The 26px ↻: disabled, aria-busy and spinning while the newest read is in flight; the existing keys.
   assert.match(workflowCard, /className=\{`polyforge-workflow-refresh\$\{refreshing \? " animate-spin" : ""\}`\}/);
   assert.match(workflowCard, /disabled=\{refreshing\}\s*\n\s*aria-busy=\{refreshing\}/);
@@ -1197,6 +1198,11 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
 // lib/i18n/messages/zh-CN.ts (serverError.conflict / serverError.forbidden /
 // i18n.detailsLabel), never from the page's own output.
 async function feedbackSsr() {
+  // The step-tier test above loads the page against the hook shim; drop that
+  // build from the shared module cache so react-dom/server gets the real one
+  // (lib/server-error.ts stays shared, so the page and the test read one
+  // ServerError class).
+  delete createRequire(import.meta.url).cache[modulePath("components/PolyforgeConfig.tsx")];
   const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
   const React = await jiti.import("react");
   const { renderToStaticMarkup } = await jiti.import("react-dom/server");
