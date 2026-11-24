@@ -38,7 +38,7 @@ var pf88Wants = map[string][]string{
 	"workflows/_shared/step-header.md": {
 		"It is the **base branch**: the one branch every step's diff, merge and PR commands",
 		"wherever a step's text or command names the default branch, a capsule carrying this file means this branch",
-		"never a silent fall-back to the default branch",
+		"the default branch stays out of that path",
 	},
 	"workflows/_shared/skills/publish.md": {
 		"`<base>` is the step header's base branch — the",

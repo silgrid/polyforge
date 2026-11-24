@@ -2,6 +2,9 @@
 
 Two levels, never mixed:
 
+- **The workstation image** is the newcomer mainline — `docs/getting-started.md`:
+  Docker, the published image, compose, the first boot. A machine that joins an
+  existing team through the host installer is the `tools/install.sh` path below.
 - **Machine install** is `tools/install.sh`. This fragment is a POINTER,
   not a parallel procedure: the docs' install page (`docs/install.md`,
   "Install (team machines — read this first)") carries the one-liner and

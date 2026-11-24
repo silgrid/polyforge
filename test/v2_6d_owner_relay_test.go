@@ -1,3 +1,4 @@
+// carries: test/v2_6d_owner_relay_test.go, test/v2_6c_ask_awaiting_owner_test.go, internal/polyforge/driver/relay.go
 package test
 
 // v2_6d_owner_relay_test.go: the owner-message relay (workflow contract
@@ -16,16 +17,21 @@ package test
 // once after the restart. A step's v1 question as its result (`pf step
 // handoff --status needs_input`) is refused at the call (workflow
 // contract 4): the session resumed after its turn ended without a
-// hand-off hands off done.
+// hand-off hands off done. The capsule record keeps one chain: the ask,
+// the `awaiting` wait polyforge#239 records beside it, the owner line, and
+// the delivered line naming it — never a second wait of a replay or a
+// delivery the daemon did not make.
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/common/spawn"
 	"github.com/silgrid/polyforge/internal/polyforge/crashpoint"
@@ -150,10 +156,22 @@ func v26dWaitDelivered(t *testing.T, dataDir, wi string) {
 	})
 }
 
-// v26dCheckRecord asserts the record of one relayed message: the owner
-// line (kind, step, spawn, ask_at, words, writer), exactly one delivered
-// line naming it under spawn, the owner_message event before the
-// delivered event with the bodies the faces read.
+// v26dKindsOf answers the record's kind sequence, in file order.
+func v26dKindsOf(t *testing.T, capDir string) []string {
+	t.Helper()
+	var out []string
+	for _, l := range v26dAsks(t, capDir) {
+		out = append(out, l.Kind)
+	}
+	return out
+}
+
+// v26dCheckRecord asserts the record of one relayed message: the full chain
+// (the ask, the one `awaiting` wait of polyforge#239 bound to it, the owner
+// line and its one delivered line — an interjection has no ask and so no
+// wait line), the owner line's own fields (kind, step, spawn, ask_at, words,
+// writer), the delivered line naming it under spawn, and the owner_message
+// event before the delivered event with the bodies the faces read.
 func v26dCheckRecord(t *testing.T, dataDir, wi, capDir, kind, askAt string, spawn int64, delivered int64, disposition, confirmedBy string) askRec {
 	t.Helper()
 	owner := v26dLines(t, capDir, kind)
@@ -161,6 +179,18 @@ func v26dCheckRecord(t *testing.T, dataDir, wi, capDir, kind, askAt string, spaw
 		t.Fatalf("the %s line: %+v", kind, owner)
 	}
 	line := owner[0]
+	want := []string{capsule.AskKindAsk, capsule.AskKindAwaiting, kind, capsule.AskKindDelivered}
+	if kind == capsule.AskKindMessage {
+		want = []string{kind, capsule.AskKindDelivered} // no ask, so no wait
+	}
+	if got := v26dKindsOf(t, capDir); !reflect.DeepEqual(got, want) {
+		t.Fatalf("asks.jsonl chain: %v, want %v", got, want)
+	}
+	if kind == capsule.AskKindReply {
+		v26cAwaitingLine(t, capDir, "fix", spawn, askAt)
+	} else if aw := v26dLines(t, capDir, capsule.AskKindAwaiting); len(aw) != 0 {
+		t.Fatalf("an interjection recorded an awaiting line: %+v", aw)
+	}
 	dl := v26dLines(t, capDir, "delivered")
 	if len(dl) != 1 || dl[0].MsgAt != line.At || dl[0].Spawn != delivered || dl[0].Step != "fix" {
 		t.Fatalf("the delivered line: %+v", dl)
@@ -224,14 +254,24 @@ func TestV26dClaudeReplyDeliveredToLiveProcess(t *testing.T) {
 	}
 	// the persona got the framed message as its own stream-json user
 	// message: the marker, the frame naming the ask, the words verbatim,
-	// into the SAME process
+	// into the SAME process. The harness journals the line after it has
+	// acknowledged the delivery, so poll the journal for it (one read races
+	// that write).
 	var got map[string]any
-	for _, e := range w159Journal(t, capDir, "fakeclaude.jsonl") {
-		if e["type"] == "message" {
-			got = e
+	waitUntil(t, 30*time.Second, "the persona's message record of the delivered reply", func() bool {
+		got = nil
+		for _, e := range w159Journal(t, capDir, "fakeclaude.jsonl") {
+			if e["type"] == "message" && e["spawn_n"] == float64(1) {
+				got = e
+			}
 		}
-	}
-	if got == nil || got["spawn_n"] != float64(1) {
+		if got == nil {
+			return false
+		}
+		text, _ := got["text"].(string)
+		return strings.Contains(text, spawn.MessageMarker(line.At)) && strings.Contains(text, "(ask "+ask.At+")")
+	})
+	if got["spawn_n"] != float64(1) {
 		t.Fatalf("the persona never got the message: %v", got)
 	}
 	text, _ := got["text"].(string)
@@ -298,23 +338,25 @@ func TestV26dPiReplyDeliveredToLiveProcessAndV1QuestionRefused(t *testing.T) {
 	}
 	line := v26dCheckRecord(t, d.dataDir, wi, capDir, "reply", ask.At, 1, 1, "started", "user_message")
 	// the persona: the message was its second prompt in the session, and
-	// its scripted on_message turn answered it in this dispatch
-	var second, onMessage bool
-	for _, e := range fakeJournal(t, capDir) {
-		switch e["type"] {
-		case "prompt":
-			if e["n_in_session"] == float64(2) && e["spawn_n"] == float64(1) {
-				second = true
-			}
-		case "on_message":
-			if m, _ := e["message"].(string); strings.Contains(m, spawn.MessageMarker(line.At)) && strings.Contains(m, v26dReply) && !strings.HasPrefix(m, "/") {
-				onMessage = true
+	// its scripted on_message turn answered it in this dispatch. Both lines
+	// follow the harness's delivery acknowledgement, so poll the journal for
+	// them instead of reading it once.
+	waitUntil(t, 30*time.Second, "the persona's second prompt and its on_message turn", func() bool {
+		var second, onMessage bool
+		for _, e := range fakeJournal(t, capDir) {
+			switch e["type"] {
+			case "prompt":
+				if e["n_in_session"] == float64(2) && e["spawn_n"] == float64(1) {
+					second = true
+				}
+			case "on_message":
+				if m, _ := e["message"].(string); strings.Contains(m, spawn.MessageMarker(line.At)) && strings.Contains(m, v26dReply) && !strings.HasPrefix(m, "/") {
+					onMessage = true
+				}
 			}
 		}
-	}
-	if !second || !onMessage {
-		t.Fatalf("the persona's record (second prompt %v, on_message %v)", second, onMessage)
-	}
+		return second && onMessage
+	})
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 	if ho := acceptedHandoff(t, capDir, "fix", 1); ho.Handoff.Status != stepcall.StatusDone {
 		t.Fatalf("the hand-off of dispatch 1: %+v", *ho.Handoff)
@@ -401,13 +443,21 @@ func TestV26dClaudeReplyAfterWarmWindowResumesSession(t *testing.T) {
 	if second["resume"] != true || second["session"] != first["session"] || second["spawn_n"] != float64(2) || second["step"] != "fix" {
 		t.Fatalf("the resume dispatch: %v (first %v)", second, first)
 	}
-	// the resumed session's first message: the owner's reply alone
-	prompt, err := os.ReadFile(filepath.Join(capDir, "logs", "fakeclaude-prompt-2.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// the resumed session's first message: the owner's reply alone. The
+	// harness writes the prompt file after its spawn record, so poll the
+	// file for the complete content (a single read races that write).
 	v26dWaitDelivered(t, d.dataDir, wi)
 	line := v26dCheckRecord(t, d.dataDir, wi, capDir, "reply", ask.At, 1, 2, "prompt", "turn_started")
+	var prompt []byte
+	waitUntil(t, 30*time.Second, "the resumed session's prompt file", func() bool {
+		raw, err := os.ReadFile(filepath.Join(capDir, "logs", "fakeclaude-prompt-2.txt"))
+		if err != nil {
+			return false
+		}
+		prompt = raw
+		p := string(raw)
+		return strings.HasSuffix(strings.TrimSpace(p), spawn.MessageMarker(line.At)) && strings.Contains(p, v26dReply)
+	})
 	if p := string(prompt); !strings.HasSuffix(strings.TrimSpace(p), spawn.MessageMarker(line.At)) || !strings.Contains(p, v26dReply) || strings.Contains(p, "# Step definition") || strings.HasPrefix(p, "/") {
 		t.Fatalf("the resume prompt: %q", p)
 	}
@@ -451,15 +501,16 @@ func TestV26dClaudeInterjectionMidTurn(t *testing.T) {
 		return len(v26dKind(v26cEvents(t, d.dataDir, wi), "delivered")) == 1
 	})
 	v26dCheckRecord(t, d.dataDir, wi, capDir, "message", "", 1, 1, "queued", "lifecycle_started")
-	var absorbed bool
-	for _, e := range w159Journal(t, capDir, "fakeclaude.jsonl") {
-		if e["type"] == "message_absorbed" {
-			absorbed = true
+	// the persona absorbed the queued message into its running turn: the
+	// journal line follows the delivery acknowledgement, so poll for it
+	waitUntil(t, 30*time.Second, "the persona to absorb the queued message", func() bool {
+		for _, e := range w159Journal(t, capDir, "fakeclaude.jsonl") {
+			if e["type"] == "message_absorbed" {
+				return true
+			}
 		}
-	}
-	if !absorbed {
-		t.Fatal("the persona never absorbed the queued message into its turn")
-	}
+		return false
+	})
 	if len(v26cAwaiting(t, d.dataDir, wi)) != 0 {
 		t.Fatal("an interjection parked the step")
 	}
@@ -498,18 +549,21 @@ func TestV26dPiInterjectionMidTurn(t *testing.T) {
 		return len(v26dKind(v26cEvents(t, d.dataDir, wi), "delivered")) == 1
 	})
 	v26dCheckRecord(t, d.dataDir, wi, capDir, "message", "", 1, 1, "queued", "user_message")
-	var queued, delivered bool
-	for _, e := range fakeJournal(t, capDir) {
-		switch e["type"] {
-		case "message_queued":
-			queued = true
-		case "message_delivered":
-			delivered = queued
+	// the persona queued the message and handed it to the model at the
+	// turn's boundary; both journal lines follow the delivery
+	// acknowledgement, so poll for them
+	waitUntil(t, 30*time.Second, "the persona's queued and delivered records", func() bool {
+		var queued, delivered bool
+		for _, e := range fakeJournal(t, capDir) {
+			switch e["type"] {
+			case "message_queued":
+				queued = true
+			case "message_delivered":
+				delivered = queued
+			}
 		}
-	}
-	if !queued || !delivered {
-		t.Fatalf("the persona's record (queued %v, delivered %v)", queued, delivered)
-	}
+		return queued && delivered
+	})
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 	if spawns := spawnJournal(t, capDir); len(spawns) != 2 {
 		t.Fatalf("spawns: %v", spawns)
@@ -556,6 +610,13 @@ func TestV26dPiCrashBetweenReplyAndDeliveryReplaysOnce(t *testing.T) {
 	if dl := v26dLines(t, capDir, "delivered"); len(dl) != 0 {
 		t.Fatalf("delivered before any delivery: %+v", dl)
 	}
+	// the crash left three lines — the ask, its one wait and the owner's
+	// reply, nothing delivered yet
+	before := v26dAsks(t, capDir)
+	if kinds := v26dKindsOf(t, capDir); !reflect.DeepEqual(kinds, []string{capsule.AskKindAsk, capsule.AskKindAwaiting, capsule.AskKindReply}) {
+		t.Fatalf("asks.jsonl before the restart: %v (%+v)", kinds, before)
+	}
+	v26cAwaitingLine(t, capDir, "fix", 1, ask.At)
 	if n := len(v26dKind(v26cEvents(t, d.dataDir, wi), "owner_message")); n != 1 {
 		t.Fatalf("owner_message events before the restart: %d", n)
 	}
@@ -567,16 +628,30 @@ func TestV26dPiCrashBetweenReplyAndDeliveryReplaysOnce(t *testing.T) {
 	}
 	v26dWaitDelivered(t, d2.dataDir, wi)
 	line := v26dCheckRecord(t, d2.dataDir, wi, capDir, "reply", ask.At, 1, 2, "prompt", "turn_started")
-	prompt, err := os.ReadFile(filepath.Join(capDir, "logs", "fakepi-prompt-2.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	// the restart's prompt carries the reply exactly once; the harness
+	// writes the file after the dispatch's spawn record, so poll for the
+	// complete content
+	var prompt []byte
+	waitUntil(t, 30*time.Second, "the restart's prompt file", func() bool {
+		raw, err := os.ReadFile(filepath.Join(capDir, "logs", "fakepi-prompt-2.txt"))
+		if err != nil {
+			return false
+		}
+		prompt = raw
+		p := string(raw)
+		return strings.Count(p, spawn.MessageMarker(line.At)) == 1 && strings.Contains(p, v26dReply)
+	})
 	if p := string(prompt); strings.Count(p, spawn.MessageMarker(line.At)) != 1 || !strings.Contains(p, v26dReply) {
 		t.Fatalf("the restart's prompt carries the reply %d times: %q", strings.Count(p, spawn.MessageMarker(line.At)), p)
 	}
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 	v26dResumedHandoff(t, capDir)
 	time.Sleep(time.Second)
+	// the restart appended the one delivery and rewrote nothing: the three
+	// lines it found are the three lines it left (the wait's T0 included)
+	if after := v26dAsks(t, capDir); len(after) != 4 || !reflect.DeepEqual(after[:3], before) {
+		t.Fatalf("the restart rewrote the record (a moved T0, a second reply or an extra line): %+v, was %+v", after, before)
+	}
 	if dl := v26dLines(t, capDir, "delivered"); len(dl) != 1 {
 		t.Fatalf("delivered lines after the restart: %+v", dl)
 	}

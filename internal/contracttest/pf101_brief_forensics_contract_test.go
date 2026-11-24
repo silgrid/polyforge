@@ -49,7 +49,7 @@ func TestPF101SubagentBriefForensicsContract(t *testing.T) {
 		"downloads/",
 		"a summary and an evidence index",
 		"rule 9's bound",
-		"never reloads",
+		"reads saved material from the file instead of loading it again",
 	} {
 		if !strings.Contains(flat, tok) {
 			t.Errorf("the brief rules lack the pinned token %q — the parent-step brief-constraint requirement is missing or reworded past recognition", tok)
@@ -60,7 +60,7 @@ func TestPF101SubagentBriefForensicsContract(t *testing.T) {
 	// so this change is seen to add, not rewrite; whitespace-collapsed
 	// like the pins above).
 	for _, keep := range []string{
-		"It never runs `pf step`",
+		"Its whole surface is the brief",
 		"You write `artifacts/build/units.json` from what the tasks return",
 	} {
 		if !strings.Contains(flat, keep) {
