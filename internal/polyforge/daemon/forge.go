@@ -44,7 +44,7 @@ func (f cellForge) LockRepo(ctx context.Context, repo string) (func(), error) {
 // leaseRepoArg spells a merge-lock key as a remote the lease server can
 // normalize. A key that already carries a scheme is passed through.
 func leaseRepoArg(key string) string {
-	if strings.Contains(key, "://") {
+	if strings.Contains(key, "://") || strings.HasPrefix(key, "/") {
 		return key
 	}
 	return "https://" + key
