@@ -64,3 +64,7 @@ each claim against the file or commit it names before you build on it or report 
   Its whole surface is the brief: `pf step` (owner questions, hand-off, hub calls),
   `runtime-state/` and `artifacts/handoff.md` stay yours, its commands run in the foreground,
   and it dispatches no sub-agent of its own; an open question comes back in its answer.
+- **Brief wording (STE80).** Write every sub-agent brief in STE80 (ASD-STE100 at 80%): short
+  sentences; one instruction per sentence; active voice; a full stop between independent
+  instructions; one precise verb in place of a phrasal verb ("remove", not "take out"). The
+  five rules shape a brief's prose; command lines, paths and code stay verbatim.
