@@ -38,6 +38,7 @@ import {
   ConfigStatusDot,
   ConfigSwitch,
 } from "./SettingsUi";
+import { ConfigDangerMenu } from "./ConfigDangerMenu";
 import { ModelSelector } from "./ModelSelector";
 import { projectTrustReloadKey } from "./settings-ui-helpers";
 
@@ -367,7 +368,7 @@ export function AgentsConfig({
 
   const remove = async () => {
     if (!selected || !isWritableScope(selected.scope)) return;
-    if (!window.confirm(t("agents.deleteConfirm", { name: selected.displayName }))) return;
+    // The ⋯ menu asked already (polyforge#259 T4 AC1).
     setSaving(true);
     setError(null);
     try {
@@ -612,7 +613,19 @@ export function AgentsConfig({
                     </ConfigDetailHeaderInfo>
                     <ConfigDetailActions>
                       {selected && (mode === "view" || mode === "edit") && <ConfigButton size="small" onClick={beginDuplicate} disabled={saving || toggling}>{t("agents.duplicate")}</ConfigButton>}
-                      {selected && isWritableScope(selected.scope) && mode === "edit" && <ConfigButton variant="danger" size="small" onClick={() => void remove()} disabled={saving || toggling}>{t("agents.delete")}</ConfigButton>}
+                      {selected && isWritableScope(selected.scope) && mode === "edit" && (
+                        <ConfigDangerMenu
+                          texts={{
+                            menu: t("settings.dangerMenu"),
+                            action: t("agents.delete"),
+                            confirmText: t("agents.deleteConfirm", { name: selected.displayName }),
+                            confirm: t("agents.delete"),
+                            cancel: t("i18n.cancel"),
+                          }}
+                          busy={saving || toggling}
+                          onConfirm={() => void remove()}
+                        />
+                      )}
                       <ConfigSwitch checked={draft.enabled} disabled={switchDisabled} label={draft.enabled ? t("agents.disable") : t("agents.enable")} onChange={(checked) => void toggleEnabled(checked)} />
                     </ConfigDetailActions>
                   </ConfigDetailHeader>

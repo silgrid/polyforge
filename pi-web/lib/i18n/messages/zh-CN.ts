@@ -17,6 +17,8 @@ export const zhCNLocale: LocalePlugin = {
     "settings.unsavedCount": "{count} 项未保存改动",
     "settings.saveWithCount": "保存（{count}）",
     "settings.discard": "丢弃",
+    "settings.dangerMenu": "更多操作",
+    "settings.dangerConfirm": "确认执行「{action}」？此操作不可撤销。",
     "settings.saved": "已保存",
     "settings.undo": "撤销",
     "settings.undoSuperseded": "这一项已被别处改过，撤销已放弃；请重新读取后再改。",

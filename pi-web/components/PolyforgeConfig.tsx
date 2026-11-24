@@ -48,6 +48,7 @@ import {
   type PolyforgeCellListState,
 } from "@/lib/polyforge-cells-pure";
 import type { PolyforgeCellsRead } from "@/lib/polyforge-cells";
+import { ConfigDangerMenu } from "./ConfigDangerMenu";
 import { shortenPath } from "@/lib/display-path";
 import { dirtyCount, dirtyPatch, settleDraft } from "@/lib/settings-dirty";
 import {
@@ -761,14 +762,19 @@ export function PolyforgeConfig({ cwd, active }: Props) {
           {cell && cellsSupported && (
             <ConfigDetailActions>
               <ConfigButton size="small" disabled={cellBusy !== null} onClick={() => repairCell(profile)}>{t("polyforge.cells.repair")}</ConfigButton>
-              {profile !== POLYFORGE_DEFAULT_PROFILE && (confirmRemove === profile ? (
-                <>
-                  <ConfigButton size="small" variant="danger" disabled={cellBusy !== null} onClick={() => void removeCell(profile)}>{t("polyforge.cells.removeConfirm")}</ConfigButton>
-                  <ConfigButton size="small" onClick={() => setConfirmRemove(null)}>{t("polyforge.cells.cancel")}</ConfigButton>
-                </>
-              ) : (
-                <ConfigButton size="small" disabled={cellBusy !== null} onClick={() => setConfirmRemove(profile)}>{t("polyforge.cells.remove")}</ConfigButton>
-              ))}
+              {profile !== POLYFORGE_DEFAULT_PROFILE && (
+                <ConfigDangerMenu
+                  texts={{
+                    menu: t("settings.dangerMenu"),
+                    action: t("polyforge.cells.remove"),
+                    confirmText: t("polyforge.cells.removeConfirm"),
+                    confirm: t("polyforge.cells.remove"),
+                    cancel: t("polyforge.cells.cancel"),
+                  }}
+                  busy={cellBusy !== null}
+                  onConfirm={() => void removeCell(profile)}
+                />
+              )}
             </ConfigDetailActions>
           )}
         </ConfigDetailHeader>

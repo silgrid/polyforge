@@ -17,6 +17,8 @@ export const enLocale: LocalePlugin = {
     "settings.unsavedCount": "{count} unsaved change(s)",
     "settings.saveWithCount": "Save ({count})",
     "settings.discard": "Discard",
+    "settings.dangerMenu": "More actions",
+    "settings.dangerConfirm": "Run “{action}”? This cannot be undone.",
     "settings.saved": "Saved",
     "settings.undo": "Undo",
     "settings.undoSuperseded": "That setting changed elsewhere, so the undo was dropped. Read the page again, then change it if you still want to.",

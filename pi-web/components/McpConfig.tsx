@@ -1688,15 +1688,19 @@ function McpServerDetail({
           </ConfigDetailHeaderInfo>
           <ConfigDetailActions>
             <McpTestButton server={server} test={test} testBlock={testBlock} describedBy={testBlockId} onTest={onTest} />
-            <ConfigButton
-              variant="danger"
-              size="small"
-              disabled={controlsBusy || block !== undefined}
-              aria-describedby={block ? noteId : undefined}
-              onClick={() => onRemove(server)}
-            >
-              {busy === `remove:${key}` ? t("i18n.removing") : t("i18n.remove")}
-            </ConfigButton>
+            <ConfigDangerMenu
+              texts={{
+                menu: t("settings.dangerMenu"),
+                action: t("i18n.remove"),
+                confirmText: t("mcp.danger.confirmRemove", { name }),
+                confirm: t("i18n.remove"),
+                cancel: t("i18n.cancel"),
+              }}
+              busy={controlsBusy}
+              disabled={block !== undefined}
+              describedBy={block ? noteId : undefined}
+              onConfirm={() => onRemove(server)}
+            />
             <ConfigSwitch
               checked={server.enabled}
               disabled={controlsBusy || block !== undefined || switchless || passwordKeepsOff}
