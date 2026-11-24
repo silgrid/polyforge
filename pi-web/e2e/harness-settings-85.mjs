@@ -136,6 +136,8 @@ const seedTiers = (tiers) => {
 };
 const tierState = () => JSON.parse(readFileSync(tierStateFile, "utf8"));
 const tierArgv = () => (existsSync(tierArgvFile) ? readFileSync(tierArgvFile, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
+/** The next step-tier write is refused once by pf's CAS (the fixture's one-shot marker). */
+const refuseNextTierWrite = () => writeFileSync(tierRefuseFile, "1");
 
 // ---- the mocked adapter contract (the shapes 85a1's routes answer) ----
 const HARNESS_LIST = {
@@ -280,6 +282,9 @@ const T = {
   S32: "S85-32: an incapable catalog read leaves the column a read-only dash with a localized 0.2.4-0 reason, the other columns untouched (polyforge#256 B1)",
   S33: "S85-33: 应用到 inside the drawer writes only the chosen harness and leaves the other harness's tier alone (polyforge#258 T3 AC2)",
   S34: "S85-34: an external [step_tiers] write is what the labels show after a reload (polyforge#258 T3 AC2)",
+  S35: "S85-35: default model and reasoning change nothing until Save; a delayed save locks the controls, a failed save keeps its draft, a partial save shows the landed value and retries (polyforge#258 r2 #1/#2/#3)",
+  S36: "S85-36: a 409 on the drawer's first harness keeps the draft, marks the rest not attempted and retries successfully (polyforge#258 r2 #1)",
+  S37: "S85-37: Escape closes only the drawer and returns focus to its label (polyforge#258 r2 #5)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -731,6 +736,7 @@ try {
     const models = sectionHost(page, "models");
     await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     await openModelSubpage(page, "list");
+    assert.equal(await models.locator("[data-model-bulk]").count(), 1, "the model list keeps the provider bulk entry");
     const m1Row = models.getByRole("row").filter({ hasText: "gateway/m1" });
     const m1Toggle = m1Row.getByRole("checkbox");
     await m1Toggle.waitFor({ state: "visible", timeout: ACTION_MS });
@@ -739,6 +745,7 @@ try {
       && !(await m1Toggle.isChecked()),
       ACTION_MS, "the table toggle never reached the writer");
     await openModelSubpage(page, "providers");
+    assert.equal(await models.getByRole("switch").count(), 0, "the Provider subpage carries no chat-availability switch");
     const save = models.getByRole("button", { name: "Save", exact: true });
     await save.waitFor({ state: "visible", timeout: ACTION_MS });
     await waitFor(async () => !(await save.isDisabled()), ACTION_MS, "the models.json Save stayed disabled");
@@ -1239,6 +1246,196 @@ try {
     const text = await cell.innerText();
     assert.match(text, /pi: default/, "the reload shows pi's new 归属");
     assert.match(text, /claude: fast-chat/, "the reload shows claude's new 归属");
+    await page.context().close();
+  });
+
+
+  // S85-35 — polyforge#258 r2 #1/#2/#3: the default model and per-model
+  // reasoning are a real interaction. Nothing is written before the explicit
+  // Save; while the first write is in flight the draft controls are locked, so
+  // a late answer never overwrites a newer edit; a failed write keeps its
+  // draft, while an earlier landed write is shown from the saved value; the
+  // model page guards a leave with the unsaved draft.
+  await part("S35", "explicit save interactions", async () => {
+    const page = await newPage();
+    let savedDefault = { provider: "gateway", modelId: "m1" };
+    const efforts = {};
+    const defaultPuts = [];
+    const effortPuts = [];
+    let failEffort = false;
+    let holdDefault = null;
+    const modelsAnswer = () => ({
+      models: {}, modelList: [
+        { id: "m1", name: "Gateway One", provider: "gateway" },
+        { id: "m2", name: "Gateway Two", provider: "gateway" },
+      ], defaultModel: { provider: savedDefault.provider, modelId: savedDefault.modelId },
+      thinkingLevels: { "gateway:m1": ["low", "medium", "high"], "gateway:m2": ["low", "high"] },
+      thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false,
+    });
+    const piModelAnswer = () => ({ harness: "pi", concept: "model", data: {
+      defaultProvider: savedDefault.provider, defaultModel: savedDefault.modelId,
+      reasoningEffort: { neutral: "high", raw: "high" },
+      perModelReasoningEffort: Object.fromEntries(Object.entries(efforts).map(([key, level]) => [key, { neutral: level, raw: level }])),
+      providers: [], customModels: [],
+    } });
+    await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: modelsAnswer() }));
+    await page.route("**/api/models/default", async (route) => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON();
+        defaultPuts.push(body);
+        if (holdDefault) await holdDefault.promise;
+        savedDefault = { provider: body.provider, modelId: body.modelId };
+        return route.fulfill({ json: { ok: true } });
+      }
+      return route.fulfill({ json: { defaultHarness: "pi", claudeDefaultModel: "default", claudeDefaultEffort: "default" } });
+    });
+    await page.route("**/api/harness/pi/model", (route) => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON();
+        effortPuts.push(body);
+        if (failEffort) return route.fulfill({ status: 500, json: { error: "fixture effort save failed" } });
+        const { key, level } = body.modelThinkingLevel;
+        if (level === null) delete efforts[key];
+        else efforts[key] = level;
+        return route.fulfill({ json: { ok: true } });
+      }
+      return route.fulfill({ json: piModelAnswer() });
+    });
+    await page.route("**/api/claude", (route) => route.fulfill({ json: { models: [] } }));
+    await page.route("**/api/models/enabled*", (route) => route.fulfill({ json: {
+      allEnabled: true, patterns: null, stalePatterns: [], enabledTotal: 2, availableTotal: 2,
+      scope: "global", settingsPath: "fixture/settings.json", editable: true, providers: [],
+    } }));
+    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
+      pfPresent: true, pfVersion: "v0.2.3", capable: false, stepTiersReason: "old", items: [],
+      file: { sha256: "x", exists: true } } }));
+    await page.route("**/api/models-config", (route) => route.fulfill({ json: { providers: {} } }));
+    await page.route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: { providers: [], oauthProviders: [], apiKeyProviders: [] } }));
+    await page.route("**/api/claude-models-migration", (route) => route.fulfill({ json: { status: "none" } }));
+    await page.route("**/api/provider-usage/query", (route) => route.fulfill({ json: { providers: [] } }));
+
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    const defaultSelect = host.locator(".settings-model-default-select");
+    await defaultSelect.waitFor({ state: "visible", timeout: ACTION_MS });
+    await defaultSelect.selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
+    assert.equal(defaultPuts.length, 0, "a default model change writes nothing before Save");
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await openModelSubpage(page, "list");
+    const reasoning = host.getByLabel("Reasoning / thinking — gateway/m1", { exact: true });
+    await reasoning.waitFor({ state: "visible", timeout: ACTION_MS });
+    await reasoning.selectOption("low", { timeout: ACTION_MS });
+    assert.equal(effortPuts.length, 0, "a reasoning change writes nothing before Save");
+
+    // #2: hold the first write; the draft controls must not accept a newer edit
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    holdDefault = { promise: gate };
+    const save = host.locator("[data-model-save]");
+    await save.click({ timeout: ACTION_MS });
+    await waitFor(() => defaultPuts.length === 1, ACTION_MS, "the default write never started");
+    await waitFor(async () => (await reasoning.isDisabled()) && (await defaultSelect.isDisabled()),
+      ACTION_MS, "the draft controls stayed editable while the save was in flight");
+    holdDefault = null;
+    release();
+    await waitFor(() => effortPuts.length === 1, ACTION_MS, "the reasoning write never followed the default");
+    assert.deepEqual(defaultPuts[0], { provider: "gateway", modelId: "m2" });
+    assert.deepEqual(effortPuts[0], { modelThinkingLevel: { key: "gateway/m1", level: "low" } });
+    await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the save action never cleared its draft");
+    assert.equal(await defaultSelect.inputValue(), JSON.stringify({ harness: "pi", provider: "gateway", id: "m2" }), "the saved default shows");
+
+    // #3: two writes, the second fails — the landed default shows its saved
+    // value, the failed reasoning stays in the draft and retries.
+    failEffort = true;
+    await defaultSelect.selectOption({ label: "pi · gateway/m1" }, { timeout: ACTION_MS });
+    await reasoning.selectOption("high", { timeout: ACTION_MS });
+    await save.click({ timeout: ACTION_MS });
+    await waitFor(() => defaultPuts.length === 2 && effortPuts.length === 2, ACTION_MS, "the partial save never reached both writers");
+    await host.getByText("fixture effort save failed", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal((await save.innerText()).trim(), "Save (1)", "only the failed reasoning stays in the draft");
+    assert.equal(await defaultSelect.inputValue(), JSON.stringify({ harness: "pi", provider: "gateway", id: "m1" }),
+      "the landed default shows the saved value");
+    assert.equal(await reasoning.inputValue(), "high", "the failed reasoning keeps its draft");
+    failEffort = false;
+    await save.click({ timeout: ACTION_MS });
+    await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the retried reasoning never landed");
+    assert.equal(efforts["gateway/m1"], "high");
+
+    // the unsaved draft guards a tab switch: cancel stays, accept leaves
+    await defaultSelect.selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
+    let cancelled = 0;
+    page.once("dialog", (dialog) => { cancelled += 1; dialog.dismiss(); });
+    await tab(page, /^General$/).click({ timeout: ACTION_MS });
+    await waitFor(() => cancelled === 1, ACTION_MS, "leaving the model page with a draft asked nothing");
+    assert.ok(await host.isVisible(), "a cancelled leave keeps the model page");
+    page.once("dialog", (dialog) => dialog.accept());
+    await tab(page, /^General$/).click({ timeout: ACTION_MS });
+    await waitFor(async () => !(await host.isVisible()), ACTION_MS, "an accepted leave never switched the section");
+    await page.context().close();
+  });
+
+  // S85-36 — polyforge#258 r2 #1: the drawer's CAS conflict. The first
+  // harness is refused (409) and the round stops there: the draft stays, the
+  // second harness is marked not attempted, and the same draft retries green.
+  await part("S36", "drawer CAS conflict and retry", async () => {
+    await startTierServer();
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["claude:opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    await cell.click({ timeout: ACTION_MS });
+    const drawer = host.locator("[data-step-tier-drawer]");
+    await drawer.waitFor({ state: "visible", timeout: ACTION_MS });
+    const tierWrites = () => tierArgv().filter((args) => (args.includes("set") || args.includes("unset"))
+      && args.some((entry) => String(entry).startsWith("step_tiers.")));
+    const before = tierWrites().length;
+    await drawer.locator("[data-step-tier-select]").selectOption("fast-chat", { timeout: ACTION_MS });
+    refuseNextTierWrite();
+    await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => (await drawer.innerText()).includes("Not attempted"),
+      ACTION_MS, "the harness after the refused one was never marked not attempted");
+    assert.equal(tierWrites().length, before + 1, "a refused first harness attempted the next one");
+    assert.match(await drawer.innerText(), /config-cas-409|changed since it was read/i, "the drawer shows the CAS refusal");
+    assert.equal(await drawer.locator("[data-step-tier-select]").inputValue(), "fast-chat", "the draft target survives the conflict");
+    await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => ((await drawer.innerText()).match(/Applied/g) ?? []).length >= 2,
+      ACTION_MS, "the retried draft never applied to both harnesses");
+    assert.ok(tierWrites().length >= before + 2, "the retry wrote the moved identity");
+    await page.context().close();
+  });
+
+  // S85-37 — polyforge#258 r2 #5: the drawer takes Escape in the capture
+  // phase like every stacked dialog: one Escape closes the drawer alone and
+  // focus returns to the label that opened it.
+  await part("S37", "drawer escape and focus", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    await cell.click({ timeout: ACTION_MS });
+    await host.locator("[data-step-tier-drawer]").waitFor({ state: "visible", timeout: ACTION_MS });
+    await page.keyboard.press("Escape");
+    await waitFor(async () => (await host.locator("[data-step-tier-drawer]").count()) === 0,
+      ACTION_MS, "Escape never closed the drawer");
+    assert.ok(await page.getByRole("dialog", { name: "Settings", exact: true }).isVisible(),
+      "Escape closed Settings instead of only the drawer");
+    await waitFor(async () => await page.evaluate(() => document.activeElement?.hasAttribute("data-step-tier-open") ?? false),
+      ACTION_MS, "focus never returned to the tier label");
     await page.context().close();
   });
 

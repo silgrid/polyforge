@@ -35,14 +35,18 @@ export async function checkModelDiscovery(page) {
     await host.locator('[data-model-subpage="providers"]').click();
     const providerSelect = host.getByLabel("Provider", { exact: true });
     const modelSelect = host.getByLabel("Model", { exact: true });
+    const api = settings.locator(".config-field-label").filter({ hasText: /^API$/ }).locator("..").locator("select");
     await providerSelect.selectOption("provider:anthropic");
     await modelSelect.locator("option").first().waitFor({ state: "attached" });
     assert.equal(await modelSelect.locator("option").filter({ hasText: /^claude-existing$/ }).count(), 1, "A model without a name is listed by its id");
     await providerSelect.selectOption("provider:relay");
     await modelSelect.locator("option").filter({ hasText: /^Relay Existing$/ }).first().waitFor({ state: "attached" });
     assert.equal(await modelSelect.locator("option").filter({ hasText: /^Relay Existing$/ }).count(), 1, "A model is listed by its models.json name");
+    // provider -> model -> provider: the model picker's Provider settings entry
+    // returns to the parent form even when the Provider select already names it.
+    await modelSelect.selectOption("__provider__");
+    await api.waitFor({ state: "visible" });
     await providerSelect.selectOption("provider:anthropic");
-    const api = settings.locator(".config-field-label").filter({ hasText: /^API$/ }).locator("..").locator("select");
     assert.equal(await api.inputValue(), "", "A missing protocol stays unspecified in the editor");
     const discover = async () => {
       const response = page.waitForResponse((reply) => reply.url().endsWith("/api/models-config/discover"));
