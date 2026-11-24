@@ -43,3 +43,47 @@ export function undoWrite(record: SettingsWrite | null): { field: string; value:
   if (record === null) return null;
   return { field: record.field, value: record.previous };
 }
+
+/** 一个字段（一个 harness 的那一份）在某一刻的值。 */
+export interface SettingsWriteItem {
+  harness: string;
+  /** 该 harness 自己的状态词（pi 的统一态、claude 的原生词）。 */
+  state: string;
+}
+
+/** 撤销计划：还能撤销时要写回的逐 harness 旧值，否则是放弃的原因。 */
+export type UndoPlan =
+  | { ok: true; items: SettingsWriteItem[] }
+  | { ok: false; reason: "expired" | "changed" };
+
+/** 登记一次多 harness 写入；失败不登记。 */
+export function recordWriteItems(_input: {
+  field: string;
+  previous: SettingsWriteItem[];
+  written: SettingsWriteItem[];
+  ok: boolean;
+  at: number;
+  lifetimeMs?: number;
+}): SettingsWriteItems | null {
+  return null;
+}
+
+/** 撤销计划：过期或字段已被别处改过就放弃（polyforge#259 T4，owner 4A）。 */
+export function undoPlan(
+  _record: SettingsWriteItems | null,
+  _current: SettingsWriteItem[],
+  _now: number,
+): UndoPlan {
+  return { ok: false, reason: "expired" };
+}
+
+/** 一次多 harness 写入的撤销记录。 */
+export interface SettingsWriteItems {
+  field: string;
+  /** 写之前每个 harness 真实的值。 */
+  previous: SettingsWriteItem[];
+  /** 这次写入实际设置的值（并发检查拿当前值比它）。 */
+  written: SettingsWriteItem[];
+  at: number;
+  lifetimeMs: number;
+}
