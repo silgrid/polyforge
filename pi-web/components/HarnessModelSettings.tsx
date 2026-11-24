@@ -12,9 +12,18 @@ import {
   type StepTierItem,
 } from "@/lib/step-tiers";
 import { EnabledModelsBanner, useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
+import {
+  draftDirtyCount,
+  draftWrites,
+  emptyDraft,
+  setDraftDefaultModel,
+  setDraftEffort,
+  settleWrite,
+  type ModelPageDraft,
+} from "@/lib/model-page-draft";
 import { ModelsConfig } from "./ModelsConfig";
 import { ClaudeCustomModels } from "./ClaudeCustomModels";
-import { ConfigSidebar, ConfigSidebarItem, ConfigSidebarList, ConfigDetail, ConfigSplitView } from "./SettingsUi";
+import { ConfigButton, ConfigSidebar, ConfigSidebarItem, ConfigSidebarList, ConfigDetail, ConfigSplitView } from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
 
@@ -118,11 +127,13 @@ export function StepTierBadges({ row, tier }: { row: ModelViewRow; tier: StepTie
   </span>;
 }
 
-export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEffort, tier }: {
+export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effortValues = {}, onEffort, tier }: {
   rows: ModelViewRow[];
   enabled?: EnabledModelsController;
   levels?: Record<string, string[]>;
   piSettings?: ModelPayload | null;
+  /** The unsaved per-model levels (T3's draft), keyed `provider/id`. */
+  effortValues?: Record<string, string>;
   onEffort?: (provider: string, id: string, level: string) => void;
   tier?: StepTierColumnView;
 }) {
@@ -149,7 +160,7 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEf
           {onEffort && row.harnesses.includes("pi") && supported.length > 0
             ? <label>pi <select
               aria-label={`${t("models.reasoning")} — ${key}`}
-              value={piSettings?.perModelReasoningEffort[key]?.raw ?? ""}
+              value={key in effortValues ? effortValues[key] : piSettings?.perModelReasoningEffort[key]?.raw ?? ""}
               onChange={(event) => onEffort(row.provider, row.id, event.target.value)}>
               <option value="">{t("models.followGlobal", { level: piSettings?.reasoningEffort?.raw ?? t("models.notProvided") })}</option>
               {supported.map((level) => <option key={level} value={level}>{level}</option>)}
@@ -162,16 +173,30 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEf
   </table>;
 }
 
-export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage = "default" }: {
+/** The one explicit save action of the model subpages (T3): nothing is
+ *  written on change; the count names the fields still in the draft. */
+export function ModelSaveBar({ count, saving, onSave }: { count: number; saving: boolean; onSave: () => void }) {
+  const { t } = useI18n();
+  return <div className="settings-model-savebar">
+    <ConfigButton data-model-save="" variant="primary" disabled={saving || count === 0} onClick={onSave}>
+      {count > 0 ? t("models.saveChanges", { count }) : t("i18n.save")}
+    </ConfigButton>
+  </div>;
+}
+
+export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage = "default", onUnsavedChange }: {
   cwd: string | null;
   onClose?: () => void;
   onOpenAccount?: () => void;
   /** A component test's entry point; the page opens on the default subpage. */
   initialSubpage?: ModelSubpage;
+  /** The page reports its unsaved draft so Settings can guard a close (owner plan review item 1 A). */
+  onUnsavedChange?: (dirty: boolean) => void;
 }) {
   const { t } = useI18n();
   const enabled = useEnabledModels(cwd);
   const [page, setPage] = useState<ModelSubpage>(initialSubpage);
+  const [draft, setDraft] = useState<ModelPageDraft>(emptyDraft);
   const [models, setModels] = useState<ModelViewInput[]>([]);
   const [defaultModel, setDefaultModel] = useState<ModelIdentity | null>(null);
   const [piSettings, setPiSettings] = useState<ModelPayload | null>(null);
@@ -248,18 +273,46 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
     })), defaultModel);
   }, [models, defaultModel, enabled.view]);
 
-  const write = useCallback(async (url: string, body: unknown) => {
+  const dirty = draftDirtyCount(draft);
+  const saveDraft = useCallback(async () => {
+    const writes = draftWrites(draft, cwd);
+    if (writes.length === 0) return;
     setSaving(true);
     setError(null);
-    try {
-      const response = await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await response.json();
-      if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
-      setRevision((previous) => previous + 1);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally { setSaving(false); }
-  }, []);
+    let next = draft;
+    for (const request of writes) {
+      try {
+        const response = await fetch(request.url, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request.body),
+        });
+        const data = await response.json();
+        if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
+        next = settleWrite(next, request);
+        setDraft(next);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        break;
+      }
+    }
+    setSaving(false);
+    if (draftDirtyCount(next) === 0) setRevision((previous) => previous + 1);
+  }, [cwd, draft]);
+
+  // The unsaved draft is reported to Settings and guarded on the page itself:
+  // a subpage switch asks first, a close asks before anything is lost.
+  useEffect(() => { onUnsavedChange?.(dirty > 0); }, [dirty, onUnsavedChange]);
+  useEffect(() => {
+    if (dirty === 0) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  const changePage = (next: ModelSubpage) => {
+    if (dirty > 0 && !window.confirm(t("models.unsavedLeave"))) return;
+    setPage(next);
+  };
 
   // The tier column is read-only (polyforge#256 B7): one Host read at page
   // load, localized in render.
@@ -269,7 +322,8 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
     tiers: stepTierItems(hostTierConfig.items),
   }, [hostTierConfig, t]);
 
-  const selected = defaultModel ? JSON.stringify(defaultModel) : "";
+  const shownDefault = draft.defaultModel ?? defaultModel;
+  const selected = shownDefault ? JSON.stringify(shownDefault) : "";
   const defined = {
     pi: rows.filter((row) => row.harnesses.includes("pi")).map((row) => `${row.provider}/${row.id}`),
     claude: rows.filter((row) => row.harnesses.includes("claude")).map((row) => row.id),
@@ -279,7 +333,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
     <div className="settings-section settings-models" data-model-page="unified">
       {(error || enabled.failure) && <div role="alert">{error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}</div>}
       <ConfigSplitView>
-        <ModelPageNav page={page} onSelect={setPage} />
+        <ModelPageNav page={page} onSelect={changePage} />
         <ConfigDetail>
           {page === "default" && (
             <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
@@ -287,18 +341,17 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
               <select className="settings-model-default-select" aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
                 onChange={(event) => {
                   const choice = JSON.parse(event.target.value) as ModelIdentity;
-                  void write(`/api/models/default${query}`, choice.harness === "claude"
-                    ? { harness: "claude", model: choice.id, ...(cwd ? { cwd } : {}) }
-                    : { provider: choice.provider, modelId: choice.id, ...(cwd ? { cwd } : {}) });
+                  setDraft((previous) => setDraftDefaultModel(previous, choice));
                 }}>
                 <option value="" disabled>{t("models.notProvided")}</option>
-                {defaultModel && !models.some((model) => model.harness === defaultModel.harness && model.provider === defaultModel.provider && model.id === defaultModel.id)
-                  && <option value={selected}>{defaultModel.harness} · {defaultModel.provider}/{defaultModel.id}</option>}
+                {shownDefault && !models.some((model) => model.harness === shownDefault.harness && model.provider === shownDefault.provider && model.id === shownDefault.id)
+                  && <option value={selected}>{shownDefault.harness} · {shownDefault.provider}/{shownDefault.id}</option>}
                 {models.map((model) => <option key={`${model.harness}/${model.provider}/${model.id}`}
                   value={JSON.stringify({ harness: model.harness, provider: model.provider, id: model.id })}>
                   {model.harness} · {model.provider}/{model.id}
                 </option>)}
               </select>
+              <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
             </section>
           )}
           {page === "list" && (
@@ -314,8 +367,10 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
                 </p>
               )}
               <HarnessModelTable rows={rows} enabled={enabled} levels={levels} piSettings={piSettings}
+                effortValues={draft.efforts}
                 tier={tierColumn ?? undefined}
-                onEffort={(provider, id, level) => { void write(`/api/harness/pi/model${query}`, { modelThinkingLevel: { key: `${provider}/${id}`, level: level || null } }); }} />
+                onEffort={(provider, id, level) => setDraft((previous) => setDraftEffort(previous, `${provider}/${id}`, level))} />
+              <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
             </section>
           )}
           {page === "providers" && (

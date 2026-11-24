@@ -3752,3 +3752,4 @@ select.mcp-add-input {
   color: var(--text-muted);
   font-size: 11px;
 }
+.settings-model-savebar { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }

@@ -1935,6 +1935,8 @@ export const enLocale: LocalePlugin = {
     "models.chatAlwaysOn": "Always available",
     "models.chatAlwaysOnReason": "Claude sessions do not disable a model — every listed Claude model stays available in chat.",
     "models.followGlobal": "Follow global ({level})",
+    "models.saveChanges": "Save ({count})",
+    "models.unsavedLeave": "You have unsaved model changes. Leave without saving?",
     "models.unsupported": "Not supported",
     "models.available": "Available",
     "models.unavailable": "Unavailable",

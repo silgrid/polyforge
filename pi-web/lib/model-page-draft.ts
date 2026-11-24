@@ -16,24 +16,23 @@ export interface ModelPageDraft {
   efforts: Record<string, string>;
 }
 
-/** Stub (polyforge#258 u4): filled in by the implementation commit. */
 export function emptyDraft(): ModelPageDraft {
   return { defaultModel: null, efforts: {} };
 }
 
-/** Stub (polyforge#258 u4): filled in by the implementation commit. */
+/** The user's default-model choice; the change is the draft, never a write. */
 export function setDraftDefaultModel(draft: ModelPageDraft, model: ModelPageModel | null): ModelPageDraft {
-  return draft;
+  return { ...draft, defaultModel: model };
 }
 
-/** Stub (polyforge#258 u4): filled in by the implementation commit. */
+/** The user's per-model level ("" = follow the global level). */
 export function setDraftEffort(draft: ModelPageDraft, key: string, level: string): ModelPageDraft {
-  return draft;
+  return { ...draft, efforts: { ...draft.efforts, [key]: level } };
 }
 
-/** Stub (polyforge#258 u4): filled in by the implementation commit. */
+/** How many fields the explicit save would write. */
 export function draftDirtyCount(draft: ModelPageDraft): number {
-  return 0;
+  return (draft.defaultModel === null ? 0 : 1) + Object.keys(draft.efforts).length;
 }
 
 export interface ModelPageWrite {
@@ -44,12 +43,28 @@ export interface ModelPageWrite {
   body: Record<string, unknown>;
 }
 
-/** Stub (polyforge#258 u4): filled in by the implementation commit. */
+/** The requests one explicit save sends: the combined default first (pi's
+ *  provider/modelId, claude's harness/model), then each per-model level as
+ *  the pi adapter's `modelThinkingLevel` write. */
 export function draftWrites(draft: ModelPageDraft, cwd: string | null): ModelPageWrite[] {
-  return [];
+  const writes: ModelPageWrite[] = [];
+  if (draft.defaultModel) {
+    const body = draft.defaultModel.harness === "claude"
+      ? { harness: "claude", model: draft.defaultModel.id, ...(cwd ? { cwd } : {}) }
+      : { provider: draft.defaultModel.provider, modelId: draft.defaultModel.id, ...(cwd ? { cwd } : {}) };
+    writes.push({ kind: "default", url: "/api/models/default", body });
+  }
+  for (const [key, level] of Object.entries(draft.efforts)) {
+    writes.push({ kind: "effort", key, url: "/api/harness/pi/model",
+      body: { modelThinkingLevel: { key, level: level || null } } });
+  }
+  return writes;
 }
 
-/** Stub (polyforge#258 u4): filled in by the implementation commit. */
+/** Removes the landed write's entry; an unsaved one stays for the retry. */
 export function settleWrite(draft: ModelPageDraft, write: ModelPageWrite): ModelPageDraft {
-  return draft;
+  if (write.kind === "default") return { ...draft, defaultModel: null };
+  const efforts = { ...draft.efforts };
+  if (write.key !== undefined) delete efforts[write.key];
+  return { ...draft, efforts };
 }

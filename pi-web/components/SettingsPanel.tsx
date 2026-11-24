@@ -188,10 +188,19 @@ export function SettingsPanel({
     shownPhoneLevelRef.current = phone.level;
     if (isPhone && from !== phone.level) animatePhoneLevelChange(mainRef.current, headerRef.current, from, phone.level);
   }, [isPhone, phone.level]);
+  // The model page reports an unsaved draft (polyforge#258 T3): closing
+  // Settings or moving to another tab asks before the draft is dropped. No
+  // other tab has a draft, so nothing else is guarded.
+  const [modelUnsaved, setModelUnsaved] = useState(false);
+  const mayLeaveModels = useCallback(
+    () => !modelUnsaved || window.confirm(t("models.unsavedLeave")),
+    [modelUnsaved, t],
+  );
   const onClose = useCallback(() => {
+    if (!mayLeaveModels()) return;
     dropHistory();
     closeSettings();
-  }, [closeSettings, dropHistory]);
+  }, [closeSettings, dropHistory, mayLeaveModels]);
   const sectionLabel = sections.find((item) => item.id === section)?.label ?? t("settings.title");
   // Named by the detail's active row (ConfigSidebarItem); none until one reports.
   const [detailTitle, setDetailTitle] = useState<string | null>(null);
@@ -232,6 +241,7 @@ export function SettingsPanel({
   }, [cwd, sectionRequiresProject]);
 
   const activateSection = (nextSection: SettingsSection) => {
+    if (section === "models" && nextSection !== "models" && !mayLeaveModels()) return;
     setMountedSections((current) => new Set(current).add(nextSection));
     setSection(nextSection);
     setLastSettingsSection(nextSection);
@@ -349,7 +359,7 @@ export function SettingsPanel({
               above (its Claude part is where a stored old `claude` navigation
               value lands). */}
           {sectionHost("account", <AccountSettings />)}
-          {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} onOpenAccount={() => activateSection("account")} />)}
+          {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} onOpenAccount={() => activateSection("account")} onUnsavedChange={setModelUnsaved} />)}
           {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}

@@ -1935,6 +1935,8 @@ export const zhTWLocale: LocalePlugin = {
     "models.chatAlwaysOn": "始終可用",
     "models.chatAlwaysOnReason": "claude 工作階段不支援按模型停用——清單裡的 Claude 模型始終可用。",
     "models.followGlobal": "跟隨全域（{level}）",
+    "models.saveChanges": "儲存（{count}）",
+    "models.unsavedLeave": "有未儲存的模型變更，仍要離開嗎？",
     "models.unsupported": "不支援",
     "models.available": "可用",
     "models.unavailable": "不可用",

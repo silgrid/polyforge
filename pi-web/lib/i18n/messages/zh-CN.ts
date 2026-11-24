@@ -1935,6 +1935,8 @@ export const zhCNLocale: LocalePlugin = {
     "models.chatAlwaysOn": "始终可用",
     "models.chatAlwaysOnReason": "claude 会话不支持按模型停用——清单里的 Claude 模型始终可用。",
     "models.followGlobal": "跟随全局（{level}）",
+    "models.saveChanges": "保存（{count}）",
+    "models.unsavedLeave": "有未保存的模型改动，仍要离开吗？",
     "models.unsupported": "不支持",
     "models.available": "可用",
     "models.unavailable": "不可用",
