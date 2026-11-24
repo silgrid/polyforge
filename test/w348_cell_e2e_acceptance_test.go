@@ -2167,6 +2167,67 @@ func w348RRInjectLateDefault(t *testing.T, h *w348Host, a2 string) {
 	t.Logf("injection: alpha's second job did not start within %dms; submitting the default job", ms)
 }
 
+// w348BarrierPlan is a fix turn that holds its job running until the test
+// creates barrier (polled every 0.1 s by the fake's Run; past boundS seconds
+// the Run exits 1 and the turn goes on), then completes normally.
+func w348BarrierPlan(barrier string, boundS int) []map[string]any {
+	wait := fmt.Sprintf(`i=0; while [ ! -e '%s' ]; do i=$((i+1)); if [ "$i" -gt %d ]; then exit 1; fi; sleep 0.1; done`, barrier, boundS*10)
+	return []map[string]any{
+		{"do": "envelope", "id": "fix", "run": []string{wait}, "outcome": "completed", "ms": 200},
+		{"do": "envelope", "id": "review", "outcome": "completed"},
+	}
+}
+
+// w348MarkedPlan is w348LongPlan whose fix turn first appends name to the
+// order file — the job's own record of when it was actually dispatched.
+func w348MarkedPlan(orderFile, name string, ms int) []map[string]any {
+	plan := w348LongPlan(ms)
+	plan[0]["run"] = []string{fmt.Sprintf(`printf '%%s\n' '%s' >> '%s'`, name, orderFile)}
+	return plan
+}
+
+// w348WaitCellPending polls GET /status until every named Cell's row
+// carries the wanted pending (queued, not started) count (bounded).
+func w348WaitCellPending(t *testing.T, h *w348Host, want map[string]int, bound time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(bound)
+	var last []any
+	for time.Now().Before(deadline) {
+		last, _ = w348StatusDoc(t, h)["cells"].([]any)
+		hit := 0
+		for _, it := range last {
+			row, _ := it.(map[string]any)
+			p, _ := row["profile"].(string)
+			n, ok := row["pending"].(float64)
+			if w, named := want[p]; named && ok && int(n) == w {
+				hit++
+			}
+		}
+		if hit == len(want) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("the Cells' pending counts never reached %v within %v (last cells %v, log tail: %s)", want, bound, last, h.logTail())
+}
+
+// w348WaitFirstLine polls file until it holds a first full line and
+// answers it (bounded).
+func w348WaitFirstLine(t *testing.T, file string, bound time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(bound)
+	for time.Now().Before(deadline) {
+		if raw, err := os.ReadFile(file); err == nil {
+			if line, _, full := strings.Cut(string(raw), "\n"); full {
+				return line
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("%s held no full line within %v", file, bound)
+	return ""
+}
+
 // TestW348RoundRobinServesTheOtherCellBeforeTheBusyOne — AC7: with one Host
 // slot, a startable Cell that did not just run gets the next slot ahead of a
 // second queued job on the Cell that just finished.
@@ -2175,9 +2236,14 @@ func TestW348RoundRobinServesTheOtherCellBeforeTheBusyOne(t *testing.T) {
 	alpha := newV1Install(t)
 	plans := t.TempDir()
 	def.planDir, alpha.planDir = plans, plans
-	a1 := alpha.newWI(t, "w348 rr alpha first", w348LongPlan(9000), nil)
-	a2 := alpha.newWI(t, "w348 rr alpha second", w348LongPlan(4000), nil)
-	d1 := def.newWI(t, "w348 rr default", w348LongPlan(4000), nil)
+	// a1 holds the one slot until both other jobs are queued (the barrier),
+	// never for a fixed turn length a loaded host can outrun; a2 and d1 each
+	// record their own dispatch in the order file.
+	barrier := filepath.Join(plans, "rr-barrier")
+	order := filepath.Join(plans, "rr-order")
+	a1 := alpha.newWI(t, "w348 rr alpha first", w348BarrierPlan(barrier, 120), nil)
+	a2 := alpha.newWI(t, "w348 rr alpha second", w348MarkedPlan(order, "a2", 4000), nil)
+	d1 := def.newWI(t, "w348 rr default", w348MarkedPlan(order, "d1", 4000), nil)
 	h := w348NewHost(t)
 	w348WriteHostWithModel(t, h, def.url, def.adminKey, 1, []w348WS{{path: t.TempDir(), projects: []string{"e2e"}}})
 	w348WriteCellWithModel(t, h, "alpha", alpha.url, alpha.adminKey, 0, []w348WS{{path: t.TempDir(), projects: []string{"e2e"}}})
@@ -2195,6 +2261,10 @@ func TestW348RoundRobinServesTheOtherCellBeforeTheBusyOne(t *testing.T) {
 	w348RRInjectLateDefault(t, h, a2)
 	if out, code := h.pf("", "submit", d1); code != 0 {
 		t.Fatalf("submit default queued: exit %d (%q)", code, out)
+	}
+	w348WaitCellPending(t, h, map[string]int{"alpha": 1, "default": 1}, 30*time.Second)
+	if err := os.WriteFile(barrier, nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	w348WaitTerminal(t, h, alpha, a1, 60*time.Second)
 	deadline := time.Now().Add(30 * time.Second)
@@ -2221,6 +2291,9 @@ func TestW348RoundRobinServesTheOtherCellBeforeTheBusyOne(t *testing.T) {
 	}
 	if started != "default" {
 		t.Fatalf("round-robin did not serve the idle Cell next; the slot went to %q (log tail: %s)", started, h.logTail())
+	}
+	if first := w348WaitFirstLine(t, order, 60*time.Second); first != "d1" {
+		t.Fatalf("round-robin did not dispatch the idle Cell's job first; the order file starts with %q (log tail: %s)", first, h.logTail())
 	}
 }
 
