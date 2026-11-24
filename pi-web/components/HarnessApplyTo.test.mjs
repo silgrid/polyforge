@@ -1,10 +1,12 @@
 // carries: components/HarnessApplyTo.tsx
-// polyforge#149 (#85 85a1b, AC3, owner ruling Q6 A): the 「应用到：全部 /
-// 指定」 shared component — choosing all or specific harnesses changes only
-// the target (never a save by itself), an empty specific selection cannot
-// submit, the parent owns the selection and answers per target so a failure
-// keeps the draft and is never reported as a total success. Presentational
-// like SettingsUi.tsx: every word a prop, rendered without an i18n provider.
+// polyforge#259 (T4 AC2): 「应用到」 is one compact chip everywhere — 技能、MCP
+// 与模型抽屉共用它。工单「要的结果」定的形态：一个紧凑 chip「应用到：全部 ▾」，
+// 展开后是 harness 勾选列表（不支持的置灰并说明原因），**控件本身不负责提交**
+// （提交走所在页面的保存模型）。期望值全部来自这句话，不取自实现输出：
+//   - chip 的摘要是 `标题：当前模式`，模式词就是「全部」/「指定」；
+//   - 展开的列表列出每个目标，禁用的目标带可见原因；
+//   - 控件里没有任何提交按钮（没有 <button>，也没有 submit 文本）；
+//   - 纯函数仍按工单 85a1b Q6 A：空的指定选择不能提交。
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -17,11 +19,10 @@ const jiti = createJiti(import.meta.url, {
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { HarnessApplyTo, applyToTargets, applyToCanSubmit } = await jiti.import("./HarnessApplyTo.tsx");
-const { ConfigButton } = await jiti.import("./SettingsUi.tsx");
 
 const h = React.createElement;
 const noop = () => {};
-const TEXTS = { title: "Apply to", all: "All harnesses", specific: "Specific harnesses", submit: "Apply" };
+const TEXTS = { title: "Apply to", all: "All harnesses", specific: "Specific harnesses" };
 const TARGETS = [
   { harness: "pi", label: "pi" },
   { harness: "claude", label: "claude", disabled: true, disabledReason: "claude is not installed" },
@@ -33,7 +34,6 @@ function render(props = {}) {
     targets: TARGETS,
     value: { mode: "all", selected: [] },
     onChange: noop,
-    onSubmit: noop,
     ...props,
   }));
 }
@@ -41,142 +41,55 @@ function render(props = {}) {
 test("the target derivation: all, or the specific selection — and empty cannot submit", () => {
   assert.deepEqual(applyToTargets({ mode: "all", selected: [] }, TARGETS), ["pi", "claude"]);
   assert.deepEqual(applyToTargets({ mode: "specific", selected: ["pi"] }, TARGETS), ["pi"]);
-  assert.deepEqual(applyToTargets({ mode: "specific", selected: ["claude"] }, TARGETS), ["claude"]);
   assert.equal(applyToCanSubmit({ mode: "all", selected: [] }, TARGETS), true);
-  assert.equal(applyToCanSubmit({ mode: "specific", selected: [] }, TARGETS), false, "an empty specific selection can submit");
-  assert.equal(applyToCanSubmit({ mode: "specific", selected: ["pi"] }, TARGETS), true);
-  // A selection naming no known target is empty for the submit's sake.
-  assert.equal(applyToCanSubmit({ mode: "specific", selected: ["codex"] }, TARGETS), false);
+  assert.equal(applyToCanSubmit({ mode: "specific", selected: [] }, TARGETS), false, "an empty specific selection cannot submit");
+  assert.equal(applyToCanSubmit({ mode: "specific", selected: ["codex"] }, TARGETS), false, "a selection naming no known target is empty");
 });
 
-test("the apply-to control switches between all and specific harnesses", () => {
+test("the control is a compact chip whose summary names the current target", () => {
   const all = render();
-  assert.match(all, /All harnesses/);
-  assert.match(all, /Specific harnesses/);
-  // The mode is a radio pair on the parent-owned value.
-  assert.match(all, /role="radiogroup"/);
-  assert.match(all, /Apply/, "the submit control is missing");
+  // A native <details> chip: its summary is the collapsed control (no state of
+  // its own, so it renders and toggles without JavaScript).
+  assert.match(all, /<details[^>]*class="harness-apply-to"/, "the control is not a <details> chip");
+  assert.match(all, /<summary[^>]*class="harness-apply-to-chip"/, "the chip has no summary");
+  const summary = /<summary[^>]*>([\s\S]*?)<\/summary>/.exec(all)?.[1] ?? "";
+  assert.match(summary, /Apply to/, "the chip does not name 应用到");
+  assert.match(summary, /All harnesses/, "the collapsed chip does not read the current target");
 
   const specific = render({ value: { mode: "specific", selected: ["pi"] } });
-  // The specific mode lists the harnesses, the disabled one with its visible reason.
-  assert.match(specific, /data-harness="pi"/);
-  assert.ok(specific.includes("claude is not installed"), "the disabled target's reason is not visible text");
-
-  // An empty specific selection cannot submit: the button is disabled, the
-  // parent's submit never fires (the wiring is the thin onClick prop).
-  const empty = render({ value: { mode: "specific", selected: [] } });
-  assert.match(empty, /disabled/, "an empty target selection can submit");
-
-  // A busy round disables the control while the one submission runs.
-  const busy = render({ value: { mode: "all", selected: [] }, busy: true });
-  assert.match(busy, /disabled/, "the control stays enabled through a submission");
+  assert.match(specific, /<details[^>]*data-mode="specific"/, "the chip does not carry the mode");
+  const specificSummary = /<summary[^>]*>([\s\S]*?)<\/summary>/.exec(specific)?.[1] ?? "";
+  assert.match(specificSummary, /Specific harnesses/, "the chip does not read the specific mode");
 });
 
-test("the parent's per-target feedback renders as rows, failures kept as drafts", () => {
-  const withResults = render({
-    value: { mode: "specific", selected: ["pi", "claude"] },
-    results: [
-      { harness: "pi", ok: true, text: "saved" },
-      { harness: "claude", ok: false, text: "refused: version not known" },
-    ],
-  });
-  assert.ok(withResults.includes("saved"), "a successful target's feedback is missing");
-  assert.ok(withResults.includes("refused: version not known"), "the failed target's own reason is missing");
-  // The draft (the selection) is still shown: a failure never clears it here.
-  assert.match(withResults, /data-harness="pi"/);
+test("the control never submits: the page's save model does", () => {
+  const all = render();
+  assert.doesNotMatch(all, /<button/, "the chip renders a button, so it owns an action");
+  assert.doesNotMatch(all, /type="submit"/, "the chip submits a form");
+  const specific = render({ value: { mode: "specific", selected: ["pi"] } });
+  assert.doesNotMatch(specific, /<button/, "the expanded chip renders a button");
 });
 
-/** Every element of a rendered tree, in order (React elements are plain objects). */
-function collect(node, out = []) {
-  if (Array.isArray(node)) {
-    for (const child of node) collect(child, out);
-  } else if (node && typeof node === "object" && typeof node.type !== "undefined" && node.props) {
-    out.push(node);
-    collect(node.props.children, out);
-  }
-  return out;
-}
-
-function textOf(node) {
-  if (Array.isArray(node)) return node.map(textOf).join("");
-  if (node === null || node === undefined || typeof node !== "object") return typeof node === "string" ? node : "";
-  return textOf(node.props?.children);
-}
-
-/** The input control whose enclosing label's text names `label`. */
-function inputByLabel(root, label) {
-  return collect(root).find((element) => element.type === "input"
-    && collect(root).some((candidate) => candidate.type === "label"
-      && textOf(candidate.props.children).includes(label)
-      && collect(candidate).includes(element)));
-}
-
-test("choosing all or specific harnesses changes only the target — never a save (r1#1)", () => {
-  const changes = [];
-  let submits = 0;
-  const element = HarnessApplyTo({
-    texts: TEXTS,
-    targets: TARGETS,
-    value: { mode: "all", selected: [] },
-    onChange: (next) => changes.push(next),
-    onSubmit: () => { submits += 1; },
-  });
-  // The specific radio: a mode choice re-targets and never submits.
-  const specific = inputByLabel(element, "Specific harnesses");
-  assert.ok(specific, "the specific radio is not rendered");
-  specific.props.onChange();
-  assert.deepEqual(changes, [{ mode: "specific", selected: [] }], "the mode choice changed more than the target");
-  assert.equal(submits, 0, "a mode choice submitted");
-  // The all radio from the specific mode: the same, backwards.
-  const back = HarnessApplyTo({
-    texts: TEXTS,
-    targets: TARGETS,
-    value: { mode: "specific", selected: ["pi"] },
-    onChange: (next) => changes.push(next),
-    onSubmit: () => { submits += 1; },
-  });
-  inputByLabel(back, "All harnesses").props.onChange();
-  assert.deepEqual(changes[1], { mode: "all", selected: ["pi"] });
-  assert.equal(submits, 0, "a mode choice submitted");
-  // A checkbox: only its harness joins or leaves the selection.
-  const checking = HarnessApplyTo({
-    texts: TEXTS,
-    targets: TARGETS,
-    value: { mode: "specific", selected: [] },
-    onChange: (next) => changes.push(next),
-    onSubmit: () => { submits += 1; },
-  });
-  inputByLabel(checking, "pi").props.onChange({ target: { checked: true } });
-  assert.deepEqual(changes[2], { mode: "specific", selected: ["pi"] }, "the checkbox changed more than its own harness");
-  assert.equal(submits, 0, "a target choice submitted");
-  const unchecking = HarnessApplyTo({
-    texts: TEXTS,
-    targets: TARGETS,
-    value: { mode: "specific", selected: ["pi"] },
-    onChange: (next) => changes.push(next),
-    onSubmit: () => { submits += 1; },
-  });
-  inputByLabel(unchecking, "pi").props.onChange({ target: { checked: false } });
-  assert.deepEqual(changes[3], { mode: "specific", selected: [] });
-  assert.equal(submits, 0, "a target choice submitted");
+test("the chip lists every target, and an unsupported one is greyed with its reason in text", () => {
+  const all = render();
+  assert.match(all, /<input[^>]*type="radio"/, "the mode choice is missing from the chip's menu");
+  // Every target is listed whether the chip is open or closed (the details'
+  // content is in the markup; CSS shows it while open).
+  assert.deepEqual(all.match(/data-harness="[^"]+"/g), ['data-harness="pi"', 'data-harness="claude"']);
+  assert.match(all, /claude is not installed/, "the unsupported target gives no reason");
+  assert.match(all, /<input[^>]*type="checkbox"[^>]*disabled/, "the unsupported target is not disabled");
+  // The reason is visible text, never only a title tooltip.
+  assert.doesNotMatch(all, /title="/, "a reason hides in a tooltip");
 });
 
-test("an empty specific selection cannot submit: the submit button itself is disabled (r1#1)", () => {
-  // A target set with no disabled item, so nothing but the empty selection can
-  // hold the button back — the assertion lands on the button element itself
-  // (polyforge#257: the submit is the shared ConfigButton, so the element
-  // found is that component; its own `disabled` prop is what reaches the
-  // native button, asserted rendered in components/settings-buttons.test.mjs).
-  const clean = [{ harness: "pi", label: "pi" }, { harness: "claude", label: "claude" }];
-  const empty = HarnessApplyTo({ texts: TEXTS, targets: clean, value: { mode: "specific", selected: [] }, onChange: noop, onSubmit: noop });
-  const submit = collect(empty).find((element) => element.type === ConfigButton && textOf(element.props.children) === "Apply");
-  assert.ok(submit, "the submit button is not rendered");
-  assert.equal(submit.props.disabled, true, "an empty target selection can submit");
-  const named = HarnessApplyTo({ texts: TEXTS, targets: clean, value: { mode: "specific", selected: ["pi"] }, onChange: noop, onSubmit: noop });
-  const submitNamed = collect(named).find((element) => element.type === ConfigButton && textOf(element.props.children) === "Apply");
-  assert.notEqual(submitNamed.props.disabled, true, "a named target cannot submit");
+test("the chip shows each target's last result when the page has one", () => {
+  const markup = render({ results: [{ harness: "pi", ok: false, text: "pi refused: file is read-only" }] });
+  assert.match(markup, /data-harness="pi"[^>]*data-ok="false"/, "the per-target result is missing");
+  assert.match(markup, /pi refused: file is read-only/, "the result text is missing");
 });
 
-test("presentational: every word a prop, no i18n provider needed", () => {
-  assert.match(render(), /Apply to/);
+test("an open chip renders open, so a page can show its targets at once", () => {
+  const open = render({ open: true });
+  assert.match(open, /<details[^>]*\bopen\b/, "the open chip does not render open");
+  assert.doesNotMatch(render(), /<details[^>]*\bopen\b/, "the closed chip renders open");
 });
