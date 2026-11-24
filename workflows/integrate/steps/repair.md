@@ -22,12 +22,12 @@ repair brief of its own, change nothing, commit nothing and hand off
 
 ## 完成判据 — done criteria
 
-`done` only when every item below holds; the full gate's green is never this step's to declare — only its re-run says so.
+`done` only when every item below holds on its own branch; the full gate's green is never this step's to declare — only its re-run says so.
 
-1. **Every entry of the brief's `units[]`** (`artifacts/integrate/repair.json`) has one unit in `artifacts/integrate/repair-plan.json`'s `repos[]`, and the plan's `brief_round` equals the brief's `round`.
-2. **Every unit's rerun** (the brief's `rerun`, as written) exited 0 on the host, and the plan records it with its log path.
+1. **Every unit of an accepted brief** — each `units[]` entry of `artifacts/integrate/repair.json` — has one unit in `artifacts/integrate/repair-plan.json`, whose `brief_round` equals the brief's `round`.
+2. **Every unit's rerun** either exited 0 on the host with its log path in the plan, or the host could not run it and the plan records why — the gate's re-run judges it.
 3. **Every blocking finding of the latest review** has its numbered answer in 回应上一轮 — the commit that fixed it, or why it stands.
-4. A round with no brief of its own, or one the owner refused: nothing changed, nothing committed, said in the body.
+4. **A round with no brief of its own, a brief the owner refused or ruled reverted, or a hand-back** changes nothing, leaves no plan file, and says so in the body — that is `done` for that round.
 
 ## 交接要写什么 — what your hand-off carries
 

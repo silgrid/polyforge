@@ -172,16 +172,21 @@ Write the change analysis — `artifacts/build/change-analysis.json`, the struct
 `uncovered`, `tests` and `selected` (the close-scoped run's machine selection record, merged verbatim); each listed test's `why` and `evidence` are
 review's to judge:
 
-```json {"supplement_limit": <the lane's cap, {{supplement_limit}} test runs — verification's own default applies when the file names none>,
-"changed": ["<each behavior, component and interface the change altered, one line each>"], "uncovered": {"<repo>": ["<each changed path that repo's
---light report leaves covered by no `carries:` declaration>"]}, "tests": [{"id": "a1", "repo": "<name under repos/>", "file": "<the test's
-repo-relative file>", "name": "<its test name, when one test is meant — a bare name as it appears in the file, or a qualified name whose segments,
-joined by `.`, `::` or `/`, each appear in the file>", "cwd": "<directory inside the repo>", "argv": ["<the run that shows it passing>"], "marker":
-"<a line only its passing run prints>", "why": "<what of the change it pins>", "evidence": "<how you found it: the selector, route, copy key or test
-name you searched, and where it led>"}], "selected": {"<repo>": {"head": "<sha>", "base": "<sha>", "default_branch": "<branch>", "engine": "<the
-engine invocations>", "conf": "<the conf's path>", "mode": "light", "paths": ["<the report's affected paths>"], "suites": ["<its e2e suites>"],
-"commands": [{"name": "<name>", "root": "<repos/<repo>[/<nested root>]>", "cmd": "<the command>", "phase": "scoped", "source": "conf|default",
-"exit_code": 0, "log": "<its log>", "reused": "<result file>#<name>"}], "status": "green"}}} ```
+```json
+{"supplement_limit": <the lane's cap, {{supplement_limit}} test runs — verification's own default applies when the file names none>,
+ "changed": ["<each behavior, component and interface the change altered, one line each>"],
+ "uncovered": {"<repo>": ["<each changed path that repo's --light report leaves covered by no `carries:` declaration>"]},
+ "tests": [{"id": "a1", "repo": "<name under repos/>", "file": "<the test's repo-relative file>",
+            "name": "<its test name, when one test is meant — a bare name as it appears in the file, or a qualified name whose segments, joined by `.`, `::` or `/`, each appear in the file>", "cwd": "<directory inside the repo>",
+            "argv": ["<the run that shows it passing>"], "marker": "<a line only its passing run prints>",
+            "why": "<what of the change it pins>",
+            "evidence": "<how you found it: the selector, route, copy key or test name you searched, and where it led>"}],
+ "selected": {"<repo>": {"head": "<sha>", "base": "<sha>", "default_branch": "<branch>", "engine": "<the engine invocations>",
+              "conf": "<the conf's path>", "mode": "light", "paths": ["<the report's affected paths>"], "suites": ["<its e2e suites>"],
+              "commands": [{"name": "<name>", "root": "<repos/<repo>[/<nested root>]>", "cmd": "<the command>", "phase": "scoped",
+                            "source": "conf|default", "exit_code": 0, "log": "<its log>", "reused": "<result file>#<name>"}],
+              "status": "green"}}}
+```
 
 Find the tests that already pin what you changed — the e2e suites through the selectors, routes and copy keys the diff touches (a shared file the
 engine hands to at most 3 suites is the blind spot this file closes), the unit tests through the packages and names — and list every one you find: run
@@ -203,16 +208,15 @@ judge (exit 2) is recorded in `details.not_judged` and is no hit, except `carrie
 
 ## 完成判据 — done criteria
 
-`done` only when every item below holds; each names the set it covers and the file, field or command that shows it; the 3c text is their procedure, not a second list.
+`done` only when every item below holds on its own branch; each names the set it covers and the file, field or command that shows it — 3c is the procedure these items read, and its pinned sentences stay the contract's.
 
 1. **Every criterion of the judged list** — the work item's acceptance section, else the plan's owner-confirmed `## Acceptance` list — has exactly one row in the plan's `## Coverage` table, kind `test`, `existing` or `doc`.
-2. **Every unit of the plan's `## Units`** has one entry in `artifacts/build/units.json`: `test_commit` an ancestor of `impl_commit`, its recorded `run` red at `test_commit` and green at HEAD; a doc-type criterion has no unit and its `## Coverage` row names its validator.
-3. **Every point a previous round raised** — the 回退's findings or the owner's words, numbered as there — has its numbered answer in the hand-off's 回应上一轮, each with the commit or `units.json` entry that answers it.
+2. **Every unit the plan's `## Units` records** — a plain unit, a `pre_existing_red` unit, a doc-type criterion — resolves under the close's own replay, `artifacts/facts/build.json`; a doc-type criterion has no unit and names its validator in its `## Coverage` row.
+3. **Every point a previous round raised** — the 回退's findings or the owner's words, numbered as there — has its numbered answer in the hand-off's 回应上一轮: the commit or `units.json` entry that answers it, or the evidence that the finding does not hold.
 4. **Every document the diff's change affects**, per review's doc-impact check item by item, has a row in `artifacts/self-review.md`: `synced`, or `no-change-needed` with the reason.
-5. **The daemon's two hand-off gates** — the fast-check proof (`artifacts/build/fast-checks/<repo>.json`) and the mechanical facts (`artifacts/build/handoff-facts/<repo>.json`) — pass at HEAD for every repo build changed; 3c produces both.
-6. **The close's facts results are green**: `artifacts/facts/plan-conformance.json` (no undeclared write, no lapsed coupled obligation, every decided ruling mapped), `artifacts/facts/build.json` (every unit resolves; every replay red at its test commit), `artifacts/facts/carries.json` and `artifacts/facts/analysis.json` (every listed test exists at HEAD and passes).
-7. **Every entry of the change analysis's `tests[]`** names a test that exists and passes at HEAD, and its `uncovered[<repo>]` lists every changed path the `--light` report leaves covered by no `carries:` declaration.
-8. **The close's scoped selection** is green or `pre_existing` for every repo touched — `artifacts/build/scoped-close/<repo>.json`.
+5. **Every changed path the `--light` report leaves covered by no `carries:` declaration** appears in the change analysis's `uncovered[<repo>]`, and every test it lists exists and passes at HEAD — review judges both.
+6. **The hand-off gates** pass at HEAD for every repo build changed — `artifacts/build/fast-checks/<repo>.json` and `artifacts/build/handoff-facts/<repo>.json` (the daemon's rules; 3c produces both).
+7. **The close's results** are green — `artifacts/facts/{plan-conformance,build,carries,analysis}.json` and `artifacts/build/scoped-close/<repo>.json` — on 3c's own branches: a facts line whose exit 2 stays 2 after its retries is disclosed with its summary and left to review to re-run; a light-tier repo's selection is green or `pre_existing`, an integration fix ticket runs the full bar and has none, and a red or `incomplete` selection the owner ruled is cited with the ruling.
 
 ## If you cannot finish
 
