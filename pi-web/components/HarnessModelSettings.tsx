@@ -198,6 +198,9 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   const [page, setPage] = useState<ModelSubpage>(initialSubpage);
   const [draft, setDraft] = useState<ModelPageDraft>(emptyDraft);
   const [drawerRow, setDrawerRow] = useState<ModelViewRow | null>(null);
+  // The drawer keeps the catalog it opened with, so a background re-read never
+  // unmounts it mid-edit (the CAS re-read on save is what guards the write).
+  const [drawerTier, setDrawerTier] = useState<StepTierColumnView | null>(null);
   const [models, setModels] = useState<ModelViewInput[]>([]);
   const [defaultModel, setDefaultModel] = useState<ModelIdentity | null>(null);
   const [piSettings, setPiSettings] = useState<ModelPayload | null>(null);
@@ -409,7 +412,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
               <HarnessModelTable rows={rows} enabled={enabled} levels={levels} piSettings={piSettings}
                 effortValues={draft.efforts}
                 tier={tierColumn ?? undefined}
-                onOpenTier={setDrawerRow}
+                onOpenTier={(row) => { setDrawerTier(tierColumn); setDrawerRow(row); }}
                 onEffort={(provider, id, level) => setDraft((previous) => setDraftEffort(previous, `${provider}/${id}`, level))} />
               <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
             </section>
@@ -427,13 +430,13 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
           )}
         </ConfigDetail>
       </ConfigSplitView>
-      {drawerRow && tierColumn?.capable && (
+      {drawerRow && drawerTier?.capable && (
         <ModelStepTierDrawer
           row={drawerRow}
-          tier={tierColumn}
+          tier={drawerTier}
           tierRead={tierRead}
           tierWrite={tierWrite}
-          onClose={() => setDrawerRow(null)}
+          onClose={() => { setDrawerRow(null); setDrawerTier(null); }}
           onSaved={() => setRevision((previous) => previous + 1)}
         />
       )}

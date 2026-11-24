@@ -1187,6 +1187,9 @@ try {
     await openModelSubpage(page, "list");
     const cell = host.locator("[data-step-tier-cell]").first();
     await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    const tierWrites = () => tierArgv().filter((args) => (args.includes("set") || args.includes("unset"))
+      && args.some((entry) => String(entry).startsWith("step_tiers.")));
+    const before = tierWrites().length;
     await cell.click({ timeout: ACTION_MS });
     const drawer = host.locator("[data-step-tier-drawer]");
     await drawer.waitFor({ state: "visible", timeout: ACTION_MS });
@@ -1194,11 +1197,11 @@ try {
     await drawer.getByRole("checkbox", { name: "pi", exact: true }).check({ timeout: ACTION_MS });
     await drawer.locator("[data-step-tier-select]").selectOption("fast-chat");
     await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
-    const tierWrites = () => tierArgv().filter((args) => (args.includes("set") || args.includes("unset"))
-      && args.some((entry) => String(entry).startsWith("step_tiers.")));
-    const writes = await waitFor(() => {
+    const writes = await waitFor(async () => {
       const found = tierWrites();
-      return found.length >= 2 ? found : false;
+      if (found.length <= before) return false;
+      // the drawer's own round is done when claude's untouched tier is visible
+      return (await drawer.innerText()).includes("Applied") ? found.slice(before) : false;
     }, ACTION_MS, "the targeted tier write never reached pf");
     const fast = writes.find((args) => args.includes("step_tiers.fast-chat"));
     const kept = writes.find((args) => args.includes("step_tiers.default"));
