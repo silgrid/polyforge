@@ -20,3 +20,10 @@ whole question - the prose, the table, 预期效果 and 注意事项 - as its on
 then end your turn. The owner's reply is your next turn - continue from it; never
 fabricate or guess an answer you did not receive. A reply that cancels the work
 is yours to read: hand off `--status cancel --per-owner <its at>`.
+
+中文可读性——问题卡按这些规则呈现：第一行用一句短句说明本次要定的决定，接着逐条列出证据，再给四列表；
+没有证据时直接从表格开始。每句表达一件事，单句控制在 40 字以内，英文句控制在 20 词以内。
+需要补充说明时另起一句，括号里只放一句完整说明。标识符、路径和命令用反引号代码格式标注。
+证据一条一行，单条控制在 120 字以内。
+
+事实自己查——能从仓库、工具和记忆查到的事实先查清并写进证据；问题卡只承载需要 owner 决定的取舍。

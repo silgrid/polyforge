@@ -279,7 +279,9 @@ granted.
 Every placeholder is checked at load: one no var, no param and no fragment
 resolves, a var no placeholder uses, a name both a var and a param hold
 and a var or param that shadows a fragment are `WFC-195` (a param no
-placeholder uses is allowed). Vars and fragments are fixed text of the
+placeholder uses is allowed). A fragment may carry advisory text that a step
+applies in its own judgment: develop's build renders `readability_checklist.md`,
+and no gate, status or result reads it. Vars and fragments are fixed text of the
 lane; a param is the one placeholder whose value is taken at dispatch
 time — the load renders it with its lane default, each dispatch with its
 final value (lane default < project < work item, [Step keys](#step-keys)).
