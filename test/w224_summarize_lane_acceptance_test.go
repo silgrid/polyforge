@@ -481,6 +481,15 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
+	// W224_INJECT_EARLY_DEMAND=1 (test-only, off by default) issues the
+	// first marked request before the submit — the daemon has no live
+	// dispatch for the WI yet, so the request arms nothing — and sends no
+	// marked request at the usual place: the first demand a loaded host
+	// lands before the step's agent and transcript are ready.
+	earlyDemand := os.Getenv("W224_INJECT_EARLY_DEMAND") == "1"
+	if earlyDemand {
+		w224Demand(t, inst, d, wi)
+	}
 	d.pf(t, "submit", wi)
 	waitStepStatus(t, d, wi, "fix", "in_progress", 30*time.Second)
 	capDir := d.capsuleDir(wi)
@@ -489,7 +498,9 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	// The first call fails raw: the snapshot carries the RAW error text
 	// (the harness's own stderr wording, never faked), no summary, and
 	// the failure breaks nothing (the snapshot stays whole).
-	w224Demand(t, inst, d, wi)
+	if !earlyDemand {
+		w224Demand(t, inst, d, wi)
+	}
 	// The first call started inside that request (Marked sets the
 	// interval clock before the route answers), so the interval is
 	// measured from no later than here.
