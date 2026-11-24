@@ -2068,7 +2068,6 @@ function HostSettingsRegion({ title }: { title: string }) {
         <div key={key} className="polyforge-config-region-row" data-pf-region-key={key} style={REGION_ROW_STYLE}>
           <span className="polyforge-config-key"><BreakableToken text={key} /></span>
           <input aria-label={`${key} (host)`} value={drafts[key] ?? regionShownValue(itemOf(key))} onChange={(event) => setDrafts((current) => ({ ...current, [key]: event.target.value }))} />
-          <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null} onClick={() => void saveAll()}>{t("polyforge.settings.configSave")}</ConfigButton>
           <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null || itemOf(key)?.source !== "file"} onClick={() => write({ action: "unset", key })}>{t("polyforge.cells.unset")}</ConfigButton>
           {renderNotice(key)}
         </div>
@@ -2119,6 +2118,16 @@ function HostSettingsRegion({ title }: { title: string }) {
           )}
         </p>
       )}
+      {/* One footer for every editable Host field (polyforge#259 T4 AC1). */}
+      <ConfigSaveFooter
+        status={dirty > 0 ? t("settings.unsavedCount", { count: dirty }) : undefined}
+        dirty={dirty}
+        saving={busy !== null || confirming !== null}
+        discardLabel={t("settings.discard")}
+        saveLabel={(count) => t("settings.saveWithCount", { count })}
+        onDiscard={() => setDrafts({})}
+        onSave={() => void saveAll()}
+      />
     </div>
   );
 }
