@@ -924,8 +924,10 @@ test("the Cell lifecycle reads /api/polyforge/cells, gates on the capability, ke
   assert.match(source, /<AddCellPane\s*\n\s*read=\{cellsRead !== null\}\s*\n\s*supported=\{cellsSupported\}/, "the pane gets the capability gate");
   assert.match(source, /\{cell && cellsSupported && \(\s*\n\s*<ConfigDetailActions>/, "repair/remove only with the capabilities");
   // polyforge#259 T4 AC1: the Cell's removal is the shared ⋯ menu, which asks
-  // once before it writes, and the default Cell is never offered.
-  assert.match(source, /profile !== POLYFORGE_DEFAULT_PROFILE && \(\s*\n\s*<ConfigDangerMenu/, "remove needs a confirmation and never offers default");
+  // once before it writes and never offers the default Cell. Asserted where it
+  // renders — e2e/w364-cell-master-detail.mjs M3 (the trigger is visible on the
+  // Cell's pane and no bare Remove button is) — not as a regex over this file's
+  // source (review #5).
   assert.doesNotMatch(source, /cells\/[^"`]*cleanup|"cleanup"/, "no permanent-cleanup control on the page");
 });
 
