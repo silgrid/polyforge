@@ -1505,6 +1505,7 @@ export const zhTWLocale: LocalePlugin = {
     "mcp.undo": "復原",
     "mcp.undoing": "正在復原…",
     "mcp.undoFailed": "無法復原：",
+    "mcp.undoSuperseded": "這個伺服器已被別處改過，復原已放棄；上面的清單是目前狀態。",
     "mcp.state.connected": "測試時已連線",
     "mcp.state.needs-auth": "需要登入",
     "mcp.state.failed": "測試時未能連線",

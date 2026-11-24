@@ -21,6 +21,8 @@ import type {
 } from "@/lib/api-types";
 import { HarnessApplyTo, applyToCanSubmit, type HarnessApplyToSelection, type HarnessApplyToTarget } from "./HarnessApplyTo";
 import { ConfigDangerMenu, dangerConfirmAllowed, type ConfigDangerStage } from "./ConfigDangerMenu";
+import { SettingsSavedToast } from "./SettingsSavedToast";
+import { recordWriteItems, undoPlan, type SettingsWriteItems } from "@/lib/settings-undo";
 import { useI18n } from "@/hooks/useI18n";
 import { displayPathWithin, shortenPath } from "@/lib/display-path";
 import {
@@ -331,6 +333,10 @@ export function McpConfig({
   const [actionError, setActionError] = useState<McpActionErrorState | null>(null);
   const [groupStatus, setGroupStatus] = useState<McpGroupStatus | null>(null);
   const [undo, setUndo] = useState<McpUndoNotice | null>(null);
+  // The last switch, undoable inside its toast (polyforge#259 T4 AC1, owner 1A).
+  const [switchUndo, setSwitchUndo] = useState<{ record: SettingsWriteItems; server: McpServerInfo } | null>(null);
+  // Why an undo was dropped (the field moved elsewhere, owner 4A): a visible line.
+  const [switchNote, setSwitchNote] = useState(false);
   const [focusBack, setFocusBack] = useState<McpFocusBack | null>(null);
   // Tests by server key. A test writes no file, so it runs beside changes and other tests.
   const [tests, setTests] = useState<Record<string, McpTestRun>>({});
@@ -609,9 +615,56 @@ export function McpConfig({
     setGroupStatus(null);
     const result = await runAction({ action: enabled ? "enable" : "disable", scope: server.scope, name: server.name }, `switch:${key}`);
     if (!result) return;
-    if (!result.ok) setActionError({ key, failure: result.error });
+    if (!result.ok) {
+      setActionError({ key, failure: result.error });
+      setSwitchUndo(null);
+    } else {
+      // A landed switch carries its own undo (polyforge#259 T4 AC1, owner 1A).
+      const record = recordWriteItems({
+        field: key,
+        previous: [{ harness: key, state: server.enabled ? "on" : "off" }],
+        written: [{ harness: key, state: enabled ? "on" : "off" }],
+        ok: true,
+        at: Date.now(),
+      });
+        setSwitchUndo(record === null ? null : { record, server });
+      setSwitchNote(false);
+    }
     setFocusBack({ control: pressed });
   }, [runAction]);
+
+  /**
+   * The toast's one click: read the server list again and only write the old
+   * value back while the server still holds what this switch set — a change made
+   * elsewhere abandons the undo (owner 4A), and a refusal is shown.
+   */
+  const undoSwitch = useCallback(async () => {
+    const entry = switchUndo;
+    setSwitchUndo(null);
+    if (!entry) return;
+    const fresh = await loadMcpOverview(cwd);
+    if (!fresh.ok) {
+      setActionError({ key: entry.record.field, failure: fresh.error });
+      return;
+    }
+    const now = fresh.data.servers.find((candidate) => mcpServerKey(candidate) === entry.record.field);
+    const plan = undoPlan(entry.record, [{ harness: entry.record.field, state: now?.enabled ? "on" : "off" }], Date.now());
+    if (!plan.ok) {
+      if (plan.reason === "changed") {
+        // The server moved since this switch: show the fresh list and say so.
+        setLoad({ state: "loaded", data: fresh.data, ...(fresh.projectError ? { projectError: fresh.projectError } : {}) });
+        setSwitchNote(true);
+      }
+      return;
+    }
+    setSwitchNote(false);
+    const want = plan.items[0]?.state === "on";
+    const pressed = pressedButton();
+    const result = await runAction({ action: want ? "enable" : "disable", scope: entry.server.scope, name: entry.server.name }, `switch:${entry.record.field}`);
+    if (!result) return;
+    if (!result.ok) setActionError({ key: entry.record.field, failure: result.error });
+    setFocusBack({ control: pressed });
+  }, [cwd, runAction, switchUndo]);
 
   // A global server on or off in this project alone: an override in its .pi/mcp.json, like a switch.
   const switchServerInProject = useCallback(async (server: McpServerInfo, enabled: boolean) => {
@@ -859,6 +912,10 @@ export function McpConfig({
       codemodeSave={codemodeSave}
       busy={busy}
       actionError={actionError}
+      switchUndo={switchUndo}
+      switchSuperseded={switchNote}
+      onSwitchUndo={() => void undoSwitch()}
+      onSwitchExpire={() => setSwitchUndo(null)}
       groupStatus={groupStatus}
       undo={undo}
       focusBack={focusBack}
@@ -926,6 +983,10 @@ export function McpConfigView({
   codemodeSave = { saving: false, error: null },
   busy = null,
   actionError = null,
+  switchUndo = null,
+  switchSuperseded = false,
+  onSwitchUndo = () => {},
+  onSwitchExpire = () => {},
   groupStatus = null,
   undo = null,
   focusBack = null,
@@ -969,6 +1030,10 @@ export function McpConfigView({
   /** The change on its way, if any: `switch:<key>`, `in-project:<key>`, `remove:<key>`, `sign-out:<key>`, `group:<scope>` or `undo`. */
   busy?: string | null;
   actionError?: McpActionErrorState | null;
+  switchUndo?: { record: SettingsWriteItems } | null;
+  switchSuperseded?: boolean;
+  onSwitchUndo?: () => void;
+  onSwitchExpire?: () => void;
   groupStatus?: McpGroupStatus | null;
   undo?: McpUndoNotice | null;
   /** The control the last answered change was started from, to give focus back to. */
@@ -1297,6 +1362,16 @@ export function McpConfigView({
           </ConfigDetailStack>
         </ConfigDetail>
       </ConfigSplitView>
+
+      {switchSuperseded && <p role="status" className="mcp-config-line is-dim" data-mcp-switch-note>{t("mcp.undoSuperseded")}</p>}
+      {switchUndo && (
+        <SettingsSavedToast
+          texts={{ saved: t("settings.saved"), undo: t("settings.undo") }}
+          remainingMs={switchUndo.record.lifetimeMs}
+          onUndo={onSwitchUndo}
+          onExpire={onSwitchExpire}
+        />
+      )}
 
       <ConfigFooter
         status={problems.length > 0 ? (

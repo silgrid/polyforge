@@ -1181,10 +1181,15 @@ export function SkillsConfig({
    */
   const undoSwitch = useCallback(async (entry: { record: SettingsWriteItems; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] }) => {
     setUndoRecord(null);
-    const current = rows.find((candidate) => candidate.key === entry.record.field);
+    // Read the server again before deciding: another tab, the CLI or a hand edit
+    // may have changed this row inside the toast's window, and owner 4A forbids
+    // overwriting that (review #6).
+    const fresh = await loadSkills();
+    const current = fresh.find((candidate) => candidate.key === entry.record.field);
     const currentValues = current ? rowSwitchValues(current, entry.harnesses) : [];
     const plan = undoPlan(entry.record, currentValues, Date.now());
     if (!plan.ok) {
+      // `loadSkills` already refreshed the page; the prompt says the undo was dropped.
       if (plan.reason === "changed") setSaveError(t("settings.undoSuperseded"));
       return;
     }
@@ -1200,7 +1205,13 @@ export function SkillsConfig({
       else applied.claude = item.state;
     }
     setRows((prev) => applyRowSwitchResults(prev, results, applied));
-  }, [rows, switchRound, t]);
+    // A refused harness on the way back is shown like any other round's result.
+    setApplyResults(results.map((result) => ({
+      harness: result.harness,
+      ok: !result.error,
+      text: result.error ?? t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten"),
+    })));
+  }, [loadSkills, switchRound, t]);
 
   /** claude's own partition: one native word through the same gated write. */
   const writeClaudeState = useCallback(async (row: UnifiedSkillRow, state: string) => {

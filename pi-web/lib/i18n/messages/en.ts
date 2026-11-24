@@ -1505,6 +1505,7 @@ export const enLocale: LocalePlugin = {
     "mcp.undo": "Undo",
     "mcp.undoing": "Undoing…",
     "mcp.undoFailed": "Could not undo:",
+    "mcp.undoSuperseded": "That server was changed elsewhere, so the undo was dropped — the list above is the current state.",
     "mcp.state.connected": "Connected when tested",
     "mcp.state.needs-auth": "Needs sign-in",
     "mcp.state.failed": "Did not connect when tested",

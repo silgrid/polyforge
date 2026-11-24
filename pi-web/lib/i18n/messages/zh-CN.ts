@@ -1505,6 +1505,7 @@ export const zhCNLocale: LocalePlugin = {
     "mcp.undo": "撤销",
     "mcp.undoing": "正在撤销…",
     "mcp.undoFailed": "无法撤销：",
+    "mcp.undoSuperseded": "这个服务器已被别处改过，撤销已放弃；上面的列表是当前状态。",
     "mcp.state.connected": "测试时已连接",
     "mcp.state.needs-auth": "需要登录",
     "mcp.state.failed": "测试时未能连接",
