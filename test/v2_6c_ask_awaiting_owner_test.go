@@ -190,18 +190,21 @@ func TestV26cClaudeAskParksAwaitingOwner(t *testing.T) {
 		t.Fatalf("awaiting_owner body: %v", ev)
 	}
 	// `pf step ask` itself: recorded as the turn's tool call, exit 0, and the
-	// one instruction it prints
-	var ran bool
-	for _, e := range fakeJournal(t, capDir) { // the shared run journal (logs/fakepi.jsonl)
-		if e["type"] == "run" && strings.Contains(e["cmd"].(string), "pf step ask") {
-			ran = true
-			if e["exit_code"] != float64(0) || !strings.Contains(e["output"].(string), "now end your turn") {
-				t.Fatalf("pf step ask run: %v", e)
+	// one instruction it prints. The persona journals the call after it ran
+	// the command — the awaiting_owner event waits for neither — so poll the
+	// journal for the line instead of reading it once.
+	var askRun map[string]any
+	waitUntil(t, 30*time.Second, "the persona's pf step ask run record", func() bool {
+		askRun = nil
+		for _, e := range fakeJournal(t, capDir) { // the shared run journal (logs/fakepi.jsonl)
+			if e["type"] == "run" && strings.Contains(e["cmd"].(string), "pf step ask") {
+				askRun = e
 			}
 		}
-	}
-	if !ran {
-		t.Fatal("the persona never ran pf step ask")
+		return askRun != nil
+	})
+	if askRun["exit_code"] != float64(0) || !strings.Contains(askRun["output"].(string), "now end your turn") {
+		t.Fatalf("pf step ask run: %v", askRun)
 	}
 	// the faces: the watch snapshot's pending question is the ask (id =
 	// its stamp), `pf watch --once` prints the question text, the status
@@ -293,21 +296,24 @@ func TestV26cPiAskReleasesSlotAndSurvivesRestart(t *testing.T) {
 	})
 	ask := v26cOpenAsk(t, capDir)
 	survivor := latestSpawnPID(t, d, wi)
-	// the fake ran pf step ask as a tool call inside the turn, then ended it
-	var ran, ended bool
-	for _, e := range fakeJournal(t, capDir) {
-		switch e["type"] {
-		case "run":
-			if strings.Contains(e["cmd"].(string), "pf step ask") && e["exit_code"] == float64(0) {
-				ran = true
+	// the fake ran pf step ask as a tool call inside the turn, then ended it.
+	// Both journal lines are written only after the command ran, which the
+	// awaiting_owner event above does not wait for: poll the journal for
+	// them.
+	waitUntil(t, 30*time.Second, "the persona to ask and end its turn", func() bool {
+		var ran, ended bool
+		for _, e := range fakeJournal(t, capDir) {
+			switch e["type"] {
+			case "run":
+				if strings.Contains(e["cmd"].(string), "pf step ask") && e["exit_code"] == float64(0) {
+					ran = true
+				}
+			case "end_turn":
+				ended = true
 			}
-		case "end_turn":
-			ended = true
 		}
-	}
-	if !ran || !ended {
-		t.Fatalf("the persona did not ask then end its turn (ran=%v ended=%v)", ran, ended)
-	}
+		return ran && ended
+	})
 	// the status face: the job waits on the ask (its stamp in the
 	// QUESTION column) and holds no running slot
 	waitQuestion(t, d, wi, ask.At, 30*time.Second)
