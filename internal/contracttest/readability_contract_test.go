@@ -56,10 +56,42 @@ func TestQuestionCardReadabilityContract(t *testing.T) {
 			}
 		}
 	}
-	rendered := grillStepDef(t, "develop", "build")
+	rendered := strings.Join(strings.Fields(grillStepDef(t, "develop", "build")), " ")
 	for _, want := range readabilityCardRules {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("the rendered develop/build lacks the question-card rule %q (batch_questions must render it)", want)
+		}
+	}
+}
+
+// readabilitySTE80Rules are the sub-agent brief's writing rules (AC2): short
+// sentences, one instruction per sentence, active voice, a full stop between
+// independent instructions, one precise verb in place of a phrasal verb. A
+// brief's prose follows them; command lines, paths and code stay verbatim.
+var readabilitySTE80Rules = []string{
+	"STE80",
+	"short sentences",
+	"one instruction per sentence",
+	"active voice",
+	"a full stop between independent instructions",
+	"one precise verb in place of a phrasal verb",
+	"command lines, paths and code stay verbatim",
+}
+
+// TestSubagentBriefSTE80Contract: the shared build_subagents fragment carries
+// the five STE80 rules, and develop/build's rendered ## Sub-agents section
+// carries them too.
+func TestSubagentBriefSTE80Contract(t *testing.T) {
+	flat := w68Flat(t, "workflows/_shared/build_subagents.md")
+	for _, want := range readabilitySTE80Rules {
+		if !strings.Contains(flat, want) {
+			t.Errorf("workflows/_shared/build_subagents.md lacks the brief writing rule %q", want)
+		}
+	}
+	rendered := strings.Join(strings.Fields(grillStepDef(t, "develop", "build")), " ")
+	for _, want := range readabilitySTE80Rules {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the rendered develop/build lacks the brief writing rule %q (build_subagents must render it)", want)
 		}
 	}
 }
