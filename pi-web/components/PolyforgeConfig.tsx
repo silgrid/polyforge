@@ -51,6 +51,7 @@ import type { PolyforgeCellsRead } from "@/lib/polyforge-cells";
 import { ConfigDangerMenu } from "./ConfigDangerMenu";
 import { shortenPath } from "@/lib/display-path";
 import { dirtyCount, dirtyPatch, settleDraft } from "@/lib/settings-dirty";
+import { patternLines } from "@/lib/host-pattern-lines";
 import { responseError, serverErrorText } from "@/lib/server-error";
 import {
   POLYFORGE_POLL_INTERVAL,
@@ -2025,7 +2026,7 @@ function HostSettingsRegion({ title }: { title: string }) {
   };
   const savePatternList = (key: string) => {
     const raw = drafts[key] ?? hostPatternsShownValue(itemOf(key));
-    const value = raw.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+    const value = patternLines(raw);
     const invalid = configValueError(key, value, itemOf(key)?.schema);
     if (invalid) {
       setMessage({ tone: "error", text: `${key}: ${invalid}` });
@@ -2044,7 +2045,7 @@ function HostSettingsRegion({ title }: { title: string }) {
   const buildValue = (key: string): { value: unknown } | { error: string } => {
     const raw = hostDraft(key);
     const value = HOST_LIST_KEYS.includes(key)
-      ? raw.split("\n").map((line) => line.trim()).filter((line) => line !== "")
+      ? patternLines(raw)
       : formValue(key, raw);
     const invalid = configValueError(key, value, itemOf(key)?.schema);
     return invalid ? { error: invalid } : { value };
@@ -2073,7 +2074,7 @@ function HostSettingsRegion({ title }: { title: string }) {
       if (!(await postOnce({ action: "set", key, value: values[key] }))) break;
       // A list settles to the lines it wrote (blank lines dropped, trimmed) —
       // the text the re-read shows — so a landed list leaves no draft behind.
-      landed[key] = HOST_LIST_KEYS.includes(key) ? (values[key] as string[]).join("\n") : hostDraft(key);
+      landed[key] = HOST_LIST_KEYS.includes(key) ? patternLines(hostDraft(key)).join("\n") : hostDraft(key);
     }
     setDrafts((current) => settleDraft(current, landed) as Record<string, string>);
     setBusy(null);

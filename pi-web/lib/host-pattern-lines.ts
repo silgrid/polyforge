@@ -4,6 +4,5 @@
 
 /** The patterns an editor text writes: each line trimmed, blank lines dropped. */
 export function patternLines(text: string): string[] {
-  void text;
-  return [];
+  return text.split("\n").map((line) => line.trim()).filter((line) => line !== "");
 }
