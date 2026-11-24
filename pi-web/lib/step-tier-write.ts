@@ -19,13 +19,26 @@ export type StepTierRunRead = () => Promise<
 
 export type StepTierRunWrite = (write: StepTierWrite, hash: string | null) => Promise<{ ok: true } | { ok: false; error?: string }>;
 
-/** Stub (polyforge#258 u7): filled in by the implementation commit. */
+/** Runs one identity's plan to an empty plan. Every step re-reads the catalog
+ *  with the hash its write expects (the CAS guards exactly that state); a
+ *  read or write refusal stops there, and a plan still non-empty when the
+ *  limit is spent is a failure — never a success reported after a partial
+ *  write. A legitimate catalog may hold more tiers than the limit; the caller
+ *  keeps the draft and retries. */
 export async function runStepTierWritePlan(
-  _read: StepTierRunRead,
-  _write: StepTierRunWrite,
-  _identity: { harness: "pi" | "claude"; model: string },
-  _target: string | null,
-  _limit = 32,
+  read: StepTierRunRead,
+  write: StepTierRunWrite,
+  identity: { harness: "pi" | "claude"; model: string },
+  target: string | null,
+  limit = 32,
 ): Promise<StepTierRunResult> {
-  return { ok: true };
+  for (let guard = 0; guard < limit; guard++) {
+    const current = await read();
+    if (!current.ok) return { ok: false, reason: "read", error: current.error };
+    const plan = stepTierWritePlan(stepTierItems(current.items), identity, target);
+    if (plan.length === 0) return { ok: true };
+    const answer = await write(plan[0], current.hash);
+    if (!answer.ok) return { ok: false, reason: "write", error: answer.error };
+  }
+  return { ok: false, reason: "limit" };
 }

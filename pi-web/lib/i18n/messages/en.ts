@@ -1934,6 +1934,7 @@ export const enLocale: LocalePlugin = {
     "models.stepTierNotAttempted": "Not attempted — an earlier write failed",
     "models.stepTierMultiConfirm": "This harness is in several tiers. Replace them with the chosen tier?",
     "models.stepTierUnset": "Not set",
+    "models.stepTierIncomplete": "The tier change did not finish within its write limit; the draft is kept for a retry.",
     "models.stepTier": "Step tier",
     "models.stepTierInvalidNote": "Invalid references (no longer defined models): {candidates}",
     "models.stepTierReasonVersion": "The step-tier catalog needs pf 0.2.4-0 or newer (found {version}); the column is read-only.",

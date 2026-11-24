@@ -1934,6 +1934,7 @@ export const zhCNLocale: LocalePlugin = {
     "models.stepTierNotAttempted": "未尝试——前一次写入失败",
     "models.stepTierMultiConfirm": "该 harness 处于多个档。用所选档替换它们？",
     "models.stepTierUnset": "未设置",
+    "models.stepTierIncomplete": "步骤档改动未能在写入上限内完成；草稿已保留，可重试。",
     "models.stepTier": "步骤能力档",
     "models.stepTierInvalidNote": "失效引用（已不是已定义模型）：{candidates}",
     "models.stepTierReasonVersion": "步骤能力档目录需要 pf 0.2.4-0 或更新版本（当前 {version}），此列只读。",

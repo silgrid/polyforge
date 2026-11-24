@@ -12,13 +12,12 @@ import { useI18n } from "@/hooks/useI18n";
 import type { ModelViewRow } from "@/lib/harness/model-view";
 import {
   stepTierDisplayOrder,
-  stepTierItems,
   stepTierRowView,
   stepTierState,
-  stepTierWritePlan,
   type StepTierItem,
   type StepTierWrite,
 } from "@/lib/step-tiers";
+import { runStepTierWritePlan } from "@/lib/step-tier-write";
 import { HarnessApplyTo, applyToTargets, type HarnessApplyToResult, type HarnessApplyToSelection } from "./HarnessApplyTo";
 import { ConfigButton } from "./SettingsUi";
 import { openStackedDialog } from "@/lib/stacked-dialog";
@@ -95,20 +94,12 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
       }
       const identity = stepTierIdentity(row, harness);
       if (!identity) continue;
-      let harnessError: string | null = null;
-      for (let guard = 0; guard < 32; guard++) {
-        // one read carries both the catalog the plan derives from and the
-        // hash the write expects — the CAS then guards exactly that state
-        const read = await tierRead();
-        if (!read.ok) { harnessError = read.error; break; }
-        const plan = stepTierWritePlan(stepTierItems(read.items), identity, chosen === "" ? null : chosen);
-        if (plan.length === 0) break;
-        const answer = await tierWrite(plan[0], read.hash);
-        if (!answer.ok) {
-          harnessError = answer.error ?? "HTTP";
-          break;
-        }
-      }
+      // one bounded runner: every step re-reads the catalog and the hash its
+      // write expects, and a plan still open at the limit is a failure.
+      const result = await runStepTierWritePlan(tierRead, tierWrite, identity, chosen === "" ? null : chosen);
+      const harnessError = result.ok ? null
+        : result.reason === "limit" ? t("models.stepTierIncomplete")
+          : result.error ?? "HTTP";
       out.push({ harness, ok: !harnessError, text: harnessError ?? t("models.stepTierApplied") });
       if (harnessError) failed = true;
     }
