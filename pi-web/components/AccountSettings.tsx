@@ -280,13 +280,22 @@ export function ClaudeCredentialForm({ cells, onSave }: {
   );
 }
 
-/** One write outcome per target, with its reason (the reason carries no
- * value — file names and refusal words only). Placeholder: the test-first
- * commit carries only the signature; the implementation lands with the
- * unit.
- */
-export function CredentialWriteResults({ results }: { results: { target: string; status: string; reason?: string }[] }) {
-  const { t } = useI18n();
+/** One account write's outcome for one target, as the route answers it: a
+ *  refused target carries its reason (no value — file names and refusal words
+ *  only) and its code (polyforge#259 T4, owner 2A). */
+export interface CredentialWriteResult {
+  target: string;
+  status: string;
+  reason?: string;
+  code?: string;
+}
+
+/** One write outcome per target (polyforge#259 T4 AC2): a refused target reads
+ *  「未写入」 plus the Chinese line its route code names; the server's own
+ *  reason stays in the 详情 fold. `t` overrides the page's translator (tests). */
+export function CredentialWriteResults({ results, t: tOverride }: { results: CredentialWriteResult[]; t?: (key: string, params?: Record<string, string | number>) => string }) {
+  const i18n = useI18n();
+  const t = tOverride ?? i18n.t;
   if (results.length === 0) return null;
   return (
     <ul className="settings-account-write-results">
@@ -294,7 +303,15 @@ export function CredentialWriteResults({ results }: { results: { target: string;
         <li key={entry.target} data-write-target={entry.target} data-write-status={entry.status}>
           <strong>{entry.target}</strong>
           <span>{entry.status === "written" ? t("settings.accountWriteOk") : t("settings.accountWriteNo")}</span>
-          {entry.status !== "written" && entry.reason && <span>{entry.reason}</span>}
+          {entry.status !== "written" && (entry.reason || entry.code) && (
+            <span>{t(serverErrorText({ code: entry.code ?? null, message: entry.reason ?? null }).summaryKey)}</span>
+          )}
+          {entry.status !== "written" && entry.reason && (
+            <details className="settings-reason-details">
+              <summary>{t("i18n.detailsLabel")}</summary>
+              <span className="settings-reason-original">{entry.reason}</span>
+            </details>
+          )}
         </li>
       ))}
     </ul>
@@ -399,7 +416,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
     })();
   }, [pane]);
 
-  const [writeResults, setWriteResults] = useState<{ target: string; status: string; reason?: string }[] | null>(null);
+  const [writeResults, setWriteResults] = useState<CredentialWriteResult[] | null>(null);
   // review #10: the failure line carries its own split — a localized summary and
   // the server's words for the fold — never a translated string re-inspected.
   const [writeNote, setWriteNote] = useState<{ summary: string; details: string | null } | null>(null);
@@ -411,7 +428,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         });
-        const answer = await response.json() as { results?: { target: string; status: string; reason?: string }[]; message?: string; code?: string; params?: Record<string, string | number> };
+        const answer = await response.json() as { results?: CredentialWriteResult[]; message?: string; code?: string; params?: Record<string, string | number> };
         if (response.ok && answer.results) {
           setWriteResults(answer.results);
           setWriteNote(null);
