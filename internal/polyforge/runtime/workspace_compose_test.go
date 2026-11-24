@@ -147,7 +147,7 @@ func liveCands(t *testing.T, r *Runtime, j *job) map[string][]string {
 	j.mu.Lock()
 	capDir, project, bundle := j.capsuleDir, j.project, j.bundleName
 	j.mu.Unlock()
-	got, err := r.composeFor(capDir, project, bundle, r.loadManualModels(j.wi))()
+	got, err := r.composeFor(j.wi, capDir, project, bundle, r.loadManualModels(j.wi))()
 	if err != nil {
 		t.Fatalf("dispatch-time composition: %v", err)
 	}

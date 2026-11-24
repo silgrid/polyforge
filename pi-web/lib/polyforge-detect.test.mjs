@@ -11,18 +11,17 @@ import { spawnSync } from "node:child_process";
 
 const jiti = createJiti(import.meta.url);
 const {
-  POLYFORGE_MINIMUM_PF_VERSION,
   claudeSessionStartHookPresent,
   claudeSkillsSymlinkExists,
   conventionalPolyforgeRoot,
   detectPolyforge,
   isImageManaged,
   isPolyforgePackageEnabled,
-  isPolyforgeVersionBelowMinimum,
   polyforgeLineFromOrigin,
   polyforgeOriginOwnerRepo,
   polyforgePackageRoot,
 } = await jiti.import("./polyforge-detect.ts");
+const { POLYFORGE_MINIMUM_PF_VERSION, isPolyforgeVersionBelowMinimum } = await jiti.import("./polyforge-version.ts");
 
 // ---- pure helpers ----
 

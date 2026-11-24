@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/gitops"
 )
 
@@ -52,6 +54,18 @@ import (
 const (
 	EventOverrideSet   = "override_set"
 	EventOverrideClear = "override_clear"
+	// EventStepTierFallback is the dispatch-time composition's diagnostic
+	// (polyforge#81 Q12 A): an overlay tier the Host [step_tiers] catalog
+	// does not declare (or declares empty) fell through to the next layer.
+	// One event per composition that carries a fallback, scope
+	// "composition" — never "this step's dispatch already fell back".
+	EventStepTierFallback = "step_tier_fallback"
+	// EventStepTierDropped is the claim-time diagnostic (polyforge#81
+	// Q14 A): a queued tier named a step the claim's lane snapshot no
+	// longer declares, so it was not merged into the fresh capsule's
+	// overlay. One event names the work item, the lane, the dropped steps
+	// and their tiers; the claim goes on.
+	EventStepTierDropped = "step_tier_dropped"
 )
 
 // The postures the write lands in (protocol.OverrideView.Posture's
@@ -162,6 +176,10 @@ type OverrideChange struct {
 	// to clear.
 	Param      *protocol.OverrideParam
 	ClearParam string
+	// Tier sets the step's capability-tier name (polyforge#81); ClearTier
+	// clears it.
+	Tier      string
+	ClearTier bool
 	// SealedDir is the sealed scene the route resolved for a work item
 	// held by no job: a clear reads the chain its overlay carries.
 	SealedDir string
@@ -341,7 +359,7 @@ func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.St
 	if cur == nil {
 		cur = map[string]*capsule.StepOverride{}
 	}
-	changed, entry := applyAspect(cur, ch, sealed)
+	changed, entry := applyAspectAt(cur, ch, true, sealed)
 	if !changed {
 		return false, entry, nil
 	}
@@ -365,6 +383,13 @@ func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.St
 // cleared chain or param for the step: a clear then leaves the tombstone
 // the claim merge applies, unless one already stands.
 func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, sealed bool) (bool, *capsule.StepOverride) {
+	return applyAspectAt(entries, ch, false, sealed)
+}
+
+// applyAspectAt is applyAspect naming whether the entries are the
+// daemon-local pending record (a tier clear then keeps the tombstone the
+// claim's merge applies).
+func applyAspectAt(entries map[string]*capsule.StepOverride, ch OverrideChange, pendingRecord, sealed bool) (bool, *capsule.StepOverride) {
 	e := entries[ch.Step]
 	if e == nil {
 		e = &capsule.StepOverride{}
@@ -384,6 +409,17 @@ func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, se
 		}
 		e.Models, e.ModelsBy, e.ModelsAt = nil, ch.Operator, now
 		e.ModelsCleared = sealed
+	case ch.Tier != "":
+		if e.Tier == ch.Tier && !e.TierCleared {
+			return false, e
+		}
+		e.Tier, e.TierBy, e.TierAt, e.TierCleared = ch.Tier, ch.Operator, now, false
+	case ch.ClearTier:
+		if e.Tier == "" && (!sealed || e.TierCleared) {
+			return false, e
+		}
+		e.Tier, e.TierBy, e.TierAt = "", ch.Operator, now
+		e.TierCleared = pendingRecord
 	case ch.Skip != nil:
 		if e.Skip != nil && *e.Skip == *ch.Skip {
 			return false, e
@@ -443,6 +479,10 @@ func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string, publ
 		aspect, value = "models", strings.Join(ch.Models, ",")
 	case ch.ClearModels:
 		kind, aspect, value = EventOverrideClear, "models", "cleared"
+	case ch.Tier != "":
+		aspect, value = "tier", ch.Tier
+	case ch.ClearTier:
+		kind, aspect, value = EventOverrideClear, "tier", "cleared"
 	case ch.Skip != nil:
 		aspect, value = "skip", fmt.Sprintf("%v", *ch.Skip)
 		if !*ch.Skip {
@@ -465,6 +505,9 @@ func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string, publ
 	}
 	if param != "" {
 		body["param"] = param
+	}
+	if ch.Tier != "" {
+		body["tier"] = ch.Tier
 	}
 	r.tap(wi, kind, body)
 }
@@ -568,6 +611,17 @@ func (r *Runtime) ManualModels(wi string) []string {
 	return r.loadManualModels(wi)
 }
 
+// StepTiersCatalog answers the Host's live [step_tiers] catalog
+// (polyforge#81), nil when no catalog is configured: the dispatch-time
+// composition expands an overlay tier through it, and the override
+// route validates a written tier name against it.
+func (r *Runtime) StepTiersCatalog() map[string][]string {
+	if r.cfg.StepTiers == nil {
+		return nil
+	}
+	return r.cfg.StepTiers()
+}
+
 // pendingPublishFn is the claim's publish of the merged pending record
 // (a seam for the failed-publish test).
 var pendingPublishFn = gitops.CommitPush
@@ -597,6 +651,16 @@ func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
 	if len(entries) == 0 {
 		return nil
 	}
+	// polyforge#81 Q14 A: the claim-time lane snapshot re-judges the
+	// pending tiers. A tier whose step the fresh lane no longer declares
+	// cannot dispatch, so it never enters the overlay; one visible
+	// diagnosis asks the operator to set it again on the running lane.
+	// The claim goes on and the other aspects are untouched.
+	var dropped bool
+	entries, dropped = r.revalidatePendingTiers(j, entries)
+	if dropped {
+		r.persistPendingOverrides(j.wi, entries)
+	}
 	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
 	if err != nil {
 		return fmt.Errorf("merging the recorded step overrides into the fresh capsule: %w", err)
@@ -613,6 +677,84 @@ func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
 	}
 	r.clearPendingOverrides(j.wi)
 	return nil
+}
+
+// revalidatePendingTiers drops every pending tier whose step the claim's
+// fresh lane snapshot does not declare (polyforge#81 Q14 A) and records
+// one step_tier_dropped diagnosis naming the work item, the lane, the
+// steps and their tiers. A lane snapshot that cannot be read at all drops
+// the pending tiers for the same reason (they cannot be judged) and the
+// diagnosis says so. It answers the filtered entries and whether anything
+// was dropped; models, skip and params are never touched.
+func (r *Runtime) revalidatePendingTiers(j *job, entries map[string]*capsule.StepOverride) (map[string]*capsule.StepOverride, bool) {
+	hasTier := false
+	for _, e := range entries {
+		if e != nil && (e.Tier != "" || e.TierCleared) {
+			hasTier = true
+			break
+		}
+	}
+	if !hasTier {
+		return entries, false
+	}
+	lane, errs := workflow.Load(filepath.Join(j.capsuleDir, capsule.DirWorkflows, j.bundleName))
+	byID := map[string]bool{}
+	if lane != nil {
+		for i := range lane.Steps {
+			byID[lane.Steps[i].ID] = true
+		}
+	}
+	var droppedSteps []map[string]any
+	for step, e := range entries {
+		if e == nil || (e.Tier == "" && !e.TierCleared) {
+			continue
+		}
+		if lane != nil && byID[step] {
+			continue
+		}
+		droppedSteps = append(droppedSteps, map[string]any{"step": step, "tier": e.Tier})
+		e.Tier, e.TierBy, e.TierAt, e.TierCleared = "", "", "", false
+	}
+	if len(droppedSteps) == 0 {
+		return entries, false
+	}
+	sort.Slice(droppedSteps, func(a, b int) bool {
+		return droppedSteps[a]["step"].(string) < droppedSteps[b]["step"].(string)
+	})
+	reason := "step_missing"
+	if lane == nil {
+		reason = "lane_unreadable"
+	}
+	r.tap(j.wi, EventStepTierDropped, map[string]any{
+		"work_item":   j.wi,
+		"lane":        j.bundleName,
+		"reason":      reason,
+		"steps":       droppedSteps,
+		"lane_errors": fmt.Sprint(errs),
+		"note":        "a queued capability tier was not merged: the claim-time lane snapshot does not declare its step; set the tier again on a step of the lane the ticket now runs",
+	})
+	return entries, true
+}
+
+// persistPendingOverrides rewrites the daemon-local pending record's entry
+// for wi (deleting it when nothing is left); a failed write is reported
+// and left for the next claim's judgment.
+func (r *Runtime) persistPendingOverrides(wi string, entries map[string]*capsule.StepOverride) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	m, err := r.readPendingOverrides()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: %s: re-reading the pending overlay record to drop an invalid tier failed (it is re-judged at the next claim): %v\n", wi, err)
+		return
+	}
+	if len(entries) == 0 {
+		delete(m, wi)
+	} else {
+		m[wi] = entries
+	}
+	if err := r.writePendingOverrides(m); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: %s: persisting the pending overlay record without an invalid tier failed (it is re-judged at the next claim): %v\n", wi, err)
+	}
 }
 
 // mergePendingAspects merges pending entries over the capsule's overlay
@@ -636,6 +778,7 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 // capsule's).
 type PendingAspects struct {
 	Models bool
+	Tier   bool
 	Skip   bool
 	Params bool // some param of the step
 }
@@ -694,6 +837,14 @@ func mergePendingMarked(ov capsule.StepOverrides, pending map[string]*capsule.St
 			}
 			a.Models = true
 		}
+		if (p.Tier != "" || p.TierCleared) && pendingAspectApplies(p.TierAt, e.TierAt) {
+			if p.TierCleared {
+				e.Tier, e.TierBy, e.TierAt = "", p.TierBy, p.TierAt
+			} else {
+				e.Tier, e.TierBy, e.TierAt = p.Tier, p.TierBy, p.TierAt
+			}
+			a.Tier = true
+		}
 		if p.Skip != nil && pendingAspectApplies(p.SkipAt, e.SkipAt) {
 			skip := *p.Skip
 			e.Skip, e.SkipBy, e.SkipAt = &skip, p.SkipBy, p.SkipAt
@@ -717,7 +868,7 @@ func mergePendingMarked(ov capsule.StepOverrides, pending map[string]*capsule.St
 			e.Params[name] = &pc
 			a.Params = true
 		}
-		if a.Models || a.Skip || a.Params {
+		if a.Models || a.Tier || a.Skip || a.Params {
 			applied[id] = a
 		}
 	}

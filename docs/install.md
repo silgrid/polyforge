@@ -29,6 +29,10 @@ use is the [user guide](user-guide.md). The terms this page uses
   macOS is not a CI platform.
 - WSL2 is treated as Linux.
 - Native Windows is out of scope (not supported).
+- **The workstation image ships both linux/amd64 and linux/arm64** (the
+  whole-machine container — Apple Silicon runs the arm64 index; the aihub
+  image above stays linux/amd64-only). Install and upgrade are the image
+  address plus the version, no `gh` — [workstation](workstation.md).
 
 
 ## Install (team machines — read this first)

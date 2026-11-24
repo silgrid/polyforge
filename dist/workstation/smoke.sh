@@ -1,7 +1,7 @@
 #!/bin/sh
 # dist/workstation/smoke.sh — the workstation acceptance driver
-# (polyforge#161, 84-image). Four subcommands, each printing every
-# measured value and exiting non-zero on the first miss:
+# (polyforge#161, 84-image). Each subcommand prints every measured value
+# and exits non-zero on the first miss:
 #
 #   sh dist/workstation/smoke.sh boot --no-aihub    # the minimal boot (AC1)
 #   sh dist/workstation/smoke.sh boot --with-aihub  # + AIHub/Pi Web checks (AC1)
@@ -9,10 +9,16 @@
 #                                                   #   default Cell, real auth, the AC2 layout,
 #                                                   #   restart (AC1+AC2)
 #   sh dist/workstation/smoke.sh first-boot --external  # + zero remote writes
+#   sh dist/workstation/smoke.sh onboarding         # the clean-room first open (polyforge#168,
+#                                                   #   AC1): a fresh volume's /api/onboarding is
+#                                                   #   incomplete and local, the doctor's necessary
+#                                                   #   rows pass, the one default Cell serves the
+#                                                   #   local AIHub, the host carries no component
 #   sh dist/workstation/smoke.sh persist            # the 84-components-D acceptance:
-#                                                   #   down/up and a new tag keep the six
-#                                                   #   persisted facts, then the exported
-#                                                   #   copy runs (needs only Docker + sh)
+#                                                   #   down/up and a new tag keep the persisted
+#                                                   #   facts (six + the onboarding completion
+#                                                   #   state), then the exported copy runs
+#                                                   #   (needs only Docker + sh)
 #   sh dist/workstation/smoke.sh env                # Pi Web parameters (AC3)
 #   sh dist/workstation/smoke.sh podman-verify      # verification via podman (AC2)
 #   sh dist/workstation/smoke.sh upgrade            # the in-place component upgrade
@@ -23,10 +29,11 @@
 #
 # Prerequisites: a reachable docker engine with compose (the outer
 # engine's CLI shape; podman-compose hosts are a follow-up). first-boot's
-# local pass and persist need nothing else on the host (Q6: every JSON /
-# HTTP check runs inside the container, which carries curl and python3);
-# boot --with-aihub, env, podman-verify and first-boot --external still
-# probe from the host and need curl and python3 there. `boot --with-aihub` and `env` additionally need
+# local pass, onboarding and persist need nothing else on the host (Q6:
+# every JSON / HTTP check runs inside the container, which carries curl
+# and python3); boot --with-aihub, env, podman-verify and first-boot
+# --external still probe from the host and need curl and python3 there.
+# `boot --with-aihub` and `env` additionally need
 # the components volume to carry Pi Web (/components/current/pi-web —
 # 84-components, installed by the first boot from the image's seed); on
 # an empty volume they fail naming that, which is the honest answer: the
@@ -48,6 +55,228 @@ export PI_WEB_PASSWORD="$password"
 
 say() { printf 'smoke: %s\n' "$*"; }
 die() { printf 'smoke: FAIL: %s\n' "$*" >&2; exit 1; }
+
+# onboarding_py — the in-container validator (polyforge#168). One program,
+# five modes: `check` (a fresh volume's /api/onboarding view), `complete`
+# and `capture` (persist's completion write and its canonical read), and
+# the `doctor` / `cells` validators reading the pf JSON on stdin. Every
+# answer is a closed whitelist: an unknown field, invalid JSON or a
+# semantic miss fails, so an HTTP 200 alone is never the acceptance (the
+# owner's Q4). It runs INSIDE the container with the container's python3,
+# so the clean-room host needs only Docker and the system sh (Q6).
+onboarding_py=$(cat <<'PY'
+# smoke-onboarding-view — polyforge#168's in-container validator.
+import base64
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+STEPS = ("aihub", "account", "workspace", "ticket")
+VIEW_KEYS = {"imageManaged", "version", "steps", "nextStep", "dismissed", "connection"}
+CONNECTION_KEYS = {"phase", "mode", "defaultCell", "server", "project", "userReady", "keyReady"}
+DOCTOR_ROWS = ("config", "workspace mapping", "workspace dirs", "server reach",
+               "daemon socket", "daemon supervision", "workflow lanes",
+               "aihub projects", "auth")
+LOCAL_SERVER = "http://127.0.0.1:8420"
+
+
+def fail(message):
+    print("smoke: FAIL: " + message)
+    sys.exit(1)
+
+
+def answer(url, method="GET", payload=None):
+    password = os.environ.get("PI_WEB_PASSWORD")
+    if not password:
+        fail("PI_WEB_PASSWORD is not set inside the workstation")
+    request = urllib.request.Request(url, method=method)
+    token = base64.b64encode(("pi:" + password).encode()).decode()
+    request.add_header("Authorization", "Basic " + token)
+    if payload is not None:
+        request.data = json.dumps(payload).encode()
+        request.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return response.status, response.read().decode("utf-8", "replace")
+
+
+def parse_view(body):
+    try:
+        view = json.loads(body)
+    except ValueError:
+        fail("the onboarding answer is not valid JSON: %r" % body[:120])
+    if not isinstance(view, dict):
+        fail("the onboarding answer is not a JSON object: %r" % body[:120])
+    # a host-mode Pi Web answers the one boolean `{imageManaged:false}` (the
+    # route's whole body outside the image), so the image gate is judged
+    # BEFORE the view's fields: the failure names the host mode, never a
+    # missing field it was never meant to carry (review r1#5).
+    if "imageManaged" not in view:
+        fail("the onboarding answer lacks field(s): imageManaged")
+    if view["imageManaged"] is not True:
+        fail("imageManaged is %r — this Pi Web is not the image-managed workstation" % view["imageManaged"])
+    extra = sorted(set(view) - VIEW_KEYS)
+    if extra:
+        fail("the onboarding answer carries unknown field(s): %s" % ", ".join(extra))
+    missing = sorted(VIEW_KEYS - set(view))
+    if missing:
+        fail("the onboarding answer lacks field(s): %s" % ", ".join(missing))
+    if view["version"] != 1:
+        fail("the onboarding version is %r, want 1" % view["version"])
+    steps = view["steps"]
+    if not isinstance(steps, dict) or sorted(steps) != sorted(STEPS):
+        fail("the steps record is %r, want exactly the four steps %s" % (steps, ", ".join(STEPS)))
+    for step in STEPS:
+        if steps[step] not in ("complete", "incomplete"):
+            fail("step %r is %r, want complete or incomplete" % (step, steps[step]))
+    if view["nextStep"] not in STEPS:
+        fail("nextStep is %r, want one of the four steps" % view["nextStep"])
+    if not isinstance(view["dismissed"], bool):
+        fail("dismissed is %r, want a boolean" % view["dismissed"])
+    connection = view["connection"]
+    if connection is None:
+        fail("the connection read is null — the first-boot record is absent")
+    if not isinstance(connection, dict):
+        fail("the connection read is not an object: %r" % connection)
+    extra = sorted(set(connection) - CONNECTION_KEYS)
+    if extra:
+        fail("the connection read carries unknown field(s): %s" % ", ".join(extra))
+    missing = sorted(CONNECTION_KEYS - set(connection))
+    if missing:
+        fail("the connection read lacks field(s): %s" % ", ".join(missing))
+    return view
+
+
+def read_view(url):
+    status, body = answer(url)
+    if status != 200:
+        fail("the onboarding read answered HTTP %d" % status)
+    return parse_view(body)
+
+
+def canonical(view):
+    return json.dumps({
+        "version": view["version"],
+        "steps": {step: view["steps"][step] for step in STEPS},
+        "nextStep": view["nextStep"],
+        "dismissed": view["dismissed"],
+    }, sort_keys=True, separators=(",", ":"))
+
+
+def poll_view(deadline, url):
+    end = time.time() + deadline
+    last = "no answer"
+    while True:
+        try:
+            status, body = answer(url)
+            if status == 200:
+                return parse_view(body)
+            last = "HTTP %d" % status
+        except urllib.error.HTTPError as error:
+            if error.code in (401, 403):
+                fail("Pi Web refused the onboarding read with HTTP %d — the password does not authenticate" % error.code)
+            if error.code == 404:
+                fail("the image's Pi Web has no /api/onboarding — polyforge#167 (91-onboarding) is not in this build")
+            last = "HTTP %d" % error.code
+        except Exception as error:  # noqa: BLE001 - any transport failure retries until the deadline
+            last = str(error)
+        if time.time() >= end:
+            fail("Pi Web did not answer /api/onboarding within %gs (%s)" % (deadline, last))
+        time.sleep(2)
+
+
+def check(deadline, url):
+    view = poll_view(deadline, url)
+    for step in STEPS:
+        if view["steps"][step] != "incomplete":
+            fail("the fresh onboarding step %r is %r, want incomplete" % (step, view["steps"][step]))
+    if view["nextStep"] != "aihub":
+        fail("nextStep is %r on a fresh volume, want aihub" % view["nextStep"])
+    if view["dismissed"] is not False:
+        fail("dismissed is %r on a fresh volume, want false" % view["dismissed"])
+    connection = view["connection"]
+    if connection["phase"] != "done":
+        fail("the first-boot record's phase is %r, want done" % connection["phase"])
+    if connection["mode"] != "local":
+        fail("the connection mode is %r, want local (the single-user default path)" % connection["mode"])
+    if connection["defaultCell"] != "default":
+        fail("the connection's default Cell is %r, want default" % connection["defaultCell"])
+    if connection["server"] != LOCAL_SERVER:
+        fail("the connection's server is %r, want the image's local AIHub %s" % (connection["server"], LOCAL_SERVER))
+    if connection["userReady"] is not True or connection["keyReady"] is not True:
+        fail("the connection is not ready (userReady=%r keyReady=%r)" % (connection["userReady"], connection["keyReady"]))
+    if not isinstance(connection["project"], str) or not connection["project"]:
+        fail("the connection names no project: %r" % connection["project"])
+    print("smoke: onboarding state incomplete (next aihub), connection local %s, default Cell default" % LOCAL_SERVER)
+
+
+def complete(url):
+    for step in STEPS:
+        status, _body = answer(url, "POST", {"action": "complete", "step": step})
+        if status != 200:
+            fail("completing the onboarding step %r answered HTTP %d" % (step, status))
+    view = read_view(url)
+    for step in STEPS:
+        if view["steps"][step] != "complete":
+            fail("the onboarding step %r is %r after the complete write — the state did not persist" % (step, view["steps"][step]))
+    print(canonical(view))
+
+
+def capture(url):
+    print(canonical(read_view(url)))
+
+
+def doctor():
+    try:
+        report = json.loads(sys.stdin.read())
+    except ValueError:
+        fail("pf --json doctor is not valid JSON")
+    if not isinstance(report, dict) or not isinstance(report.get("checks"), list):
+        fail("pf --json doctor is not the {ok, checks:[...]} document")
+    for name in DOCTOR_ROWS:
+        rows = [row for row in report["checks"]
+                if isinstance(row, dict) and row.get("name") == name and row.get("cell", "") in ("", "default")]
+        if len(rows) != 1:
+            fail("the doctor row %r is %d row(s) for the default Cell, want exactly one" % (name, len(rows)))
+        if rows[0].get("status") != "pass":
+            fail("the doctor row %r is %r, want pass: %s" % (name, rows[0].get("status"), str(rows[0].get("detail", ""))[:120]))
+    print("smoke: doctor necessary rows pass: " + ", ".join(DOCTOR_ROWS))
+
+
+def cells():
+    try:
+        registry = json.loads(sys.stdin.read())
+    except ValueError:
+        fail("pf --json cell list is not valid JSON")
+    profiles = registry.get("profiles") if isinstance(registry, dict) else None
+    if not isinstance(profiles, list) or len(profiles) != 1:
+        fail("the Cell registry holds %r profile(s), want exactly the default Cell" % (len(profiles) if isinstance(profiles, list) else profiles))
+    profile = profiles[0]
+    if not isinstance(profile, dict):
+        fail("the Cell row is not an object: %r" % profile)
+    for field, want in (("profile", "default"), ("state", "serving"), ("valid", True), ("server", LOCAL_SERVER)):
+        if profile.get(field) != want:
+            fail("the default Cell's %s is %r, want %r" % (field, profile.get(field), want))
+    print("smoke: Cell registry = default serving valid server %s" % LOCAL_SERVER)
+
+
+mode = sys.argv[1] if len(sys.argv) > 1 else ""
+if mode == "check":
+    check(float(sys.argv[2]), sys.argv[3])
+elif mode == "complete":
+    complete(sys.argv[2])
+elif mode == "capture":
+    capture(sys.argv[2])
+elif mode == "doctor":
+    doctor()
+elif mode == "cells":
+    cells()
+else:
+    fail("unknown validator mode %r" % mode)
+PY
+)
 
 # compose runs under the SMOKE'S OWN project, unique per run
 # (polyforge#176 review r1#4; polyforge#177): the compose file names the
@@ -668,11 +897,79 @@ ensure_image() {
 	fi
 }
 
+# cmd_onboarding — AC1's script half (polyforge#168, 91-clean-room). On a
+# FRESH machine (this run's own project, volumes reset first) the default
+# aihub boot must answer the first-open wizard as unfinished, with the
+# default Cell on the image's local AIHub, and the host must carry no
+# polyforge component. The three facts are checked one at a time, inside
+# the container (Q6: the host needs only Docker and the system sh):
+#
+#   1. /api/onboarding answers the closed view of polyforge#167 with all
+#      four steps incomplete, nextStep aihub, dismissed false, and the
+#      first-boot record's connection local/defaultCell=default/server
+#      http://127.0.0.1:8420 — an HTTP 200 alone never passes (owner Q4);
+#   2. `pf --json doctor`'s NECESSARY rows pass for the default Cell
+#      (config, workspaces, server reach, daemon socket, supervision,
+#      lanes, aihub projects, auth) — other rows may warn or skip, and the
+#      report's overall `ok` is never the proof (owner Q2);
+#   3. `pf --json cell list` holds exactly one Cell, `default`, serving,
+#      valid, its server the local AIHub (owner Q2: the joint proof).
+#
+# The browser's first open stays the human's: this pass prints the line
+# that says so. WORKSTATION_SMOKE_ONBOARDING_URL and
+# WORKSTATION_SMOKE_ONBOARDING_DEADLINE are the stub tests' seams (the
+# container-side Pi Web port and the readiness poll's bound).
+cmd_onboarding() {
+	require_engine
+	profile=aihub
+	onboarding_url="${WORKSTATION_SMOKE_ONBOARDING_URL:-http://127.0.0.1:30141/api/onboarding}"
+	onboarding_deadline="${WORKSTATION_SMOKE_ONBOARDING_DEADLINE:-300}"
+
+	# AC1's clean host: no polyforge component is installed on it. This is
+	# a precondition of the acceptance, so a dev machine fails it honestly.
+	for tool in pf aihub pi claude; do
+		if found=$(command -v "$tool" 2>/dev/null); then
+			die "the host carries $tool ($found) — a clean room has no polyforge component on the host (AC1); run this pass on the fresh machine"
+		fi
+	done
+	say "the host carries no pf/aihub/pi/claude component"
+
+	ensure_image "$profile"
+	# this run's project is disposable: even a die takes it down WITH volumes
+	trap 'compose_down_v compose --profile "$profile"' EXIT
+	compose --profile "$profile" down -v >/dev/null 2>&1 || true
+	compose --profile "$profile" up -d >/dev/null
+	cid=$(compose --profile "$profile" ps -q workstation)
+	[ -n "$cid" ] || die "no workstation container was created for profile $profile"
+	poll_until "the workstation container to run" 120 \
+		sh -c "docker inspect -f '{{.State.Running}}' '$cid' | grep -q true"
+	poll_until "pf supervise to run inside" 120 \
+		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
+	say "onboarding: the container runs; reading /api/onboarding, doctor and the Cell registry inside"
+
+	docker exec -i "$cid" python3 -c "$onboarding_py" check "$onboarding_deadline" "$onboarding_url" ||
+		die "the fresh onboarding state did not hold (see the report above)"
+
+	doctor=$(docker exec "$cid" pf --json doctor || true)
+	printf '%s' "$doctor" | docker exec -i "$cid" python3 -c "$onboarding_py" doctor ||
+		die "the doctor's necessary health rows did not pass (see the report above)"
+
+	cells=$(docker exec "$cid" pf --json cell list) ||
+		die "pf --json cell list failed inside the workstation"
+	printf '%s' "$cells" | docker exec -i "$cid" python3 -c "$onboarding_py" cells ||
+		die "the Cell registry does not show the default Cell serving the local AIHub (see the report above)"
+
+	compose --profile "$profile" down -v >/dev/null
+	say "onboarding: the browser's first open is the one step left to a person — open Pi Web and confirm the wizard"
+	say "onboarding: PASS"
+}
+
 # cmd_persist — the AC2 acceptance (polyforge#177): two compose down/up
-# cycles and a NEW TAG of the image keep the six persisted facts BY VALUE
-# — the harness login marker, cli.toml, the workspace file, the AIHub
-# database's user row, the pulled Podman image and the components
-# volume's current — then the delivery is exported to an EMPTY directory
+# cycles and a NEW TAG of the image keep the seven persisted facts BY
+# VALUE — the harness login marker, cli.toml, the workspace file, the
+# AIHub database's user row, the pulled Podman image, the components
+# volume's current, and (polyforge#168, owner Q3) the onboarding wizard's
+# completion record — then the delivery is exported to an EMPTY directory
 # and first-boot and persist run from there on the given image (Q6: the
 # host needs only Docker and the system sh; every JSON/HTTP check runs
 # inside the container). WORKSTATION_SMOKE_EXPORTED=1 marks the exported
@@ -681,6 +978,7 @@ cmd_persist() {
 	require_engine
 	profile=aihub
 	sp_value="sp-$(date +%s)-$$"
+	persist_onboarding_url="${WORKSTATION_SMOKE_ONBOARDING_URL:-http://127.0.0.1:30141/api/onboarding}"
 	ensure_image aihub
 	primary="${WORKSTATION_IMAGE:-polyforge-workstation:local}"
 	retag="polyforge-workstation-smoke:retag-$smoke_run"
@@ -707,16 +1005,20 @@ cmd_persist() {
 	}
 
 	# the three written sentinels ride the volumes; the podman image is
-	# pulled once (the podman-storage volume's own AC2 half)
+	# pulled once (the podman-storage volume's own AC2 half); the onboarding
+	# wizard is completed through Pi Web's own write so the record has a
+	# non-empty state to survive the restarts
 	persist_write_sentinels() {
 		docker exec "$cid" sh -c 'printf "%s\n" "$1" > /root/.pi/agent/workstation-smoke-persist-marker' persist "$sp_value"
 		docker exec "$cid" sh -c 'printf "# workstation-smoke-persist %s\n" "$1" >> /root/.config/polyforge/cli.toml' persist "$sp_value"
 		docker exec "$cid" sh -c 'printf "%s\n" "$1" > /workspace/workstation-smoke-persist-marker' persist "$sp_value"
 		docker exec "$cid" podman pull -q busybox:1.37 >/dev/null ||
 			die "the Podman pull failed inside the workstation (the podman-storage volume is the AC2 half)"
+		onboarding_state=$(docker exec -i "$cid" python3 -c "$onboarding_py" complete "$persist_onboarding_url") ||
+			die "the onboarding state could not be completed and read back inside the workstation"
 	}
 
-	# all six values, read inside the container (Q6: no host curl/python3)
+	# all seven values, read inside the container (Q6: no host curl/python3)
 	persist_read_values() {
 		harness_marker=$(docker exec "$cid" cat /root/.pi/agent/workstation-smoke-persist-marker) ||
 			die "the harness login marker is gone"
@@ -744,6 +1046,8 @@ print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hex
 		# components.Install writes nothing, so restarts keep them)
 		components_stat=$(docker exec "$cid" stat -c '%Y %i' /components/current) ||
 			die "the components current link is unreadable"
+		onboarding_state=$(docker exec -i "$cid" python3 -c "$onboarding_py" capture "$persist_onboarding_url") ||
+			die "the onboarding completion state is unreadable inside the workstation"
 	}
 
 	# persist_compare WHAT — every value must equal its first read (a
@@ -766,7 +1070,9 @@ print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hex
 			die "the components current manifest digest changed after $what: $components_digest (was $components_digest_first)"
 		[ "$components_stat" = "$components_stat_first" ] ||
 			die "the components current mtime/inode identity changed after $what: $components_stat (was $components_stat_first)"
-		say "persist: $what kept the harness login marker, cli.toml, the workspace file, the AIHub user row, the Podman image and the components current (link, digest, mtime/inode identity)"
+		[ "$onboarding_state" = "$onboarding_state_first" ] ||
+			die "the onboarding state changed after $what: $onboarding_state (was $onboarding_state_first)"
+		say "persist: $what kept the harness login marker, cli.toml, the workspace file, the AIHub user row, the Podman image, the components current (link, digest, mtime/inode identity) and the onboarding state"
 	}
 
 	up_with_image "$primary"
@@ -780,7 +1086,8 @@ print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hex
 	components_current_first=$components_current
 	components_digest_first=$components_digest
 	components_stat_first=$components_stat
-	say "persist: the six values recorded (sentinel $sp_value)"
+	onboarding_state_first=$onboarding_state
+	say "persist: the seven values recorded (sentinel $sp_value)"
 
 	up_with_image "$primary"
 	persist_read_values
@@ -818,12 +1125,14 @@ upgrade) exec sh "$script_dir/upgrade-smoke.sh" ;;
 boot) shift; cmd_boot "$@" ;;
 env) shift; cmd_env "$@" ;;
 first-boot) shift; cmd_first_boot "$@" ;;
+onboarding) shift; cmd_onboarding "$@" ;;
 persist) shift; cmd_persist "$@" ;;
 podman-verify) shift; cmd_podman_verify "$@" ;;
 *)
 	cat >&2 <<'USAGE'
 usage: sh dist/workstation/smoke.sh boot --no-aihub|--with-aihub
        sh dist/workstation/smoke.sh first-boot [--external]
+       sh dist/workstation/smoke.sh onboarding
        sh dist/workstation/smoke.sh persist [WORKSTATION_IMAGE=<published tag>]
        sh dist/workstation/smoke.sh env
        sh dist/workstation/smoke.sh podman-verify

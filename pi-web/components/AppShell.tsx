@@ -12,6 +12,8 @@ import { FileViewer } from "./FileViewer";
 import { PolyforgePanel } from "./PolyforgePanel";
 import type { PolyforgePromptTarget } from "./PolyforgeMessages";
 import { parsePolyforgePrompt, type PolyforgePrompt } from "@/lib/polyforge-messages-pure";
+import type { PolyforgeDecision } from "@/lib/polyforge-decisions-pure";
+import { PolyforgeNotifications } from "./PolyforgeNotifications";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState, saveParkedFileViewerState, switchFileWorkspace, type ParkedFileWorkspace } from "./file-tab-state";
 import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
@@ -21,9 +23,9 @@ import { SystemPromptPanel } from "./SystemPromptPanel";
 import { ToolDefinitionsPanel } from "./ToolDefinitionsPanel";
 import { AgentSessionPanel } from "./AgentSessionPanel";
 import { DebugPanel, DebugPanelBoundary } from "./DebugPanel";
-import { SessionChatPanel } from "./SessionChatPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { newTerminalTab, restoreTerminalTabs, TERMINAL_TABS_KEY, type TerminalTab } from "./terminal-tab-state";
+import type { PiSubagentPanelRequest } from "@/lib/pi-subagent-panel";
 import { useTheme } from "@/hooks/useTheme";
 import { useFontPreferences } from "@/hooks/useFontPreferences";
 import { useI18n } from "@/hooks/useI18n";
@@ -49,7 +51,7 @@ import {
 } from "@/lib/pane-state";
 import { readOpenPaneTabs, writeOpenPaneTabs } from "@/lib/pane-tab-state";
 import { reorderById, syncTabOrder, applyTabOrder } from "@/lib/tab-order";
-import { projectDisplayNameForPath } from "@/lib/project-groups";
+import { projectDisplayNameForPath, workspaceAfterSessionRemoval } from "@/lib/project-groups";
 import { listCustomDirectories } from "@/lib/custom-directories";
 import { copyText } from "@/lib/clipboard";
 import { sendAgentCommand } from "@/lib/agent-client";
@@ -149,12 +151,6 @@ function parkedNewSessionDraftKey(cwd: string): string {
   return `parked-new:${cwd}`;
 }
 
-/** Panel tab id of the last sub-agent tab, or null when there is none. */
-function lastAgentTabId(tabs: readonly { sessionId: string }[]): string | null {
-  const last = tabs.at(-1);
-  return last ? `agent:${last.sessionId}` : null;
-}
-
 export function AppShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -249,6 +245,15 @@ export function AppShell() {
   // stale (e.g. a delete that completes after the user navigated away).
   const selectedSessionRef = useRef(selectedSession);
   selectedSessionRef.current = selectedSession;
+  // The sidebar's effective workspace after AppShell moved off a vanished
+  // session (polyforge#252): the token lets it follow a switch back to NO
+  // project, which the selection-driven prop sync cannot express.
+  const [workspaceSwitch, setWorkspaceSwitch] = useState<{ root: string | null; key: string | null; token: number } | null>(null);
+  const workspaceSwitchTokenRef = useRef(0);
+  // The session ids the last catalogue report carried: only a session that was
+  // reported and then vanished was deleted elsewhere. A fork (or a just-created
+  // session) the list has not reported yet is not one (polyforge#252 r1#8).
+  const reportedSessionIdsRef = useRef<Set<string>>(new Set());
   // pi#108: the Polyforge dock panel. The bg-tasks dock that shared this
   // slot retired with the built-in running list (#173): a pi session's
   // background tasks now live above its composer and in their detail panel.
@@ -336,7 +341,16 @@ export function AppShell() {
     clearTaskRequest: clearPfTaskRequest,
     attentionCount: pfAttentionCount,
     openNextAttention: openPfNextAttention,
+    openDecisionTarget: openPfDecisionTarget,
   } = usePolyforge(pfPanelOpen);
+
+  // polyforge#240 Q7: a notification click opens the entry the notification
+  // was built from (the panel's own directed opener) and opens the dock, so
+  // the target is visible even while it was closed.
+  const openPfDecision = useCallback((decision: PolyforgeDecision) => {
+    openPfDecisionTarget(decision);
+    setPfPanelOpen(true);
+  }, [openPfDecisionTarget]);
 
   // pi#113: while the DESKTOP dock is open, a pointer press anywhere outside
   // its own DOM dismisses it — and the press still reaches its target: no
@@ -423,6 +437,41 @@ export function AppShell() {
   // final for gating purposes" — an empty but settled list still flips it,
   // which a not-yet-loaded list never does.
   const [sessionCatalogReported, setSessionCatalogReported] = useState(false);
+  // The interface moves off a vanished session's project before any request
+  // can use its cwd (polyforge#252). Its project stays the workspace only while
+  // another session of it remains (at a root that session authorizes); else
+  // the most recent remaining project, else no project. The gone session's own
+  // cwd is never handed to a component again.
+  const moveOffVanishedSession = useCallback((
+    vanished: SessionInfo,
+    remaining: readonly SessionInfo[],
+  ) => {
+    const decision = workspaceAfterSessionRemoval(remaining, workspaceKeyOf(vanished));
+    const root = decision.keep ? decision.root : decision.next?.root ?? null;
+    const key = decision.keep ? workspaceKeyOf(vanished) : decision.next?.key ?? null;
+    // A duplicate report from the catalogue (the delete's own list reload) must
+    // not move the workspace a second time.
+    selectedSessionRef.current = null;
+    workspaceSwitchTokenRef.current += 1;
+    setWorkspaceSwitch({ root, key, token: workspaceSwitchTokenRef.current });
+    setSelectedSession(null);
+    setActiveCwd(root);
+    setNewSessionCwd(root);
+    const draftId = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    setNewSessionDraftId(draftId);
+    activeNewSessionDraftKeyRef.current = root ? `new:${draftId}:${root}` : null;
+    setSessionKey((k) => k + 1);
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setBranchSwitchLocked(false);
+    setSystemPrompt(null);
+    setSystemTools(null);
+    setSystemInfoLoading(false);
+    setActiveTopPanel((panel) => (panel === "debug" ? panel : null));
+    router.replace(root ? `?cwd=${encodeURIComponent(root)}` : (typeof window !== "undefined" ? window.location.pathname : "/"), { scroll: false });
+  }, [router]);
   const handleSessionsChange = useCallback((sessions: SessionInfo[]) => {
     setSessionCatalog(sessions);
     setSessionCatalogReported(true);
@@ -434,7 +483,25 @@ export function AppShell() {
       const refreshed = sessions.find((session) => session.id === current.id);
       return refreshed ? mergeCatalogRow(current, refreshed) : current;
     });
-  }, []);
+    // A refreshed catalogue that no longer carries the selected session means
+    // another process deleted it (an external delete, not pi-web's own, which
+    // handles itself below). Its cwd is no longer authorized by any session, so
+    // move off it before a request uses it. Only a session a previous report
+    // carried counts as vanished — a fork still landing in the list was never
+    // reported and must not kick the user out — and a transient draft is not in
+    // the catalogue by design.
+    const active = selectedSessionRef.current;
+    const reportedBefore = reportedSessionIdsRef.current;
+    reportedSessionIdsRef.current = new Set(sessions.map((session) => session.id));
+    if (
+      active
+      && !active.transient
+      && reportedBefore.has(active.id)
+      && !sessions.some((session) => session.id === active.id)
+    ) {
+      moveOffVanishedSession(active, sessions);
+    }
+  }, [moveOffVanishedSession]);
   // Sidebar-detected external write (TUI / another pi process) targeting the
   // selected session; converted into a keyed signal that ChatWindow consumes
   // to reload that session from disk exactly once per key.
@@ -449,9 +516,12 @@ export function AppShell() {
       selectedSession,
     ];
   }, [selectedSession, sessionCatalog]);
+  // polyforge#255 Q4 A: the top bar's Agents family is the ACTIVE pane's, not
+  // the selectedSession a split focus left behind (sidebarSessionId resolves
+  // the focused pane in split view, the classic selection otherwise).
   const activeSessionFamily = useMemo(
-    () => getSessionFamily(sessionsWithSelection, selectedSession?.id),
-    [selectedSession?.id, sessionsWithSelection],
+    () => getSessionFamily(sessionsWithSelection, sidebarSessionId ?? undefined),
+    [sidebarSessionId, sessionsWithSelection],
   );
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const handleRunningSessionIdsChange = useCallback((ids: Set<string>) => {
@@ -1043,20 +1113,12 @@ export function AppShell() {
   const fileWorkspaceGenerationRef = useRef(0);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [terminalsRestored, setTerminalsRestored] = useState(false);
-  // Subagent work tabs are session-scoped and transient: no persistence, and
-  // they are dropped when the project changes (they belong to its sessions).
-  const [agentTabs, setAgentTabs] = useState<{ sessionId: string; label: string }[]>([]);
   const rawPanelTabs: Tab[] = [...fileTabs, ...terminalTabs.map((tab) => ({
     id: tab.id,
     label: getFileName(tab.cwd) || tab.cwd,
     filePath: tab.cwd,
     kind: "terminal" as const,
     closing: Boolean(tab.closing),
-  })), ...agentTabs.map((tab) => ({
-    id: `agent:${tab.sessionId}`,
-    label: tab.label,
-    filePath: tab.label,
-    kind: "agent" as const,
   }))];
   // Right-panel tab order (pi#70): fileTabs/terminalTabs are separate state
   // arrays, concatenated file-first above, so neither array alone can
@@ -1120,10 +1182,8 @@ export function AppShell() {
     fileWorkspaceGenerationRef.current += 1;
     setFileWorkspaceGeneration(fileWorkspaceGenerationRef.current);
     setFileTabs(next.tabs);
-    // Subagent tabs belong to the previous project's sessions: dropped, not parked.
-    setAgentTabs([]);
     // Terminal tabs span workspaces and keep control of the panel while active.
-    if (!activeFileTabId || activeFileId || activeFileTabId.startsWith("agent:")) {
+    if (!activeFileTabId || activeFileId) {
       setActiveFileTabId(next.activeTabId);
       setRightPanelOpen(next.open);
     }
@@ -1812,30 +1872,15 @@ export function AppShell() {
     setRefreshKey((k) => k + 1);
     // The DELETE can outlive a session switch: this callback's captured
     // selectedSession is from the delete click. Read the latest selection
-    // and only fall back to the empty composer when the user is still on
-    // the deleted session at the moment removal completes.
+    // and only move off the workspace when the user is still on the deleted
+    // session at the moment removal completes.
     const active = selectedSessionRef.current;
-    if (active?.id === sessionId) {
-      clearTabOpenSession(sessionId);
-      const cwd = active.cwd;
-      const draftId = typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-      setNewSessionDraftId(draftId);
-      activeNewSessionDraftKeyRef.current = cwd ? `new:${draftId}:${cwd}` : null;
-      setSelectedSession(null);
-      setNewSessionCwd(cwd ?? null);
-      setSessionKey((k) => k + 1);
-      setBranchTree([]);
-      setBranchActiveLeafId(null);
-      setBranchSwitchLocked(false);
-      setSystemPrompt(null);
-      setSystemTools(null);
-      setSystemInfoLoading(false);
-      setActiveTopPanel((panel) => panel === "debug" ? panel : null);
-      router.replace(cwd ? `?cwd=${encodeURIComponent(cwd)}` : (typeof window !== "undefined" ? window.location.pathname : "/"), { scroll: false });
-    }
-  }, [invalidateWorkspaceRestore, router]);
+    if (active?.id !== sessionId) return;
+    clearTabOpenSession(sessionId);
+    // The catalogue still lists the session while the delete returns; drop it
+    // so the project's remaining sessions decide the next workspace.
+    moveOffVanishedSession(active, sessionCatalog.filter((session) => session.id !== sessionId));
+  }, [moveOffVanishedSession, sessionCatalog]);
 
   const handleOpenFile = useCallback((
     filePath: string,
@@ -1892,40 +1937,28 @@ export function AppShell() {
     if (isMobile) setSidebarOpen(false);
   }, [terminalTabs, isMobile]);
 
-  // Subagent work opens in a right-panel tab instead of hijacking the main chat.
-  const handleOpenSubagentTab = useCallback((sessionId: string, label: string) => {
-    setAgentTabs((prev) => {
-      if (prev.some((tab) => tab.sessionId === sessionId)) return prev;
-      return [...prev, { sessionId, label }];
-    });
-    setActiveFileTabId(`agent:${sessionId}`);
-    setRightPanelOpen(true);
-    if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
-
-  // The agent switcher's side-panel button: opens a subagent's tab, or closes
-  // it when the open panel already has it (the panel closes with its last tab).
-  // The switcher stays open beside the panel, except on phones, where the
-  // panel covers the chat.
-  const openSubagentTabIds = useMemo(
-    () => new Set(rightPanelOpen ? agentTabs.map((tab) => tab.sessionId) : []),
-    [agentTabs, rightPanelOpen],
-  );
-  const handleToggleSubagentTab = (sessionId: string, label: string) => {
-    if (openSubagentTabIds.has(sessionId)) {
-      handleCloseFileTab(`agent:${sessionId}`);
-      return;
-    }
+  // polyforge#255: a subagent entry opens the in-chat progress panel of the
+  // chat that was active when it was clicked (Q4 A) — the classic selection,
+  // or the focused split pane; never the selectedSession a pane focus left
+  // behind. The request names its target pane, so no other ChatWindow consumes it.
+  const [piSubagentPanelRequest, setPiSubagentPanelRequest] = useState<PiSubagentPanelRequest | null>(null);
+  const piSubagentRequestSeqRef = useRef(0);
+  const handleOpenPiSubagentPanel = useCallback((childSessionId: string, _label: string) => {
+    if (!sidebarSessionId) return;
+    piSubagentRequestSeqRef.current += 1;
+    setPiSubagentPanelRequest({ paneSessionId: sidebarSessionId, childSessionId, requestId: piSubagentRequestSeqRef.current });
     if (isMobile) setActiveTopPanel(null);
-    handleOpenSubagentTab(sessionId, label);
-  };
+  }, [isMobile, sidebarSessionId]);
+  const handlePiSubagentPanelRequestHandled = useCallback((requestId: number) => {
+    setPiSubagentPanelRequest((current) => current?.requestId === requestId ? null : current);
+  }, []);
 
   const handleTerminalClosed = (tab: TerminalTab) => {
     const replacement = tab.closing === "restart" ? newTerminalTab(tab.cwd) : null;
     const remaining = terminalTabs.filter((item) => item.id !== tab.id);
     setTerminalTabs((tabs) => tabs.flatMap((item) => item.id !== tab.id ? [item] : replacement ? [replacement] : []));
-    setActiveFileTabId((current) => current !== tab.id ? current : replacement?.id ?? remaining.at(-1)?.id ?? fileTabs.at(-1)?.id ?? lastAgentTabId(agentTabs));
-    if (!replacement && !remaining.length && !fileTabs.length && !agentTabs.length) setRightPanelOpen(false);
+    setActiveFileTabId((current) => current !== tab.id ? current : replacement?.id ?? remaining.at(-1)?.id ?? fileTabs.at(-1)?.id ?? null);
+    if (!replacement && !remaining.length && !fileTabs.length) setRightPanelOpen(false);
   };
 
   const handleCloseFileTab = useCallback((tabId: string) => {
@@ -1933,36 +1966,20 @@ export function AppShell() {
       setTerminalTabs((tabs) => tabs.map((tab) => tab.id === tabId && !tab.closing ? { ...tab, closing: "close" } : tab));
       return;
     }
-    if (tabId.startsWith("agent:")) {
-      const remainingAgents = agentTabs.filter((tab) => `agent:${tab.sessionId}` !== tabId);
-      setAgentTabs(remainingAgents);
-      setActiveFileTabId((cur) => {
-        if (cur !== tabId) return cur;
-        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(remainingAgents);
-      });
-      if (fileTabs.length === 0 && terminalTabs.length === 0 && remainingAgents.length === 0) setRightPanelOpen(false);
-      return;
-    }
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0) setRightPanelOpen(false);
+      if (next.length === 0 && terminalTabs.length === 0) setRightPanelOpen(false);
       return next;
     });
     setActiveFileTabId((cur) => {
       if (cur !== tabId) return cur;
       const remaining = fileTabs.filter((t) => t.id !== tabId);
-      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(agentTabs);
+      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? null;
     });
-  }, [fileTabs, terminalTabs, agentTabs]);
+  }, [fileTabs, terminalTabs]);
 
   // a claude session has no HTML export, background tasks or subagents.
   const selectedIsClaude = selectedSession?.harness === "claude";
-
-  // One session, one chat: opening a subagent in the main chat closes its tab.
-  const selectedSessionId = selectedSession?.id;
-  useEffect(() => {
-    if (agentTabs.some((tab) => tab.sessionId === selectedSessionId)) handleCloseFileTab(`agent:${selectedSessionId}`);
-  }, [agentTabs, handleCloseFileTab, selectedSessionId]);
 
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
@@ -2184,8 +2201,6 @@ export function AppShell() {
   }, [projectTrustCwd]);
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
-  // Subagent work tabs: like files, only the active one is mounted.
-  const activeAgentTab = agentTabs.find((tab) => `agent:${tab.sessionId}` === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -2227,6 +2242,7 @@ export function AppShell() {
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
         onSessionsChange={handleSessionsChange}
         onExternalSessionChange={handleExternalSessionChange}
+        workspaceSwitch={workspaceSwitch}
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
@@ -3112,6 +3128,9 @@ export function AppShell() {
         }
       }
     `}</style>
+      {/* polyforge#240: the one-time notification-permission explanation. */}
+      <PolyforgeNotifications decisions={pfDecisionsFeed?.decisions ?? null} onOpenDecision={openPfDecision} />
+
     <div data-onboarding-read={onboardingRead} style={{
       display: "flex",
       width: "100%",
@@ -3336,15 +3355,14 @@ export function AppShell() {
               overflowY: "auto",
               zIndex: 500,
             }}>
-              {activeTopPanel === "agents" && activeSessionFamily && selectedSession && (
+              {activeTopPanel === "agents" && activeSessionFamily && sidebarSessionId && (
                 <AgentSessionPanel
                   rootSession={activeSessionFamily.root}
                   subagents={activeSessionFamily.subagents}
-                  selectedSessionId={selectedSession.id}
+                  selectedSessionId={sidebarSessionId}
                   runningSessionIds={runningSessionIds}
                   onSelectSession={handleSelectSession}
-                  openSubagentTabIds={openSubagentTabIds}
-                  onToggleSubagentTab={handleToggleSubagentTab}
+                  onOpenSubagent={handleOpenPiSubagentPanel}
                 />
               )}
               {activeTopPanel === "system" && (
@@ -3699,11 +3717,10 @@ export function AppShell() {
                     // handleOpenLinkedFile would tag a non-selected pane's
                     // link with another session's id (403 outside the roots).
                     onOpenFile={getPaneOpenFileHandler(sid)}
-                    // polyforge#229: the Agent card's 「open tab」 button and the
-                    // running list gate on this opener. The handler reads no
-                    // selectedSession (pane focus never updates it), so every
-                    // pane shares the classic layout's handler.
-                    onOpenSubagent={handleOpenSubagentTab}
+                    // polyforge#255: the pane's Agent card and running list open
+                    // THIS pane's in-chat panel (the request names the pane).
+                    piSubagentPanelRequest={piSubagentPanelRequest}
+                    onPiSubagentPanelRequestHandled={handlePiSubagentPanelRequestHandled}
                     // polyforge#231: the notification opens THIS pane's session;
                     // the global request-id dedupe stays shared.
                     onAttentionNeeded={(request) => handleAttentionNeeded(request, paneSession)}
@@ -3800,7 +3817,8 @@ export function AppShell() {
               externalSessionChange={externalSessionChange}
               onOpenFile={handleOpenLinkedFile}
               onFilesUploaded={handleExplorerRefresh}
-              onOpenSubagent={handleOpenSubagentTab}
+              piSubagentPanelRequest={piSubagentPanelRequest}
+              onPiSubagentPanelRequestHandled={handlePiSubagentPanelRequestHandled}
               onAskInNewChat={handleAskInNewChat}
               quoteSelectionEnabled={quoteSelectionEnabled}
               initialPrompt={pendingQuotePrompt?.sessionId === selectedSession?.id ? pendingQuotePrompt?.text : undefined}
@@ -4097,7 +4115,7 @@ export function AppShell() {
                 { sourceSessionId: activeFileTab.sourceSessionId, page },
               )}
             />
-          ) : !terminalTabs.some((tab) => tab.id === activeFileTabId) && !activeAgentTab ? (
+          ) : !terminalTabs.some((tab) => tab.id === activeFileTabId) ? (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
                {translate("files.noneOpen")}
             </div>
@@ -4113,29 +4131,6 @@ export function AppShell() {
               />
             </div>
           ))}
-          {activeAgentTab && (
-            <SessionChatPanel
-              key={activeAgentTab.sessionId}
-              sessionId={activeAgentTab.sessionId}
-              running={runningSessionIds.has(activeAgentTab.sessionId)}
-              modelsRefreshKey={modelsRefreshKey}
-              quoteSelectionEnabled={quoteSelectionEnabled}
-              onOpenFile={handleOpenLinkedFile}
-              onOpenSubagent={handleOpenSubagentTab}
-              onSessionForked={(newSessionId) => {
-                if (isMobile) setRightPanelOpen(false);
-                handleSessionForked(newSessionId);
-              }}
-              onOpenSettings={openSettingsSection}
-              onToolEnd={handleToolEnd}
-              onFilesUploaded={handleExplorerRefresh}
-              soundEnabled={soundEnabled}
-              onSoundToggle={onSoundToggle}
-              playDoneSound={playDoneSound}
-              unlockAudio={unlockAudio}
-              holdAudio={holdAudio}
-            />
-          )}
         </div>
       </div>
     </div>

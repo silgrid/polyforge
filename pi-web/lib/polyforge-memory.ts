@@ -1,6 +1,6 @@
 import { execFileAsync } from "./exec-file";
 import { parsePfError } from "./polyforge-config-write";
-import { isPolyforgeVersionBelowMinimum } from "./polyforge-detect";
+import { isPolyforgeVersionBelowMinimum } from "./polyforge-version";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 import { probePolyforgeVersion } from "./polyforge-status";
 import { workspaceProjects } from "../components/polyforge-config-helpers";

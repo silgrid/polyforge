@@ -6,6 +6,8 @@
 // the applicable and writable harnesses. Presentational like SettingsUi.tsx
 // (every word a prop, no state of its own).
 
+import { ConfigButton } from "./SettingsUi";
+
 /** One harness's read of the unified value. */
 export interface UnifiedSettingHarnessValue {
   harness: string;
@@ -78,9 +80,9 @@ export function UnifiedSetting({ texts, current, values, busy = false, onUnify }
       {status === "consistent" && <p role="status" className="settings-general-description">{texts.consistent}</p>}
       {status === "unsupported" && <p role="status" className="settings-general-description">{texts.unsupported}</p>}
       {status === "inconsistent" && onUnify && (
-        <button type="button" className="config-button" onClick={onUnify} disabled={busy}>
+        <ConfigButton onClick={onUnify} disabled={busy}>
           {busy ? texts.saving : texts.unify}
-        </button>
+        </ConfigButton>
       )}
     </section>
   );

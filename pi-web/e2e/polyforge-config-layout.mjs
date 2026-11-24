@@ -218,9 +218,9 @@ try {
 
   const cli = (dialog) => dialog.locator('section[aria-label="cli.toml"]');
   const cards = (dialog) => ({
-    flat: cli(dialog).first().locator(".polyforge-config-zone.is-flat"),
-    daemon: cli(dialog).first().locator(".polyforge-config-zone.is-daemon"),
-    summarize: cli(dialog).first().locator(".polyforge-config-zone.is-summarize"),
+    flat: cli(dialog).first().locator('.polyforge-config-zone[data-zone="flat"]'),
+    daemon: cli(dialog).first().locator('.polyforge-config-zone[data-zone="daemon"]'),
+    summarize: cli(dialog).first().locator('.polyforge-config-zone[data-zone="summarize"]'),
     workspace: dialog.locator('section[aria-label="Workspace"]').first(),
     workflow: dialog.locator('section[aria-label="Workflow"]').first(),
   });

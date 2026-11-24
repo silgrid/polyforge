@@ -644,8 +644,16 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	live.SetSlowModelMedianLatency(cfg.StartupFile.Daemon.SlowModelMedianLatency)
 	live.SetSlowModelP90Latency(cfg.StartupFile.Daemon.SlowModelP90Latency)
+	// polyforge#239: the Cell's automatic-reply switch and timeout are live;
+	// the startup file seeds them and a reload swaps them.
+	live.SetAskAutoReplyEnabled(cfg.StartupFile.Daemon.AskAutoReplyEnabled)
+	live.SetAskAutoReplyTimeout(cfg.StartupFile.Daemon.AskAutoReplyTimeout)
 	live.SetAgentLanguageFallback(cfg.AgentLanguageFallback)
 	live.SetMemoryPolicy(cfg.StartupFile.MemoryPolicy)
+	// polyforge#81: the Host [step_tiers] catalog is live configuration —
+	// a reload of the Host file swaps it and the dispatch-time expansion
+	// reads the new value without a restart.
+	live.SetStepTiers(cfg.StartupFile.StepTiers)
 	// hostLive answers the state the Host-only keys are read from: the
 	// default Cell's for a named Cell (a Host reload updates only that
 	// one), this Cell's own otherwise.
@@ -664,12 +672,14 @@ func New(cfg Config) (*Daemon, error) {
 	// negative stall window still disables the stall check at the consumer.
 	liveLimits := func() supervise.Defaults {
 		return supervise.Defaults{
-			Silence:         cfg.Supervision.SilenceWindow,
-			Tool:            cfg.Supervision.ToolWindow,
-			StepTimeout:     live.StepTimeout(),
-			DriverStall:     live.StallWindow(),
-			ModelErrorGrace: cfg.Supervision.ModelErrorGrace,
-			AskWarmWindow:   cfg.Supervision.AskWarmWindow,
+			Silence:             cfg.Supervision.SilenceWindow,
+			Tool:                cfg.Supervision.ToolWindow,
+			StepTimeout:         live.StepTimeout(),
+			DriverStall:         live.StallWindow(),
+			ModelErrorGrace:     cfg.Supervision.ModelErrorGrace,
+			AskWarmWindow:       cfg.Supervision.AskWarmWindow,
+			AskAutoReplyEnabled: live.AskAutoReplyEnabled(),
+			AskAutoReplyTimeout: live.AskAutoReplyTimeout(),
 			// polyforge#51: the slow-model judgement's live bounds
 			SlowModelMedianLatency: hostLive().SlowModelMedianLatency(),
 			SlowModelP90Latency:    hostLive().SlowModelP90Latency(),
@@ -707,6 +717,10 @@ func New(cfg Config) (*Daemon, error) {
 		OperatorAgentDir:         cfg.OperatorAgentDir,
 		OperatorAgentDirExplicit: cfg.OperatorAgentDirExplicit,
 		EnvSecrets:               []string{cfg.APIKey},
+		// polyforge#81: the dispatch-time candidate composition expands an
+		// overlay tier through the Host's [step_tiers] catalog, read live
+		// through the same Host state the other Host-only keys use.
+		StepTiers: func() map[string][]string { return hostLive().StepTiers() },
 	}
 	rtCfg.FillDefaults()
 	if err := rtCfg.SyncStepAgentDir(); err != nil {
@@ -734,6 +748,11 @@ func New(cfg Config) (*Daemon, error) {
 	// unconditionally, no selection flag, no fallback. The AgentStarter
 	// config knob only swaps WHICH starter binds (tests).
 	var d *Daemon // bound below; the starter closure reads it at call time
+	// polyforge#239: the automatic reply keeps every stop of a lane this
+	// build cannot verify. The shipped lanes are enumerated from the
+	// daemon's workflows/ tree (no Go literal names a lane or a step id);
+	// a custom lane's cards keep waiting for the owner.
+	laneVerifiable := shippedLaneVerifier(cfg.WorkflowsDir)
 	start := cfg.AgentStarter
 	if start == nil {
 		start = func(ctx context.Context, in runtime.AgentStartInput) (Agent, error) {
@@ -780,7 +799,8 @@ func New(cfg Config) (*Daemon, error) {
 				OwnerWait: in.OwnerWait,
 				// the agent language a new conversation takes: the live
 				// `[daemon] agent_language` at dispatch time
-				Language: live.AgentLanguage,
+				Language:       live.AgentLanguage,
+				LaneVerifiable: laneVerifiable,
 			})
 		}
 	}
@@ -1915,4 +1935,21 @@ func (d *Daemon) reportUserLanes() {
 			delete(d.userLaneRefused, dir)
 		}
 	}
+}
+
+// shippedLaneVerifier answers the predicate the driver's automatic reply
+// consults (polyforge#239): a lane name under workflowsDir that loads is
+// one this build verifies; an unknown or unloadable name is not, so its
+// stops keep waiting for the owner. The shipped set is enumerated from the
+// tree — no Go literal names a lane or a step id.
+func shippedLaneVerifier(workflowsDir string) func(string) bool {
+	lanes := map[string]bool{}
+	if dirs, err := workflow.LaneDirs(workflowsDir); err == nil {
+		for _, dir := range dirs {
+			if lane, errs := workflow.Load(dir); len(errs) == 0 && lane != nil {
+				lanes[lane.Name] = true
+			}
+		}
+	}
+	return func(name string) bool { return lanes[name] }
 }

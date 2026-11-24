@@ -356,7 +356,7 @@ test("a long or multi-line value stays inside the card", (t) => {
   assert.ok(textOf(html).includes("line 39"));
 });
 
-test("renders subagents as standard tool calls with only an extra side-panel button", () => {
+test("polyforge#255 u5: renders subagents as standard tool calls with only an extra panel button", () => {
   const block = {
     type: "toolCall",
     toolCallId: "call-agent-1",
@@ -394,7 +394,8 @@ test("renders subagents as standard tool calls with only an extra side-panel but
   assert.match(html, /border:1px solid rgba\(34,197,94,0\.25\)/);
   assert.match(html, />Agent</);
   assert.match(html, />Explore</);
-  assert.match(html, /aria-label="View sub-agent work in side panel"/);
+  assert.match(html, /aria-label="Open sub-agent panel"/);
+  assert.match(html, /data-pi-agent-tool-call="call-agent-1"/, "the card carries its tool call id for Jump");
   assert.doesNotMatch(html, />completed</);
   assert.doesNotMatch(html, />Find parser</);
 
@@ -407,7 +408,7 @@ test("renders subagents as standard tool calls with only an extra side-panel but
     toolResults: new Map(),
     onOpenSubagent() {},
   });
-  assert.doesNotMatch(ordinaryHtml, /View sub-agent work in side panel/);
+  assert.doesNotMatch(ordinaryHtml, /Open sub-agent panel/);
 });
 
 test("a bg_run tool card carries an open-task button bound to the task its result started", () => {

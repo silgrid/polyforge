@@ -28,6 +28,15 @@ steps:
     fast_check_proof:
       result: artifacts/build/fast-checks/{repo}.json
       command: '"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo {repo} --phase fast --json --out artifacts/build/fast-checks/{repo}.json'
+    # the mechanical facts gate (polyforge#241): build's done is refused
+    # while facts.py handoff lists a deterministic hit — a unit's commits
+    # or red-state replay, an undeclared write, an existing test outside
+    # the plan's write set, an e2e suite without carries:, a listed test
+    # that does not exist, a skip after the test commit — so review gets
+    # a tree with the mechanical facts already green
+    facts_proof:
+      result: artifacts/build/handoff-facts/{repo}.json
+      command: '"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" handoff --json --out artifacts/build/handoff-facts/{repo}.json'
     # the lane's supplement cap: the change analysis's tests verification
     # runs beside the engine's own selection (verify.py's --analysis),
     # rendered into the step's text and written by the build into the
@@ -87,12 +96,14 @@ steps:
     # PF_PARAM_AUDIT.
     params: { image: "", audit: "on" }
   - id: publish
+    protected_stop: true
     gate: true
     on_fail: { target: build }
     skill: publish
     model_tier: cheap
     budget: { wall_minutes: 15 }
   - id: merge
+    protected_stop: true
     gate: true
     skippable: true
     # the project may take the merge over: `steps.<project>.merge.by:

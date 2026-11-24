@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // AsksJSONL is the capsule-relative path of the ask record.
@@ -47,6 +48,13 @@ const (
 	// AskKindMessage is an owner message sent while no ask is open (a
 	// live interjection, PR 6d); it closes nothing.
 	AskKindMessage = "message"
+	// AskKindAwaiting is the daemon-only wait start of one open ask
+	// (polyforge#239): `at` is the first moment the dispatch was observed
+	// awaiting the owner (T0), `step`/`spawn`/`ask_at` bind it to exactly
+	// that ask. Written once, by the live dispatch that first parked; a
+	// restart only reads it, so an older wait without one has no
+	// trustworthy T0 and is never auto-answered.
+	AskKindAwaiting = "awaiting"
 	// AskKindDelivered records that one owner message (`msg_at`) reached
 	// the step's conversation under dispatch `spawn` (PR 6d): the marker
 	// the daemon embedded in the delivered text appeared in the harness's
@@ -54,6 +62,11 @@ const (
 	// and is replayed by the step's next dispatch.
 	AskKindDelivered = "delivered"
 )
+
+// AutoAnswerBy is the reserved author of the daemon's automatic reply to a
+// low-star question card (polyforge#239): a normal `pf answer` may never
+// record it, and no per-owner authorization consumer reads it.
+const AutoAnswerBy = "daemon:auto-recommendation"
 
 // MaxAskBytes bounds one ask's text (`pf ask` refuses a longer one): the
 // question is shown whole in the job card and the decision feed.
@@ -235,4 +248,29 @@ func CurrentDispatch(ex *Execution) (step string, spawn int64, ok bool) {
 		return "", 0, false
 	}
 	return ex.CurrentStep, st.Dispatch, true
+}
+
+// AwaitingSince answers the recorded T0 of (step, spawn)'s open ask askAt:
+// the earliest valid awaiting line bound to it that is not in the future
+// of now. ok=false when no such line exists (an old wait, a torn record,
+// or a clock that makes the stamp untrustworthy) — the safe default: no
+// automatic reply, the question keeps waiting for its owner.
+func AwaitingSince(lines []AskLine, step string, spawn int64, askAt string, now time.Time) (time.Time, bool) {
+	var earliest time.Time
+	for _, l := range lines {
+		if l.Kind != AskKindAwaiting || l.Step != step || l.Spawn != spawn || l.AskAt != askAt {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, l.At)
+		if err != nil || t.After(now) {
+			continue
+		}
+		if earliest.IsZero() || t.Before(earliest) {
+			earliest = t
+		}
+	}
+	if earliest.IsZero() {
+		return time.Time{}, false
+	}
+	return earliest, true
 }

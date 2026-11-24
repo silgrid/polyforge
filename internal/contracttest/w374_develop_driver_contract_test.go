@@ -116,7 +116,7 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(string(raw), "\n"); n > 228 {
-		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 228-line budget", n)
+	if n := strings.Count(string(raw), "\n"); n > 240 {
+		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 240-line budget", n)
 	}
 }

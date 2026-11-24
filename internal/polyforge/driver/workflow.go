@@ -54,6 +54,10 @@ type StepSpec struct {
 	// Waivable mirrors `waivable` (contract 2; default false): the gate
 	// takes a hand-off `waive --per-owner`.
 	Waivable bool
+	// ProtectedStop mirrors `protected_stop` (default false): the step's
+	// question is a human stop the daemon's automatic reply never answers
+	// (polyforge#239).
+	ProtectedStop bool
 	// Skippable mirrors `skippable` (default false): a
 	// project may switch the step off. Skipped is set by WithSkipped: the
 	// step is skippable and the work item's skipped-step set names it, so
@@ -88,6 +92,10 @@ type StepSpec struct {
 	// file and the command the daemon's done gate reads for every task
 	// repo the step changed.
 	FastCheckProof *workflow.FastCheckProof
+	// FactsProof mirrors `facts_proof` (nil = none): the mechanical facts
+	// summary (facts.py handoff) the done gate reads for every task repo
+	// the step changed (polyforge#241).
+	FactsProof *workflow.FastCheckProof
 }
 
 // HubAllowed answers the `pf step hub` verbs step id may call: its
@@ -128,6 +136,16 @@ func (w *Workflow) WrapAttrs(id string) []string {
 		return s.WrapAttrs
 	}
 	return nil
+}
+
+// ProtectedStop reports whether step id declares `protected_stop: true`
+// (polyforge#239): its question keeps waiting for the owner.
+func (w *Workflow) ProtectedStop(id string) bool {
+	if w == nil {
+		return false
+	}
+	s := w.step(id)
+	return s != nil && s.ProtectedStop
 }
 
 // Waivable reports whether the owner may waive a FAIL of step id
@@ -340,6 +358,7 @@ func workflowOf(lane *workflow.Lane) *Workflow {
 			WallMinutes:    s.WallMinutes,
 			ToolMinutes:    s.ToolMinutes,
 			Waivable:       s.Waivable,
+			ProtectedStop:  s.ProtectedStop,
 			Skippable:      s.Skippable,
 			RewindOnly:     s.RewindOnly,
 			Skill:          s.Skill,
@@ -350,6 +369,7 @@ func workflowOf(lane *workflow.Lane) *Workflow {
 			HubAttrs:       s.HubAttrs,
 			WrapAttrs:      s.WrapAttrs,
 			FastCheckProof: s.FastCheckProof,
+			FactsProof:     s.FactsProof,
 		}
 		if s.OnFailTarget != "" {
 			step.OnFail = &OnFail{Target: s.OnFailTarget}

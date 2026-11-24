@@ -12,6 +12,10 @@ capsule's file, a given path is taken as given):
   facts.py analysis [--capsule DIR] [--analysis artifacts/build/change-analysis.json]
       [--unit-timeout D] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
   facts.py carries [--capsule DIR] [--units artifacts/build/units.json] [--json] [--out PATH]
+  facts.py handoff [--capsule DIR] [--plan artifacts/plan.md]
+      [--units artifacts/build/units.json] [--analysis artifacts/build/change-analysis.json]
+      [--isolation host|container] [--cite TEXT] [--unit-timeout D] [--deadline D]
+      [--log-dir DIR] [--json] [--out PATH]
   facts.py micro-bounds [--capsule DIR] --plan artifacts/fix/evidence.json [--json] [--out PATH]
 
 The task repos are capsule.json's (the claim's) present under repos/;
@@ -32,7 +36,13 @@ work item's decided rulings (every section of its verbatim content —
 each item, numbered across the sections in order of appearance, mapped
 to a unit — an id of units.json, or a bold id of the plan's `## Units`
 when there is no units file — or `none — <reason>`); the units' test
-files count as declared. Details:
+files count as declared. A declared path is repository-root relative, and
+a path relative to a nested project root — a directory carrying its own
+tracked `.polyforge/verify-scope.conf` — names that root's file when the
+change base's or HEAD's committed tree holds it under exactly one such
+root: a repository-root file wins over the relative path, and a relative
+path no single root holds (none, or two roots alike) stays undeclared.
+Details:
   {plan, units_file, unavailable, work_item, decided, unmapped_decided,
    declared_writes: [{path, obligations: [{path, note}], none_reason}],
    undeclared, unchanged_obligations, unchanged_writes, released}
@@ -152,6 +162,23 @@ Exit 2: the plan is unreadable.
 Every kind's result carries `heads` (each task repo's HEAD) and, for build
 --replay, the replays' logs. No kind writes a task repo; git runs hardened
 (pfstep.git). Exit 2 also for an unusable invocation.
+
+handoff — the mechanical facts a build's done gate reads (polyforge#241):
+one `pf-step-result/1` summarising the existing kinds in-process (the one
+implementation, never a second copy) — `build --replay` (D1: a unit's
+commits, its red-state replay), `plan-conformance` (D2: an undeclared
+write, an unchanged coupled obligation, an unmapped decided ruling),
+`carries` (D3) and `analysis` (D4) — plus the two deterministic
+`test_weakened` markers (D5: "adds a skip" and "changes the `carries:`
+header", with no `cite` finding) and the plan's write set against the
+existing test files the diff changed (D6). Details:
+  {checks: {<kind>: <exit>}, hits: [{item, repo, unit, path, reason}],
+   not_judged: [{item, reason}], test_weakened: [<the build kind's hunks>]}
+Exit 0: no hit (a sub-item that could not be judged is recorded in
+not_judged and is no hit). Exit 1: a hit — every deterministic item listed
+in `hits`, the summary naming each one (clipped) — and also a `carries`
+exit 2, which stays not-pass and refuses the hand-off (owner Q3 ruling).
+A sub-item's exit 2 is never a pass for it: it is recorded and named.
 """
 
 import os
@@ -161,12 +188,13 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import argparse  # noqa: E402
+import io  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 import secrets  # noqa: E402
 import shutil  # noqa: E402
 import time  # noqa: E402
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple  # noqa: E402
+from typing import Any, Callable, Collection, Dict, List, Mapping, Optional, Sequence, Set, Tuple  # noqa: E402
 
 from pfstep import container, deadline, duration, git, goglob, gotext, runner, secretpat  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
@@ -183,7 +211,8 @@ BUILD = "build"
 ANALYSIS = "analysis"
 CARRIES = "carries"
 MICRO_BOUNDS = "micro-bounds"
-KINDS = (PLAN_CONFORMANCE, BUILD, ANALYSIS, CARRIES, MICRO_BOUNDS)
+HANDOFF = "handoff"
+KINDS = (PLAN_CONFORMANCE, BUILD, ANALYSIS, CARRIES, MICRO_BOUNDS, HANDOFF)
 
 DEFAULT_PLAN = "artifacts/plan.md"
 DEFAULT_UNITS = "artifacts/build/units.json"
@@ -911,6 +940,33 @@ HUNK_LINES_MAX = 16
 HUNK_LINE_RUNES = 160
 
 
+def _carries_suite(repos_dir: str, repo_name: str, cache: Dict[str, Callable[[str], bool]], path: str) -> bool:
+    """Whether path is an e2e suite of repo_name: its `carries:` line is a
+    suite declaration, not a comment — an npm, python or rust suite, or a
+    `*_test.go` under a Go repository's declared `go_harness` directory
+    (AGENTS.md, polyforge#111); a Go test file outside the harness directory
+    is no suite. Read at the change base; a base that cannot be read treats
+    the file as a suite, so D5 never silently drops a hit (fail-closed,
+    polyforge#241 review r2 N15, r3#1)."""
+    if repo_name not in cache:
+        repo = Repo(repos_dir, repo_name)
+        base, _why = change_base(repo.dir)
+        rules = TestPathRules.at(repo.dir)
+        roots: Dict[str, CarriesRoot] = {}
+
+        def check(p: str) -> bool:
+            if not base:
+                return True  # fail-closed: no base, no silent D5 drop
+            root = repo._carries_root_of(base, gotext.path_dir(p), roots)
+            rel, ok = root.rel(p)
+            if ok and root.is_suite(rel):
+                return True
+            return bool(rules.harness_dir) and p.startswith(rules.harness_dir + "/") and p.endswith("_test.go")
+
+        cache[repo_name] = check
+    return cache[repo_name](path)
+
+
 def weakened_facts(repos_dir: str, units: Sequence[Unit], summary: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """The test_weakened facts of the units (and the ones summary cites)."""
     cite = ""
@@ -919,6 +975,7 @@ def weakened_facts(repos_dir: str, units: Sequence[Unit], summary: str) -> Tuple
         cite = m.group(0)
     weakened: List[Dict[str, Any]] = []
     cited: List[Dict[str, Any]] = []
+    suite_cache: Dict[str, Callable[[str], bool]] = {}
     for u in units:
         if u.why or not u.test_files:
             continue
@@ -929,7 +986,7 @@ def weakened_facts(repos_dir: str, units: Sequence[Unit], summary: str) -> Tuple
                              "reason": "the diff since the test commit is unreadable: " + err})
             continue
         for path, header, lines in diff_hunks(diff):
-            reason = weakening_reason(lines)
+            reason = weakening_reason(lines, _carries_suite(repos_dir, u.repo, suite_cache, path))
             if not reason:
                 continue
             f: Dict[str, Any] = {"unit": u.id, "repo": u.repo, "path": path, "reason": reason}
@@ -964,7 +1021,7 @@ def diff_hunks(diff: str) -> List[Tuple[str, str, List[str]]]:
     return out
 
 
-def weakening_reason(lines: Sequence[str]) -> str:
+def weakening_reason(lines: Sequence[str], carries_in_suite: bool = True) -> str:
     reasons: List[str] = []
     deleted = asserts = 0
     for line in lines:
@@ -975,7 +1032,7 @@ def weakening_reason(lines: Sequence[str]) -> str:
                 asserts += 1
         if line[0] == "+" and _SKIP_ADDED.search(body):
             reasons.append("adds a skip")
-        if _CARRIES_LINE.search(body):
+        if carries_in_suite and _CARRIES_LINE.search(body):
             reasons.append("changes the `carries:` header")
     if deleted > 0:
         r = "deletes or changes %d line(s)" % deleted
@@ -1040,10 +1097,82 @@ def clean_repo_path(v: Any) -> str:
     return s
 
 
+def repo_trees(repos_dir: str, changed: Optional[Dict[str, List[str]]]) -> Tuple[Optional[Dict[str, Dict[str, Any]]], str]:
+    """Each changed repo's nested project roots and the files its committed
+    trees (the change base's and HEAD's) hold: the context a plan's
+    subproject-relative paths resolve against. Only committed trees count —
+    an untracked conf neither makes a root nor moves one. (None, why) when
+    a tree cannot be read."""
+    capsule_dir = os.path.dirname(os.path.abspath(repos_dir))
+    out: Dict[str, Dict[str, Any]] = {}
+    for name in sorted(changed or {}):
+        d = os.path.join(repos_dir, name)
+        ref, unknown = base_ref(capsule_dir, d)
+        if not ref:
+            return None, "repo %s: %s, so the change base cannot be resolved" % (name, unknown)
+        base, err = run_git(d, "merge-base", "HEAD", ref)
+        if err is not None:
+            return None, "repo %s: git merge-base HEAD %s failed: %s" % (name, ref, err)
+        files: Dict[str, bool] = {}
+        for commit in (trim_space(base), "HEAD"):
+            listed, err = run_git(d, "ls-tree", "-r", "-z", "--name-only", commit)
+            if err is not None:
+                return None, "repo %s: %s" % (name, err)
+            for p in listed.split("\x00"):
+                if p:
+                    files[p] = True
+        suffix = "/.polyforge/verify-scope.conf"
+        roots = sorted({p[: -len(suffix)] for p in files if p.endswith(suffix)})
+        out[name] = {"files": set(files), "roots": roots}
+    return out, ""
+
+
+def declared_identities(d: str, repos: Sequence[str],
+                        trees: Optional[Dict[str, Dict[str, Any]]]) -> List[str]:
+    """The identities a plan declaration names besides itself: a path
+    relative to a nested project root names that root's file when exactly
+    one root of its repository (or of the repository its `<repo>/` prefix
+    names) holds it. A path that is itself a repository-root file names
+    only that file — the explicit path wins — and one no single root holds
+    names nothing, so an ambiguous relative path authorizes no file."""
+    if trees is None:
+        return []
+    scope, rel = "", d
+    for name in repos:
+        if d.startswith(name + "/"):
+            scope, rel = name, d[len(name) + 1:]
+            break
+    out: List[str] = []
+    for name in ([scope] if scope else list(repos)):
+        t = trees.get(name) or {}
+        files = t.get("files") or set()
+        canonical = ""
+        if rel in files:
+            canonical = rel
+        else:
+            hits = [r + "/" + rel for r in t.get("roots") or [] if (r + "/" + rel) in files]
+            if len(hits) == 1:
+                canonical = hits[0]
+        if canonical:
+            out.append(name + "/" + canonical if scope else canonical)
+    return out
+
+
+def declaration_changed(d: str, touched: Collection[str], repos: Sequence[str],
+                        trees: Optional[Dict[str, Dict[str, Any]]]) -> bool:
+    """Whether a declared path's file (its explicit identity or the one
+    nested root that owns it) is in the changed set."""
+    return d in touched or any(c in touched for c in declared_identities(d, repos, trees))
+
+
 def fold_plan_conformance(touched_files: Sequence[Any], authored: Sequence[str],
-                          changed: Optional[Dict[str, List[str]]], unavailable: str) -> Dict[str, Any]:
-    """The pure fold: the declared set against the changed files. The
-    answer's lists are None where the Go fold left them nil."""
+                          changed: Optional[Dict[str, List[str]]], unavailable: str,
+                          trees: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """The pure fold: the declared set against the changed files, a
+    declaration's subproject-relative identity resolved through `trees`
+    (the changed repos' committed trees; None = no nested roots, the old
+    repository-root-only reading). The answer's lists are None where the
+    Go fold left them nil."""
     obligations_out: List[Dict[str, Any]] = []
     pc: Dict[str, Any] = {"unavailable": unavailable, "declared_writes": None, "undeclared": None,
                           "unchanged_obligations": None, "unchanged_writes": None, "released": None}
@@ -1097,6 +1226,9 @@ def fold_plan_conformance(touched_files: Sequence[Any], authored: Sequence[str],
         return pc
     changed = changed or {}
     repos = sorted(changed)
+    for d in list(declared):
+        for c in declared_identities(d, repos, trees):
+            declared[c] = True
     touched = set()
     undeclared: List[str] = []
     for name in repos:
@@ -1109,13 +1241,13 @@ def fold_plan_conformance(touched_files: Sequence[Any], authored: Sequence[str],
     released: List[str] = []
     unchanged_obligations: List[str] = []
     for p in obligations:
-        if p in touched:
+        if declaration_changed(p, touched, repos, trees):
             continue
-        if not any(w in touched for w in parents.get(p, [])):
+        if not any(declaration_changed(w, touched, repos, trees) for w in parents.get(p, [])):
             released.append("`%s` — lapsed: no write that declares it is in the diff" % p)
         else:
             unchanged_obligations.append(p)
-    unchanged_writes = [p for p in writes if p not in touched]
+    unchanged_writes = [p for p in writes if not declaration_changed(p, touched, repos, trees)]
     pc["undeclared"] = undeclared or None
     pc["unchanged_obligations"] = unchanged_obligations or None
     pc["unchanged_writes"] = unchanged_writes or None
@@ -2328,7 +2460,10 @@ def plan_conformance(inv: Invocation, args: List[str]) -> int:
     touched = plan_touched_files(raw)
     authored = unit_test_files(units_of(c.repos_dir, c.repos, decls or []))
     changed, reason = changed_files(c.repos_dir)
-    pc = fold_plan_conformance(touched, authored, changed, reason)
+    trees: Optional[Dict[str, Dict[str, Any]]] = None
+    if not reason:
+        trees, reason = repo_trees(c.repos_dir, changed)
+    pc = fold_plan_conformance(touched, authored, changed, reason, trees)
     if pc["unavailable"]:
         d["unavailable"] = pc["unavailable"]
     for k in ("declared_writes", "undeclared", "unchanged_obligations", "unchanged_writes", "released"):
@@ -2358,6 +2493,7 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
     p = _parser(BUILD)
     p.add_argument("--units", default="", help="build's units.json (default: the capsule's " + DEFAULT_UNITS + ")")
     p.add_argument("--replay", action="store_true", help="replay each unit's run on the tree of its test commit")
+    p.add_argument("--cite", default="", help="the findings a build's decisions cite (s<n>#<k>): a test_weakened hunk it names is reported, not judged (polyforge#241)")
     p.add_argument("--isolation", default="", choices=["container", "host"], help="where a replay runs (default: the container when the repo's HEAD carries .polyforge/Dockerfile.verify, else the host)")
     p.add_argument("--unit-timeout", type=_duration, default=DEFAULT_UNIT_TIMEOUT, help="one replay's time limit (under the whole deadline; default 10m) — a unit's self-reported `timeout` in units.json is its own limit instead")
     p.add_argument("--deadline", type=_duration, default=0, help="the whole run's deadline (default: the step's tool window less two minutes)")
@@ -2420,7 +2556,7 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
             bu["run"] = run_json(run)
         units.append(bu)
         entries.append((u, bu))
-    weakened, _ = weakened_facts(c.repos_dir, resolved, "")
+    weakened, _ = weakened_facts(c.repos_dir, resolved, ns.cite)
     d["test_weakened"] = weakened
     if not decls:
         inv.summary = "no unit is reported in %s — a build without a red-then-green unit proves nothing" % units_file
@@ -2759,6 +2895,271 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
 PLAN_LINE = gd.Struct({"repo": gd.STR, "line": gd.STR})
 
 
+def _handoff_child(kind: str, environ: Mapping[str, str]) -> Invocation:
+    """One sub-kind's invocation: its progress lines are dropped, no
+    result file is written — the summary kind writes the one result."""
+    return Invocation(COMMAND, [kind], environ, stdout=io.StringIO(), stderr=io.StringIO())
+
+
+def plan_write_paths(md: str) -> Set[str]:
+    """The plan's `Touched files:` writes (repo-relative paths): D6's
+    declared set — the units' test files are no declaration (owner Q5 A)."""
+    out: Set[str] = set()
+    for f in plan_touched_files(md):
+        if f.get("intent") != "write":
+            continue
+        p = clean_repo_path(f.get("path"))
+        if p:
+            out.add(p)
+    return out
+
+
+def existing_test_hits(capsule_dir: str, repos: Sequence[str], plan_md: str,
+                       changed: Optional[Dict[str, List[str]]], unavailable: str) -> Tuple[List[Dict[str, Any]], str]:
+    """D6 (polyforge#241, AC2): a test file that already exists at the
+    change base and is changed by the build, with no `Touched files:`
+    `(write)` in the plan naming it. A new test file is no existing test;
+    a deleted or renamed-away path is a modification (`--no-renames`).
+    Answers (hits, why the item could not be judged — "" when it could)."""
+    if unavailable:
+        return [], unavailable
+    declared = plan_write_paths(plan_md)
+    hits: List[Dict[str, Any]] = []
+    files = changed or {}
+    for name in sorted(files):
+        d = os.path.join(capsule_dir, "repos", name)
+        if not os.path.isdir(d):
+            continue
+        base, why = change_base(d)
+        if why:
+            return [], "repos/%s: %s" % (name, why)
+        rules = TestPathRules.at(d)
+        for p in files[name]:
+            if not rules.is_test(p):
+                continue
+            if p in declared or (name + "/" + p) in declared:
+                continue
+            if run_git(d, "cat-file", "-e", base + ":" + p)[1] is not None:
+                continue  # absent at the change base: a new test file owes no declaration
+            hits.append(_handoff_hit("D6", "existing test modified but the plan's write set does not declare it",
+                                     repo=name, path=p))
+    return hits, ""
+
+
+def _handoff_hit(item: str, reason: str, repo: str = "", unit: str = "", path: str = "") -> Dict[str, Any]:
+    h: Dict[str, Any] = {"item": item, "reason": reason}
+    if repo:
+        h["repo"] = repo
+    if unit:
+        h["unit"] = unit
+    if path:
+        h["path"] = path
+    return h
+
+
+def _handoff_line(h: Mapping[str, Any]) -> str:
+    """One hit as the refusal names it: its item, repo, unit and path,
+    then its reason (the whole line clipped)."""
+    bits = [str(h.get("item", ""))]
+    if h.get("repo"):
+        bits.append("repos/" + str(h["repo"]))
+    if h.get("unit"):
+        bits.append("unit " + str(h["unit"]))
+    if h.get("path"):
+        bits.append(str(h["path"]))
+    return clip_runes(" ".join(bits) + ": " + str(h.get("reason", "")), 400)
+
+
+def handoff(inv: Invocation, args: List[str], environ: Mapping[str, str],
+            runtime: Optional[container.ContainerRuntime]) -> int:
+    """The mechanical facts a build's done gate reads (polyforge#241):
+    the existing kinds judged in-process — one implementation, never a
+    second copy — plus the deterministic test_weakened markers. A hit
+    exits 1; a sub-item that could not be judged is recorded in
+    not_judged and is no hit, except carries, whose exit 2 stays
+    not-pass and refuses the hand-off."""
+    p = _parser(HANDOFF)
+    p.add_argument("--plan", default="", help="build's plan (default: the capsule's " + DEFAULT_PLAN + ")")
+    p.add_argument("--units", default="", help="build's units.json (default: the capsule's " + DEFAULT_UNITS + ")")
+    p.add_argument("--analysis", default="", help="build's change analysis (default: the capsule's " + DEFAULT_ANALYSIS + ")")
+    p.add_argument("--isolation", default="host", choices=["container", "host"], help="where a unit's red-state replay runs (default: the host, as the build close's own replay line)")
+    p.add_argument("--cite", default="", help="the build's cited findings (a text carrying s<n>#<k>), exempting the hunks it names from D5")
+    p.add_argument("--unit-timeout", type=_duration, default=DEFAULT_UNIT_TIMEOUT, help="one unit replay's time limit (default 10m)")
+    p.add_argument("--deadline", type=_duration, default=0, help="the whole run's deadline (default: the step's tool window less two minutes)")
+    p.add_argument("--log-dir", default="", help="where the replays' logs go (default: logs/ beside --out, else the capsule's runtime-state/facts/<n>)")
+    ns, code = _parsed(inv, p, args)
+    if ns is None:
+        return code
+    try:
+        c = Capsule(ns.capsule)
+    except ValueError as err:
+        return inv.usage(str(err))
+    inv.heads = c.heads()
+    window = ns.deadline if ns.deadline > 0 else deadline.default_deadline_for(environ)
+    deadline_at = time.time() + window / duration.SECOND
+
+    def remaining() -> str:
+        return duration.format(max(0, int((deadline_at - time.time()) * duration.SECOND)))
+
+    common = ["--capsule", c.dir]
+    # the build replay's logs: the run's own --log-dir, else beside --out
+    logs = ns.log_dir
+    if not logs and ns.out:
+        logs = os.path.join(os.path.dirname(ns.out), "logs")
+    build_args = common + (["--units", ns.units] if ns.units else [])
+    build_args += ["--replay", "--isolation", ns.isolation,
+                   "--unit-timeout", duration.format(ns.unit_timeout), "--deadline", remaining()]
+    if logs:
+        build_args += ["--log-dir", logs]
+    if ns.cite:
+        build_args += ["--cite", ns.cite]
+    plan_args = common + (["--plan", ns.plan] if ns.plan else []) + (["--units", ns.units] if ns.units else [])
+    carries_args = common + (["--units", ns.units] if ns.units else [])
+    analysis_args = common + (["--analysis", ns.analysis] if ns.analysis else [])
+    analysis_args += ["--unit-timeout", duration.format(ns.unit_timeout), "--deadline", remaining()]
+    if logs:
+        analysis_args += ["--log-dir", logs]
+
+    checks: Dict[str, int] = {}
+    hits: List[Dict[str, Any]] = []
+    not_judged: List[Dict[str, Any]] = []
+
+    def build_child() -> Tuple[int, Invocation]:
+        child = _handoff_child(BUILD, environ)
+        got = build(child, build_args, environ, runtime)
+        inv.heads.update(child.heads)
+        inv.logs.extend(child.logs)
+        return got, child
+
+    def plain_child(kind: str, fn: Callable[[Invocation, List[str]], int], child_args: List[str]) -> Tuple[int, Invocation]:
+        child = _handoff_child(kind, environ)
+        got = fn(child, list(child_args))
+        inv.heads.update(child.heads)
+        return got, child
+
+    def analysis_child() -> Tuple[int, Invocation]:
+        child = _handoff_child(ANALYSIS, environ)
+        got = analysis(child, analysis_args, environ, runtime)
+        inv.heads.update(child.heads)
+        inv.logs.extend(child.logs)
+        return got, child
+
+    # D1: build --replay — the commits' test-first shape and each unit's
+    # red-state replay.
+    b_code, b_inv = build_child()
+    checks[BUILD] = b_code
+    bd = b_inv.details if isinstance(b_inv.details, dict) else {}
+    if b_code == 2:
+        not_judged.append({"item": "D1", "reason": b_inv.summary})
+    else:
+        units = bd.get("units") or []
+        d1_before = len(hits)
+        if b_code == 1 and not units:
+            hits.append(_handoff_hit("D1", "no unit is reported: a build without a red-then-green unit proves nothing"))
+        for u in units:
+            uid, repo = str(u.get("id", "")), str(u.get("repo", ""))
+            # the unit dict carries a resolution's reason as `unresolved`
+            # (Unit.as_dict); `why`/`commits` are the older spellings
+            why = u.get("unresolved") or u.get("why") or u.get("commits")
+            if why:
+                hits.append(_handoff_hit("D1", str(why), repo=repo, unit=uid))
+                continue
+            rr = u.get("replay") or {}
+            if not rr:
+                continue
+            if rr.get("not_runnable") is not None:
+                hit = rr["not_runnable"]
+                hits.append(_handoff_hit("D1", "its run `%s` could not run at the test commit (not runnable — %s %s: `%s`): no red evidence"
+                                         % (rr.get("line", ""), hit.get("toolchain", ""), hit.get("rule", ""), hit.get("line", "")), repo=repo, unit=uid))
+            elif rr.get("timed_out") and rr.get("limit_kill"):
+                hits.append(_handoff_hit("D1", "its red-state run was killed at its own limit: no red evidence", repo=repo, unit=uid))
+            elif rr.get("red") is False or rr.get("exit_code") == 0:
+                hits.append(_handoff_hit("D1", "its run `%s` exited 0 on the tree of test_commit %s — the test was green before its implementation"
+                                         % (rr.get("line", ""), short_sha(str(rr.get("commit", "")))), repo=repo, unit=uid))
+        if b_code == 1 and len(hits) == d1_before:
+            # build judged something before any replay and no unit dict
+            # carries it (an empty argv, a run naming another repo, a
+            # pre_existing_red base that cannot be named): its exit 1 is
+            # still D1's to refuse, named by build's own summary
+            hits.append(_handoff_hit("D1", "the build's test-first check failed: " + b_inv.summary))
+    weakened = bd.get("test_weakened") or []
+
+    # D2: plan-conformance.
+    p_code, p_inv = plain_child(PLAN_CONFORMANCE, plan_conformance, plan_args)
+    checks[PLAN_CONFORMANCE] = p_code
+    pd = p_inv.details if isinstance(p_inv.details, dict) else {}
+    if p_code == 2:
+        not_judged.append({"item": "D2", "reason": p_inv.summary})
+    else:
+        for path in pd.get("undeclared") or []:
+            hits.append(_handoff_hit("D2", "changed but no unit declares it (plan-conformance undeclared)", path=str(path)))
+        for path in pd.get("unchanged_obligations") or []:
+            hits.append(_handoff_hit("D2", "a declared coupled obligation is unchanged", path=str(path)))
+        for ruling in pd.get("unmapped_decided") or []:
+            hits.append(_handoff_hit("D2", "decided ruling %s is unmapped: %s" % (ruling.get("n"), ruling.get("text"))))
+
+    # D3: carries. Its exit 2 is no pass (owner Q3 B): the hand-off refuses.
+    c_code, c_inv = plain_child(CARRIES, carries, carries_args)
+    checks[CARRIES] = c_code
+    cd = c_inv.details if isinstance(c_inv.details, dict) else {}
+    if c_code == 2:
+        hits.append(_handoff_hit("D3", "not judged (exit 2): " + c_inv.summary))
+    else:
+        for problem in cd.get("problems") or []:
+            hits.append(_handoff_hit("D3", str(problem)))
+
+    # D4: the change analysis's listed tests and selection record.
+    a_code, a_inv = analysis_child()
+    checks[ANALYSIS] = a_code
+    ad = a_inv.details if isinstance(a_inv.details, dict) else {}
+    if a_code == 2:
+        not_judged.append({"item": "D4", "reason": a_inv.summary})
+    else:
+        for ent in ad.get("entries") or []:
+            if ent.get("status") == "fail":
+                hits.append(_handoff_hit("D4", "%s: %s" % (ent.get("id", ""), ent.get("problem", "")), repo=str(ent.get("repo", ""))))
+        for sel in ad.get("selected") or []:
+            if sel.get("status") == "fail":
+                hits.append(_handoff_hit("D4", "%s:selected: %s" % (sel.get("repo", ""), sel.get("problem", "")), repo=str(sel.get("repo", ""))))
+
+    # D6: the plan's write set against the existing test files the diff changed.
+    plan_path = c.path(ns.plan, DEFAULT_PLAN)
+    changed, changed_why = changed_files(c.repos_dir)
+    try:
+        raw_plan = read_text(plan_path)
+    except OSError as err:
+        raw_plan, changed_why = "", changed_why or ("build's plan is unreadable: %s" % gotext.os_error("open", err))
+    d6_hits, d6_why = existing_test_hits(c.dir, c.repos, raw_plan, changed, changed_why)
+    hits.extend(d6_hits)
+    if d6_why:
+        not_judged.append({"item": "D6", "reason": d6_why})
+
+    # D5: the two deterministic test_weakened markers, no cite finding.
+    for hunk in weakened:
+        if hunk.get("cite"):
+            continue
+        reason = str(hunk.get("reason", ""))
+        if "adds a skip" in reason or "changes the `carries:` header" in reason:
+            hits.append(_handoff_hit("D5", reason, repo=str(hunk.get("repo", "")),
+                                     unit=str(hunk.get("unit", "")), path=str(hunk.get("path", ""))))
+
+    d: Dict[str, Any] = {"checks": checks, "hits": hits, "not_judged": not_judged, "test_weakened": weakened}
+    inv.details = d
+    named = len(hits)
+    if hits:
+        shown = [_handoff_line(h) for h in hits[:8]]
+        tail = ""
+        if named > len(shown):
+            tail = " — and %d more (the whole list in the result file)" % (named - len(shown))
+        inv.summary = "%d hand-off gate hit(s): %s%s" % (named, "; ".join(shown), tail)
+        return 1
+    if not_judged:
+        inv.summary = "every mechanical fact passes; %d sub-item(s) not judged: %s" % (
+            len(not_judged), "; ".join("%s: %s" % (n.get("item"), clip_runes(str(n.get("reason", "")), 200)) for n in not_judged))
+        return 0
+    inv.summary = "every mechanical fact passes (D1–D6; %d test_weakened hunk(s) left for review)" % len(weakened)
+    return 0
+
 def micro_bounds(inv: Invocation, args: List[str]) -> int:
     p = _parser(MICRO_BOUNDS)
     p.add_argument("--plan", default="", help="the fix step's evidence plan, a JSON array [{repo, line}] (required)")
@@ -2827,8 +3228,10 @@ def main(argv: Optional[List[str]] = None, environ: Optional[Mapping[str, str]] 
             code = analysis(inv, rest, env, runtime)
         elif kind == CARRIES:
             code = carries(inv, rest)
-        else:
+        elif kind == MICRO_BOUNDS:
             code = micro_bounds(inv, rest)
+        else:
+            code = handoff(inv, rest, env, runtime)
     except SystemExit as e:
         # argparse: --help (0) or a usage error (2) — no result file
         return int(e.code or 0) if not isinstance(e.code, str) else 2

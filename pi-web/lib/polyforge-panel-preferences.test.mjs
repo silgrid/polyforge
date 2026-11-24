@@ -78,4 +78,36 @@ test("the module and the hook stay browser-only: no fetch, no server write, both
   assert.match(hook, /addEventListener\(POLYFORGE_PREFERENCES_EVENT, onChange\)/);
   assert.match(hook, /useSyncExternalStore\(subscribe, readTitleLength, defaultTitleLength\)/, "the server snapshot is the default");
   assert.match(hook, /useSyncExternalStore\(subscribe, readPollInterval, defaultPollInterval\)/);
+  assert.match(hook, /useSyncExternalStore\(subscribe, readNotificationsEnabled, defaultNotificationsEnabled\)/, "the notification switch follows the same store, live");
+});
+
+test("the browser notification switch defaults on and stores a boolean", () => {
+  const NOTIFY = prefs.POLYFORGE_NOTIFICATIONS;
+  assert.equal(typeof NOTIFY, "object", "the notification preference spec is exported");
+  assert.equal(NOTIFY.key, "pi-web:polyforge-notifications");
+  assert.equal(NOTIFY.defaultValue, true, "notifications are on by default");
+  assert.equal(typeof prefs.readPolyforgeNotificationPreference, "function", "the reader is exported");
+  assert.equal(typeof prefs.writePolyforgeNotificationPreference, "function", "the writer is exported");
+
+  const stored = memoryStorage({ [NOTIFY.key]: "false" });
+  withWindow(stored, () => {
+    assert.equal(prefs.readPolyforgeNotificationPreference(NOTIFY), false, "a stored false turns the switch off");
+    assert.equal(prefs.writePolyforgeNotificationPreference(NOTIFY, true), true);
+    assert.equal(stored.data.get(NOTIFY.key), "true");
+  });
+  withWindow(memoryStorage({ [NOTIFY.key]: "true" }), () => {
+    assert.equal(prefs.readPolyforgeNotificationPreference(NOTIFY), true);
+  });
+  withWindow(memoryStorage({ [NOTIFY.key]: "bogus" }), () => {
+    assert.equal(prefs.readPolyforgeNotificationPreference(NOTIFY), true, "an unreadable value falls back to on");
+  });
+  withWindow(memoryStorage(), (events) => {
+    assert.equal(prefs.readPolyforgeNotificationPreference(NOTIFY), true, "absent means on");
+    assert.equal(prefs.writePolyforgeNotificationPreference(NOTIFY, false), false);
+    assert.deepEqual(events, ["pi-web:polyforge-preferences"], "a save announces itself to the open panel");
+  });
+  withWindow(throwing, () => {
+    assert.equal(prefs.readPolyforgeNotificationPreference(NOTIFY), true, "a refused read keeps the default");
+    assert.equal(prefs.writePolyforgeNotificationPreference(NOTIFY, false), null, "a refused write never throws");
+  });
 });

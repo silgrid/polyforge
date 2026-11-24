@@ -29,6 +29,15 @@ type Defaults struct {
 	// (workflow contract v2 §5.2; default DefaultAskWarmWindow; [daemon]
 	// ask_warm_window).
 	AskWarmWindow time.Duration
+	// AskAutoReplyEnabled is the Cell's automatic-reply switch for a
+	// low-star question card (polyforge#239; [daemon]
+	// ask_auto_reply_enabled, default on). nil = unset (on).
+	AskAutoReplyEnabled *bool
+	// AskAutoReplyTimeout is how long a low-star card may wait before the
+	// daemon answers it by its standing authorization (polyforge#239;
+	// [daemon] ask_auto_reply_timeout, default 30m; 0 = unset). A
+	// non-positive value resolves to the documented default.
+	AskAutoReplyTimeout time.Duration
 	// SlowModelMedianLatency and SlowModelP90Latency are the slow-model
 	// judgement's single-call bounds (polyforge#51, [daemon]
 	// slow_model_median_latency / slow_model_p90_latency; zero = the
@@ -40,6 +49,11 @@ type Defaults struct {
 // DefaultAskWarmWindow is the documented warm window of a step awaiting
 // the owner: ~15 minutes, then the idle process exits (owner ruling Q9).
 const DefaultAskWarmWindow = 15 * time.Minute
+
+// DefaultAskAutoReplyTimeout is the documented wait after which a
+// low-star question card (every row ★/★★) is answered by the daemon's
+// standing authorization (owner ruling 2026-11-23; polyforge#239).
+const DefaultAskAutoReplyTimeout = 30 * time.Minute
 
 // The slow-model judgement's single-call latency bounds (polyforge#51):
 // rule 4 blames the model only when the dying dispatch itself ran at
@@ -77,6 +91,9 @@ func (d Defaults) Fill() Defaults {
 	}
 	if d.AskWarmWindow <= 0 {
 		d.AskWarmWindow = DefaultAskWarmWindow
+	}
+	if d.AskAutoReplyTimeout <= 0 {
+		d.AskAutoReplyTimeout = DefaultAskAutoReplyTimeout
 	}
 	if d.SlowModelMedianLatency <= 0 {
 		d.SlowModelMedianLatency = DefaultSlowModelMedianLatency

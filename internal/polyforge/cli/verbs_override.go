@@ -32,6 +32,8 @@ var cmdOverride = &Command{
 		fs.String("step", "", "the step id the change applies to (required for every action; without it the command is the view)")
 		fs.String("models", "", "set the step's overlay model chain, comma-separated in order; each is <harness>:<model>[:<effort>] with harness pi or claude (it outranks every other source: --models, the workspace yaml, the bundle)")
 		fs.Bool("clear-models", false, "clear the step's overlay model chain (the step composes from its usual sources again)")
+		fs.String("tier", "", "set the step's overlay capability-tier name from the Host [step_tiers] catalog (expanded to that tier's candidates at dispatch time; an explicit --models outranks it; `default` means unset)")
+		fs.Bool("clear-tier", false, "clear the step's overlay capability tier (the step composes from its usual sources again)")
 		fs.Bool("skip", false, "switch the step off (only a step the lane declares skippable; it is never dispatched and records skipped)")
 		fs.Bool("unskip", false, "clear the step's skip switch (it dispatches again)")
 		fs.String("param", "", "set one param the lane declares on the step, <name>=<value> (the value is one line of at most 256 bytes, empty allowed); it outranks the workspace yaml and the lane default from the step's next dispatch")
@@ -46,12 +48,14 @@ var cmdOverride = &Command{
 		step := stringFlag(fs, "step")
 		setModels := stringFlag(fs, "models") != ""
 		clearModels := boolFlag(fs, "clear-models")
+		tier := stringFlag(fs, "tier")
+		clearTier := boolFlag(fs, "clear-tier")
 		skip := boolFlag(fs, "skip")
 		unskip := boolFlag(fs, "unskip")
 		param := stringFlag(fs, "param")
 		clearParam := stringFlag(fs, "clear-param")
 		actions := 0
-		for _, on := range []bool{setModels, clearModels, skip, unskip, param != "", clearParam != ""} {
+		for _, on := range []bool{setModels, clearModels, tier != "", clearTier, skip, unskip, param != "", clearParam != ""} {
 			if on {
 				actions++
 			}
@@ -60,7 +64,7 @@ var cmdOverride = &Command{
 			return fmt.Errorf("override: --step is required for every action")
 		}
 		if actions > 1 {
-			return fmt.Errorf("override: exactly one action per call (--models, --clear-models, --skip, --unskip, --param or --clear-param)")
+			return fmt.Errorf("override: exactly one action per call (--models, --clear-models, --tier, --clear-tier, --skip, --unskip, --param or --clear-param)")
 		}
 		who := stringFlag(fs, "by")
 		if who == "" {
@@ -77,6 +81,10 @@ var cmdOverride = &Command{
 				req.Models = m
 			case clearModels:
 				req.ClearModels = true
+			case tier != "":
+				req.Tier = tier
+			case clearTier:
+				req.ClearTier = true
 			case skip:
 				s := true
 				req.Skip = &s
@@ -131,6 +139,18 @@ func renderOverrideView(w io.Writer, v *protocol.OverrideView) {
 		if s.Models != nil {
 			fmt.Fprintf(w, " overlay-models=%s (by %s)", strings.Join(s.Models, ","), s.ModelsBy)
 		}
+		if s.Tier != "" {
+			fmt.Fprintf(w, " overlay-tier=%s (by %s)", s.Tier, s.TierBy)
+			switch s.TierFallback {
+			case "missing":
+				fmt.Fprintf(w, " [not in the catalog: falls to the next layer]")
+			case "empty":
+				fmt.Fprintf(w, " [the catalog tier is empty: falls to the next layer]")
+			}
+			if s.Models != nil {
+				fmt.Fprintf(w, " [masked by overlay-models]")
+			}
+		}
 		if s.Skip != nil {
 			fmt.Fprintf(w, " overlay-skip=%v (by %s)", *s.Skip, s.SkipBy)
 		}
@@ -140,8 +160,15 @@ func renderOverrideView(w io.Writer, v *protocol.OverrideView) {
 		if s.Pending {
 			fmt.Fprintf(w, " pending")
 		}
+		// Q13 A: the source shows even when the effective chain is empty
+		// (a declared-empty level still governs, and "no list anywhere" is
+		// the harness adapter's default — never a silently hidden source).
 		if len(s.Effective) > 0 {
 			fmt.Fprintf(w, "\n              next dispatch: %s (%s)", strings.Join(s.Effective, ","), s.Source)
+		} else if s.Source != "" {
+			fmt.Fprintf(w, "\n              next dispatch: (none) (%s)", s.Source)
+		} else {
+			fmt.Fprintf(w, "\n              next dispatch: (none — the harness adapter's default model)")
 		}
 		fmt.Fprintln(w)
 	}
@@ -173,6 +200,14 @@ func renderOverrideWrite(w io.Writer, res *protocol.OverrideWriteResult, req pro
 	case req.ClearParam != "":
 		by = req.Operator
 		fmt.Fprintf(w, "overlay param %s cleared", req.ClearParam)
+	case req.Tier != "":
+		// polyforge#81: the tier aspect, never "overlay models"/"cleared"
+		// (review r1#2); its operator is the tier aspect's own.
+		by = res.Step.TierBy
+		fmt.Fprintf(w, "overlay tier=%s", req.Tier)
+	case req.ClearTier:
+		by = req.Operator
+		fmt.Fprintf(w, "overlay tier cleared")
 	case res.Step.Models != nil:
 		fmt.Fprintf(w, "overlay models=%s", strings.Join(res.Step.Models, ","))
 	case res.Step.Skip != nil:

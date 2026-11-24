@@ -21,8 +21,10 @@ pf submit <id> [--priority low|normal|high|urgent] [--models <harness>:<model>[:
 ```
 
 `--priority` defaults to `normal`. `--models` is a manual model-candidate
-list for this work item: it is the candidate chain of every step (advancing
-on model-class failures like any list), kept by this daemon only (across its
+list for this work item: it is the candidate chain of every step below the
+per-step overlay (a `pf override --models` chain or an overlay capability
+tier set later outranks it; advancing on model-class failures like any
+list), kept by this daemon only (across its
 restarts and `pf resume`); a re-claim on another machine uses that machine's
 settings. Non-empty, comma-separated, no empty
 or duplicate candidates, else a local bad-input refusal. Every candidate is
@@ -33,8 +35,9 @@ not take is refused up front, naming it. The recommended candidates live in
 cli.toml's `[step_tiers]` catalog (the step tier list, `pf config list --host`;
 doctor's `step tiers catalog` row warns when a written candidate sits outside
 it) — the catalog recommends, it never gates: a candidate it does not name
-still submits. Syntax and precedence (`--models`
-is the highest level): the "Model candidates" subsection of
+still submits. Syntax and precedence (the
+per-step overlay, an overlay capability tier included, is the highest
+level; `--models` is the highest bulk layer): the "Model candidates" subsection of
 docs/extending.md (routing to docs/reference/config.md's `steps:`
 section, the one authority). Before the daemon is
 involved, the CLI prechecks the work item against Core with the caller's own
@@ -169,6 +172,19 @@ such a ticket with a plain `pf submit` (polyforge#47).
   `pf file edit` (`pf file edit <id> --content @file`); on the owner's
   explicit skip, one dated line 「免分析（<date>，<who>）」 goes in that
   section. Then submit.
+- **步骤能力档建议 (polyforge#81)**: when the prompt attaches the Host
+  `[step_tiers]` catalog and the lane's step table, the report's separate
+  `### 步骤能力档建议` section (after `### 升级 epic 建议`) recommends one
+  catalog tier per step with a reason, or 「不设」. It is text only: the
+  confirmation and `pf file analysis confirm` set nothing. After the owner
+  confirms and the ticket is submitted, the session offers the
+  recommendations — each step's tier is set with `pf override <id> --step
+  <step-id> --tier <name>` (the owner may change or skip any), one step at a
+  time; a failed set stops the run and shows the daemon's reason, and the
+  ticket is not submitted as "fully configured". A queued ticket's tier
+  rides this daemon's local pending record (only a claim here inherits it);
+  an explicit `pf override --models` chain on a step outranks its tier.
+  `--tier default` means "unset" and must itself be in the catalog.
 - **The boundary against grilling**: the analysis only establishes facts —
   what the code does, what memory answers, which existing tests and docs
   assert the old behavior — and lists the open questions with a

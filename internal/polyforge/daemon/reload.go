@@ -190,6 +190,10 @@ func (d *Daemon) reloadConfig() (*cli.ConfigReloadResponse, error) {
 	// applied/live (the classification is the proof no restart is needed),
 	// and only the Host's (the default Cell's) reload reports it.
 	if d.profile() == cellcfg.DefaultProfile && !reflect.DeepEqual(prev.StepTiers, newCfg.StepTiers) {
+		// polyforge#81: the catalog now has a daemon consumer — the
+		// dispatch-time expansion — so the Host's reload swaps the live
+		// snapshot. A named Cell's reload never reports or writes it.
+		d.live.SetStepTiers(newCfg.StepTiers)
 		add(cli.StepTiersLabel, cli.ConfigLive, "applied", "")
 	}
 	mappingChanged := !d.plan().Equal(newCfg.Mapping)
@@ -286,6 +290,10 @@ func (d *Daemon) applyLive(key string, cfg cli.Config) error {
 		d.live.SetClaudeBin(cfg.ClaudeBin)
 	case "step_timeout":
 		d.live.SetStepTimeout(cfg.Daemon.StepTimeout)
+	case "ask_auto_reply_enabled":
+		d.live.SetAskAutoReplyEnabled(cfg.Daemon.AskAutoReplyEnabled)
+	case "ask_auto_reply_timeout":
+		d.live.SetAskAutoReplyTimeout(cfg.Daemon.AskAutoReplyTimeout)
 	case "stall_window":
 		d.live.SetStallWindow(cfg.Daemon.StallWindow)
 	case "agent_language":
@@ -396,6 +404,10 @@ func configValueChanged(newCfg, baseline cli.Config, key string) bool {
 		return newCfg.ClaudeBin != baseline.ClaudeBin
 	case "step_timeout":
 		return newCfg.Daemon.StepTimeout != baseline.Daemon.StepTimeout
+	case "ask_auto_reply_enabled":
+		return !sameBoolPtr(newCfg.Daemon.AskAutoReplyEnabled, baseline.Daemon.AskAutoReplyEnabled)
+	case "ask_auto_reply_timeout":
+		return newCfg.Daemon.AskAutoReplyTimeout != baseline.Daemon.AskAutoReplyTimeout
 	case "stall_window":
 		return newCfg.Daemon.StallWindow != baseline.Daemon.StallWindow
 	case "harness_root":
@@ -519,4 +531,13 @@ func keySectionOf(key string) string {
 		return "daemon"
 	}
 	return ""
+}
+
+// sameBoolPtr reports whether two optional booleans are the same value
+// (nil = unset, distinct from an explicit false).
+func sameBoolPtr(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }

@@ -249,7 +249,9 @@ test("one cli.toml card holds the top-level, [daemon] and [summarize] zones, eac
   assert.match(source, /flat: "",\s*\n\s*daemon: " \[daemon\]",\s*\n\s*model: " \[model\]",\s*\n\s*summarize: " \[summarize\]",/);
   assert.match(source, /<p className="polyforge-config-zone-title">\{`\$\{file\}\$\{ZONE_SECTION\[zone\.id\]\}`\}<\/p>/);
   assert.match(source, /const file = polyforgeCellFileName\(profile\);/, "the file is the Cell's own (cli.toml / cli-<profile>.toml)");
-  assert.match(source, /<div key=\{zone\.id\} className=\{`polyforge-config-zone is-\$\{zone\.id\}`\}>/);
+  // polyforge#257 r1#2: the zone id is a data attribute, not a class with no
+  // rule — every className a settings component renders must resolve.
+  assert.match(source, /<div key=\{zone\.id\} className="polyforge-config-zone" data-zone=\{zone\.id\}>/);
   // One card: one section opens before the zone loop, the loop lives inside it.
   const cli = source.slice(source.indexOf('className="polyforge-config-card polyforge-config-cli"'), source.indexOf("the connection-key confirmation renders"));
   assert.ok(cli.length > 0, "the cli.toml card exists");
@@ -1090,10 +1092,17 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
       "@/lib/polyforge-cells-pure": modulePath("lib/polyforge-cells-pure.ts"),
       "@/lib/display-path": modulePath("lib/display-path.ts"),
       "@/lib/polyforge-panel-preferences": modulePath("lib/polyforge-panel-preferences.ts"),
+      // polyforge#240: PolyforgeConfig's notification card imports the
+      // decision notification vocabulary; the alias table is controlled.
+      "@/lib/polyforge-notifications": modulePath("lib/polyforge-notifications.ts"),
       "@/hooks/usePolyforgePanelPreferences": modulePath("hooks/usePolyforgePanelPreferences.ts"),
       "@/hooks/usePolyforgeDisclosure": modulePath("hooks/usePolyforgeDisclosure.ts"),
       "@/lib/polyforge-disclosure": modulePath("lib/polyforge-disclosure.ts"),
       "@/lib/polyforge-install-pure": modulePath("lib/polyforge-install-pure.ts"),
+      // polyforge#256: the install card's browser-safe version comparator is a
+      // new edge of PolyforgeConfig.tsx's graph; the controlled alias table
+      // needs its entry or the picker test dies with MODULE_NOT_FOUND.
+      "@/lib/polyforge-version": modulePath("lib/polyforge-version.ts"),
       // polyforge#177's install card's sibling: PolyforgeConfig.tsx imports
       // ./ComponentsUpdateCard, which imports this client. The alias table is
       // controlled (main #151), so the new edge needs its entry here or the

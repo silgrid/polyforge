@@ -1062,9 +1062,9 @@ changed.
 
 ## v0.2.4, review-firstpass delivery metrics and trial arms (polyforge#209)
 
-- `tools/review-firstpass --events <events-dir>` adds the delivery block over a Cell's exported event files: the develop lane's completed run set (an absent event file is `events missing`, its event fields `unknown`; events without a completed terminal are `not completed (excluded)`), wall clock median and nearest-rank p90, owner-wait-adjusted effective time, per-file delivery time (approved size = the first build section's start to the last build before the first sync; git numstat across the repos), rework share (every rewind's named gate to that gate's next `step_done`; a dispatch ends at its step's `step_done`/`step_failed`/`gate_verdict`, the next same-step `step_started`, a rewind or the terminal, with the owner wait inside it subtracted), first pass, infra failures per model+effort (a `step_failed` owned by the same step's most recent `step_started`) and model-class candidate switches with the 503 subcount. A ticket with no measured build dispatch is `unknown`; a missing transcript or an empty window is that dispatch's unknown, never an estimated number.
+- `tools/review-firstpass --events <events-dir>` adds the delivery block over a Cell's exported event files: the develop lane's completed run set (an absent event file is `events missing`, its event fields `unknown`; events without a completed terminal are `not completed (excluded)`), wall clock median and nearest-rank p90, owner-wait-adjusted effective time, per-file delivery time (approved size = the first build section's start to the last build before the first sync; git numstat across the repos), rework share (all gates' rewind windows — every rewind's named gate to that gate's next `step_done` — merged into one union, each dispatch counted once however many windows overlap; a dispatch ends at its step's `step_done`/`step_failed`/`gate_verdict`, the next same-step `step_started`, a rewind or the terminal, with the owner wait and any coordinator pause inside it subtracted once), first pass, infra failures per model+effort (a `step_failed` owned by the same step's most recent `step_started`) and model-class candidate switches with the 503 subcount. A ticket with no measured build dispatch is `unknown`; a missing transcript or an empty window is that dispatch's unknown, never an estimated number.
 - The cohort manifest gains `"arms": {"<arm>": ["<capsule>", ...]}`: each arm prints the same tier / infra / switch / estimate summary, one detail row per run in the manifest's order, and the missing names (counted, excluded). An arm uses the delivery block's run set: develop only, a completed terminal or an absent event file enters, a run with events but no completed terminal is named `not completed (excluded)` and stays out of every number. Without `--events` the arm keeps size and first pass, the event fields are `unknown`, and the infra, switch and estimate lines say `n/a (no events dir)`.
-- The estimate line is read only inside `## 分析` -> `### 1.`, one `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per repository; a malformed or duplicated line voids that repository only; the summary counts `estimate unknown` apart, with its names (the shared samples are polyforge#213's `internal/contracttest/testdata/analysis_estimate_lines.tsv`).
+- The estimate line is read only inside `## 分析` -> `### 1.`, one `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per repository; a line that starts with `估算` but is not a strict estimate line (`估算依据：…`) is a description and is ignored, content inside a fenced code block and the whole `## 历次分析` archive is ignored, and a malformed or duplicated line voids that repository only; the summary counts `estimate unknown` apart, with its names (the shared samples are polyforge#213's `internal/contracttest/testdata/analysis_estimate_lines.tsv`).
 
 What a project must change — nothing: the tool is read-only, its new output is gated by `--events` / `arms`, and the pre-existing report and CSV stay byte-identical without them.
 
@@ -1502,3 +1502,67 @@ dataLayout 字段，由构建时的 seedtool 与组装器从本构建读取的 c
 不声明、也不被机械判定：回退到它们前先备份并遵循对应版本的迁移说明。
 manifest schema 不是数据库兼容性的证明。组件卷首启与 compose 接线由
 84-components-C 提供。
+
+## v0.2.4, 工作站发版镜像（polyforge#86）
+
+发版现在在 AIHub 镜像之外同时构建并推送本地运行（工作站）镜像
+`ghcr.io/silgrid/polyforge-workstation:<tag>`：buildx 一次构建 linux/amd64 与
+linux/arm64 双架构，构建在占版本之前（进 buildx 缓存——占版本之前不发布任
+何东西），推送在占版本之后；index digest 作为新资产 `workstation-image.digest`
+发布，进 SHA256SUMS 与 release-manifest.json。`release.sh --verify` 核对 index
+digest 与两个平台，并对公开渠道用空 `DOCKER_CONFIG` 做一次匿名读取。全新发
+版遇到任一镜像标签已存在即在占版本之前拒绝；续发按镜像各自保留已在
+registry 的、只补缺的；预检在占版本之前检查 buildx 与 arm64 binfmt。内部
+`-gmi` 线必须显式设置 `RELEASE_WORKSTATION_IMAGE`（未设即拒绝），把
+`vX.Y.Z-gmi.N` 推到指定仓库。镜像自带宿主侧文件（compose.yaml、seccomp 及
+其 SHA、Caddyfile、smoke.sh，位于镜像内 /opt/polyforge/host-files），一行
+`docker run --rm --entrypoint tar <镜像>:<版本> -C /opt/polyforge/host-files -cf - . | tar -xf -`
+导出——安装与升级只需镜像地址加版本号，不需要 gh；GHCR 首次推送会建私有
+包，org owner 需一次性把公开包改成公开。
+## v0.2.4, review-firstpass 阻断项明细与疑似误报率（polyforge#242）
+
+`tools/review-firstpass` 在 `--events` 下新增阻断项段落：遍历 capsule 的
+`artifacts/review.md` git 版本链（没有可读历史时回退到 handoff 的盖章
+review 节，两者不叠加），逐条提取阻断项，按 `r<n>#<k>` 关联后续轮次和
+owner 的 asks.jsonl 裁定，给出结局（修复后通过、反驳成立、owner 改判、
+撤回原因不明、无法判定）、按类别与按模型的疑似误报率，以及无法判定按
+原因计数和无法解析的 FAIL 版本数。stdout 只打印汇总与无法判定的计数；
+同时给 `--csv` 时另写 `<csv>.blocking.csv`，既有 CSV 不加列。这是离线
+只读工具，不需要迁移动作。
+
+## v0.2.4, build 交 done 前的机械事实闸（polyforge#241）
+
+develop 的 build 新增 `facts_proof` 车道键：交 done 前跑 `facts.py handoff`
+（每改动仓库一次，写 `artifacts/build/handoff-facts/<repo>.json`），把
+`build --replay`、`plan-conformance`、`carries`、`analysis` 与
+`test_weakened` 的确定标记（新增 skip、改 `carries:` 头）汇总成一份
+`pf-step-result/1`；任一确定项命中即拒收 done 并逐项返还（含计划 write set
+未声明的已有测试文件），判不定的子项记 `not_judged`（`carries` 的 exit 2
+仍拒收）。review 重算同一份事实：交接闸已覆盖的机械项单独不构成阻断，命中
+只记 non-blocking 并注明「交接闸本应拦下」；闸被绕过或伪造则升级为
+blocking `guarantee`。
+
+## v0.2.4, 低星级问题卡的自动按推荐继续（polyforge#239）
+
+owner 2026-11-23 授权：步骤问题卡（`pf step ask` 的四列表）里每一行的
+`重点关注程度` 都是 ★ 或 ★★ 时，若 T0（该 dispatch 首次进入
+`awaiting_owner` 的持久时刻）+ 超时（默认 30 分钟）到期仍无 owner 回复，
+daemon 以保留身份 `daemon:auto-recommendation` 追加一条 reply，逐行采纳
+「推荐选项」，并写明实际等待时长与授权日期。自动回复不是 owner 授权：
+`--per-owner`、waive/rewind/强制 fail、attrs 与免计数都不认它；决策流出现
+固定条目「已自动按推荐继续」。任一行 ≥ ★★★、星级缺失或不可解析、不是
+唯一一张非 fenced 严格四列表、没有可信 T0、该步骤是 gate（review、
+owner-review、人工 merge、gate FAIL 等）、该步骤声明 `protected_stop`、
+车道无法验证（daemon 从 `workflows/` 枚举已发布车道），或工单带
+`confirm_plan: true`（宽松识别）时，一律继续等人。重启保留原 T0，并从
+reply 补齐缺失的 `auto_answered` 事件；关闭开关或改超时后下一次判断即时生效。
+
+两个 Cell 级 live 配置键（`[daemon]`，经 `pf config set` 写入；unset 即默认）：
+
+- `ask_auto_reply_enabled`：unquoted `true` / `false`，默认 `true`。
+- `ask_auto_reply_timeout`：quoted Go duration，> 0，默认 `30m`。
+
+升级动作：无。取新的 pf 即生效；已有等待若没有本版本写入的 `awaiting`
+记录，不会自动回复（保守边界）。`workflows/_shared/batch_questions.md` 与
+`skills/output-format/SKILL.md` 已改写为「星级会被机械读取、如实打星；
+取消 / 放弃类问题必须 ≥ ★★★」。

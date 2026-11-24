@@ -38,7 +38,7 @@ owner only in the cases item 3 names, and judge the plan; without sub-agents, do
    behaviour its test observes, how its expected values are derived independently of the implementation,
    the change it catches — the bar below), `Touched files: <path> (write|read), ...` and `Coupled
    obligations:` (what must change with each write — the repo's `AGENTS.md` names its known couplings —
-   or `none` and why); `## Coverage` — per criterion `test` (its unit's test), `existing` (the test
+   or `none` and why; a declared path is repository-root relative, and a path relative to a nested project root — a directory carrying its own tracked `.polyforge/verify-scope.conf` — names that root's file when exactly one root holds it, so an ambiguous relative path must be written repository-root relative); `## Coverage` — per criterion `test` (its unit's test), `existing` (the test
    already pinning it) or `doc` (the file and its validator) — the table your skill gives — and for a
    user-visible criterion its e2e scenario or one line why a unit test suffices. The plan carries a
    `## 分析对照` section beside `## Units` — its own `##` heading, never inside it (the plan-conformance
@@ -117,7 +117,7 @@ doc-type criterion gets no red test and no unit: commit the change, run its vali
 
 ## 3c. Close and 3d. Self-review
 
-After the last commit, run the fast checks over the whole change (the written command once per touched repo) and every unit test targeted, then the written unit check over the whole
+The close's order is fixed: the scoped selection green, then the facts, then the self-review, then the hand-off. After the last commit, run the fast checks over the whole change (the written command once per touched repo) and every unit test targeted, then the written unit check over the whole
 `artifacts/build/units.json` (the same command with no `--unit`) (the full bar is `verification`'s).
 Then, last, run the fast-check proof line once per touched repo — the same fast check with `--phase fast`, the final write of `artifacts/build/fast-checks/<repo>.json`, so each result's
 `heads` is the HEAD the hand-off gate compares against (the tree is unchanged since the whole-change run, so every green command is reused):
@@ -128,11 +128,12 @@ The daemon reads that file for every repo build changed and refuses `done` until
 not this change's, the check passes; what is left is the owner's (`pf step ask`, and on the
 release hand off `done` with `--per-owner <the reply's at>`; the stamp records it).
 Then the build close's scoped selection — the same
-light-tier selection verification plans, one shared implementation, over the final tree — run in the repository's declared
-verification image when its HEAD carries `.polyforge/Dockerfile.verify` (the same isolation verification runs — one container
-for the engine asks, the selected commands, the re-runs and the baseline's base worktree, the image and tool caches it
-shares — while a repo without the declaration keeps the host close exactly as before, the per-unit runs always on the
-host), the result file recording which isolation ran (`details.isolation`, `host`/`container`) — for a work item whose verification runs the light tier (an integration batch's fix ticket
+light-tier selection verification plans, one shared implementation, over the final tree, group by group (each
+group's own commands in plan order: a command's group is the group its report bound it to else its report's root,
+the groups side by side at most `--parallel N` at once, default 2, one group or `--parallel 1` the serial plan) —
+run in the repository's declared verification image when its HEAD carries `.polyforge/Dockerfile.verify` (the same isolation verification runs — one container per group for the selected commands, the engine asks, the re-runs and the
+baseline's base worktree in the close's own container, the image and tool caches it shares — while a repo without the declaration keeps the host
+close exactly as before, the per-unit runs always on the host), the result file recording which isolation ran (`details.isolation`, `host`/`container`) — for a work item whose verification runs the light tier (an integration batch's fix ticket
 runs the full bar and closes without one): `"$PF_PYTHON"
 "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --unit-runs artifacts/build/units.json --reuse
 artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json` once per touched
@@ -141,20 +142,19 @@ root's subtree tree hash, the declared prerequisites — matches is evidence, no
 close consumes no `--reuse` green evidence, the image and tool caches stay shared and an unusable file is still exit 2);
 the existing tests it selects are the ones verification will select, a red one getting the one targeted
 re-run the per-unit bar gives and the same baseline triage (`--unit-runs` protecting this change's own test commits) — all
-of it in the one container when one was declared: a container the close cannot build, start or keep is the run's error
+the selected commands in each group's own container when one was declared, the serial phases in the close's own
+container (one container per group: a container's reap kills every process in it after a command): a container the close cannot build, start or keep is the run's error
 (exit 2, never a red of the change's, never a host stand-in). A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done` without the owner's ruling —
 with one exception — a `pass`-verdict result whose selection status is `pre_existing` (every
 entry of its `reds[]` pre-existing on the `details.baseline` the run names): not this change's,
 handed off `done` citing the result file, the shared validator's green-equivalent evidence.
 Any other red or `incomplete`: fix the change and re-run it — a real environment blocker is `blocked`, a full-tier fallback is the owner's to settle (`pf step ask`), a residual keeping its record in the result file, cited in the hand-off. Merge each touched repo's `details.selected` of its green or pre-existing result into the change
-analysis's `selected` (below), keyed by the repo, verbatim. Then run the close's facts lines —
+analysis's `selected` (below), keyed by the repo, verbatim. Once the close's scoped selection has run, a step that changes no code does not re-run it — the reuse key is the command text, the root's subtree tree hash and the declared prerequisites, so changing artifacts alone is not a code change; a step that does change code re-runs the selection only on the new tree, and on a host close the roots it did not touch are reused by `--reuse` (a boxed close consumes none). A red the scoped selection reports is reported from the result file's own baseline record (`details.baseline` and its `reds[]` classification); never reproduce it by hand on the base worktree. Then run the close's facts lines —
 review's own first, the same engine with the same replay it judges you with:
 `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
 `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --replay --isolation host --json --out artifacts/facts/build.json`
-The second gives each unit's commit facts
-(its ids resolving in a task repo, `test_commit` one ordinary commit of test paths alone and an
-ancestor of `impl_commit`, `impl_commit` in HEAD) and its run replayed on the tree of its
-`test_commit` (or of the change's base for a unit declared `pre_existing_red`) — it must be red
+The second gives each unit's commit facts (its ids resolving in a task repo, `test_commit` one ordinary commit of test paths alone and an
+ancestor of `impl_commit`, `impl_commit` in HEAD) and its run replayed on the tree of its `test_commit` (or of the change's base for a unit declared `pre_existing_red`) — it must be red
 there; the first the plan's two-way conformance with the diff and its `## 已定对照` mapping
 (an unmapped decided ruling red, named). A red — the plan's undeclared
 writes or lapsed obligations, a unit that does not resolve, whose commits name a test-first
@@ -212,6 +212,15 @@ listed entry the way verification will — statically (its repo, its run's shape
 name inside it) and, for the entries its supplement cap takes, by running each distinct run once at HEAD
 and matching its marker; over the cap the tail is cut and named. A red names the entry and the rule it
 violates: fix it and re-run until green — never hand off with this check red.
+
+Then run the mechanical facts gate once per touched repo — the line the lane's `facts_proof`
+declares, the summary `review` recomputes, over the final tree:
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" handoff --json --out artifacts/build/handoff-facts/<repo>.json`
+Exit 1 names the deterministic item the build must fix — a unit's commits or red-state replay,
+an undeclared write, an existing test outside the plan's write set, an e2e suite without
+`carries:`, a listed test that does not exist, a skip after the test commit — and `done` is
+refused until it is green; a sub-item it could not judge (exit 2) is recorded in
+`details.not_judged` and is no hit, except `carries`, whose exit 2 stays no pass.
 
 ## If you cannot finish
 

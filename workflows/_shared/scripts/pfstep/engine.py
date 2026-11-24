@@ -53,6 +53,9 @@ class EngineCommand:
     # directory and the command its engine reported, before `cd <dir> &&`
     dir: str = ""
     inner: str = ""
+    # group: the repository-declared full-gate group the command belongs
+    # to ("" = ungrouped; polyforge#244)
+    group: str = ""
 
 
 @dataclass
@@ -72,6 +75,9 @@ class EngineReport:
     diagnostics: Optional[List[str]]
     # e2e_selection: {mode, suites, uncovered_paths, full_commands} (None = none)
     e2e_selection: Optional[Dict[str, Any]]
+    # parallel: the declared full-gate parallelism (1 = serial; the report's
+    # full_parallel, absent when the repository declares no group)
+    parallel: int = 1
 
 
 def _typed(obj: Dict[str, Any], key: str, typ: type, what: str) -> Any:
@@ -146,6 +152,7 @@ def decode_report(raw: bytes) -> EngineReport:
             report=None if rep is None else ReportDecl(_str(rep, "format", "report.format"), _str(rep, "path", "report.path")),
             rerun=_str(c, "rerun", "report.commands.rerun"),
             source=_str(c, "source", "report.commands.source"),
+            group=_str(c, "group", "report.commands.group"),
         )
         if gostr.trim_space(ec.name) == "" or gostr.trim_space(ec.cmd) == "":
             raise ReportError("commands[%d] lacks a name or a cmd" % i)
@@ -165,6 +172,10 @@ def decode_report(raw: bytes) -> EngineReport:
         base_setup=_strings(doc, "base_setup", "report.base_setup") or [],
         diagnostics=_strings(doc, "diagnostics", "report.diagnostics"),
         e2e_selection=sel,
+        # polyforge#244: the report's full_parallel is the declared
+        # parallelism; a report that names none (or a value that is no
+        # positive integer) runs serially.
+        parallel=max(_typed(doc, "full_parallel", int, "report.full_parallel") or 0, 1),
     )
 
 

@@ -18,6 +18,7 @@ const jiti = createJiti(import.meta.url, {
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { UnifiedSetting, unifiedStatus } = await jiti.import("./UnifiedSetting.tsx");
+const { ConfigButton } = await jiti.import("./SettingsUi.tsx");
 
 const h = React.createElement;
 const noop = () => {};
@@ -95,9 +96,14 @@ function textOf(node) {
   return textOf(node.props?.children);
 }
 
-/** The button whose visible text is exactly `label` (r1#1's wiring checks walk the tree). */
+/**
+ * The button whose visible text is exactly `label` (r1#1's wiring checks walk
+ * the tree). polyforge#257: the unify control is the shared ConfigButton, so
+ * the element found is that component — the classes it renders are pinned in
+ * components/settings-buttons.test.mjs.
+ */
 function buttonByText(root, label) {
-  return collect(root).find((element) => element.type === "button" && textOf(element.props.children) === label);
+  return collect(root).find((element) => element.type === ConfigButton && textOf(element.props.children) === label);
 }
 
 test("the unify button submits exactly once per user click, never by rendering (r1#1)", () => {

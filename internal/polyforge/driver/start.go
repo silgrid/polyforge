@@ -128,6 +128,9 @@ type StartConfig struct {
 	// and whenever the daemon writes the opening or an event section of
 	// artifacts/handoff.md (Config.Language).
 	Language func() string
+	// LaneVerifiable answers whether the lane is one this build verifies
+	// (Config.LaneVerifiable): a lane it refuses keeps every stop human.
+	LaneVerifiable func(lane string) bool
 }
 
 // Start instantiates the driver over the capsule and runs it.
@@ -167,26 +170,27 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 		cfg.Link.Reset() // a new driver epoch: no fence or verdict of a predecessor leaks in
 	}
 	drv, err := New(Config{
-		WI:            wi,
-		BundleDir:     adapter.BundleDir,
-		Workflow:      adapter.Workflow,
-		Spawner:       adapter,
-		SpawnN:        int64(stepSeed),
-		Log:           cfg.Log,
-		Link:          cfg.Link,
-		Limits:        cfg.Limits,
-		LimitsFunc:    cfg.LimitsFunc,
-		TextRulesFunc: cfg.TextRulesFunc,
-		Compose:       cfg.Compose,
-		EpicChildren:  cfg.EpicChildren,
-		Params:        cfg.Params,
-		Interrupted:   cfg.Interrupted,
-		StepEnded:     cfg.StepEnded,
-		Admission:     cfg.Admission,
-		Forge:         cfg.Forge,
-		OwnerWait:     cfg.OwnerWait,
-		HubWrites:     cfg.HubWrites,
-		Language:      cfg.Language,
+		WI:             wi,
+		BundleDir:      adapter.BundleDir,
+		Workflow:       adapter.Workflow,
+		Spawner:        adapter,
+		SpawnN:         int64(stepSeed),
+		Log:            cfg.Log,
+		Link:           cfg.Link,
+		Limits:         cfg.Limits,
+		LimitsFunc:     cfg.LimitsFunc,
+		TextRulesFunc:  cfg.TextRulesFunc,
+		Compose:        cfg.Compose,
+		EpicChildren:   cfg.EpicChildren,
+		Params:         cfg.Params,
+		Interrupted:    cfg.Interrupted,
+		StepEnded:      cfg.StepEnded,
+		Admission:      cfg.Admission,
+		Forge:          cfg.Forge,
+		OwnerWait:      cfg.OwnerWait,
+		HubWrites:      cfg.HubWrites,
+		Language:       cfg.Language,
+		LaneVerifiable: cfg.LaneVerifiable,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("driver: %w", err)
