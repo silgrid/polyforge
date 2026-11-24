@@ -66,6 +66,7 @@ class World:
         for d in (self.origins, self.gh, self.bin):
             os.makedirs(d)
         install(os.path.join(HERE, "fakegh.sh"), os.path.join(self.bin, "gh"))
+        install(os.path.join(HERE, "fakepf.sh"), os.path.join(self.bin, "pf"))
         install(os.path.join(HERE, "fakedocker.sh"), os.path.join(self.bin, "docker"))
         self.seeds: Dict[str, str] = {}
         for r in repos:
@@ -362,10 +363,14 @@ class MergeScriptTest(unittest.TestCase):
 
 
 # FAKE_PF answers `pf --json step hub get <ref>` from FAKE_PF_ITEMS (a
-# JSON list of work items), as the step's hub would.
+# JSON list of work items), as the step's hub would, and `pf step
+# lock-check --repo <name>` as the daemon's held lease does.
 FAKE_PF = """#!/usr/bin/env python3
 import json, os, sys
 a = sys.argv[1:]
+if a[:2] == ["step", "lock-check"]:
+    print("lock-check: held")
+    sys.exit(0)
 with open(os.environ["FAKE_PF_ITEMS"]) as f:
     items = json.load(f)
 if a[:4] == ["--json", "step", "hub", "get"]:

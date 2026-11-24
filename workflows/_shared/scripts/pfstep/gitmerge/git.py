@@ -110,6 +110,9 @@ class Git:
         self.ctx = ctx
         self.environ: Dict[str, str] = dict(os.environ if environ is None else environ)
         self.timeout = timeout
+        # landing_gate: the merge/revert scripts arm it (polyforge#245), so
+        # every real gh pr merge is preceded by the daemon's lock check
+        self.landing_gate = False
 
     def with_ctx(self, ctx: Ctx) -> "Git":
         """The same runner under another context."""
@@ -298,11 +301,27 @@ class Git:
         return PR(state=_str(v.get("state")), head_ref_name=_str(v.get("headRefName")),
                   base_ref_name=_str(v.get("baseRefName")), merge_commit=_oid(v.get("mergeCommit")))
 
+    def check_landing(self, cwd: str) -> None:
+        """The landing-lock check before a real merge (polyforge#245, Q6):
+        ``pf step lock-check --repo <claim repo name>`` — the daemon renews
+        the ticket's lease and refuses when it is no longer the holder.
+        Any failure (the command missing, no step environment, a network
+        error, a lost lease) refuses the merge; the lock-check answer never
+        carries a token."""
+        repo = os.path.basename(os.path.normpath(cwd))
+        try:
+            self.cmd(cwd, "pf", "step", "lock-check", "--repo", repo)
+        except CmdError as err:
+            raise GoError("the landing lock check refused the merge of %s: %s" % (repo, err)) from None
+
     def merge_pr(self, cwd: str, url: str, head: str) -> None:
         """Merge a PR with a merge commit, only while its head is head
-        (``--match-head-commit``)."""
+        (``--match-head-commit``), and only after the landing-lock check
+        when the lane script armed the gate."""
         if head == "":
             raise GoError("gh pr merge %s: no head commit to match" % url)
+        if self.landing_gate:
+            self.check_landing(cwd)
         self.cmd(cwd, "gh", "pr", "merge", url, "--merge", "--match-head-commit", head)
 
     def create_pr(self, cwd: str, base: str, head: str, title: str, body: str) -> str:

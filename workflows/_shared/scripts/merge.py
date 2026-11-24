@@ -271,6 +271,9 @@ class Merge:
         self.inv = inv
         self.g = g
         self.ctx = ctx
+        # every real merge runs under the landing lock: the gate check
+        # precedes each gh pr merge (polyforge#245, Q6)
+        self.g.landing_gate = True
         # the human-merge mode: the claim's frozen step modes name this
         # step human (step_mode below)
         self.human = human
