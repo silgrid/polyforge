@@ -1,4 +1,4 @@
-// carries: internal/polyforge/cellcfg/*, internal/polyforge/cli/*, internal/polyforge/daemon/*, internal/common/protocol/*, internal/polyforge/runtime/*, internal/polyforge/aihubclient/*
+// carries: internal/polyforge/cellcfg/*, internal/polyforge/cli/*, internal/polyforge/daemon/*, internal/common/protocol/*, internal/polyforge/runtime/*, internal/polyforge/aihubclient/*, test/w348_cell_e2e_acceptance_test.go
 package test
 
 // w348_cell_e2e_acceptance_test.go: end-to-end acceptance for the single-host
@@ -2135,6 +2135,38 @@ func TestW348WaitingJobFreesItsSlot(t *testing.T) {
 	}
 }
 
+// w348RRInjectLateDefault is the round-robin scenario's fault injection,
+// test-only and off unless W348_RR_INJECT_LATE_DEFAULT_MS is set: before the
+// default job is submitted it waits (bounded by that many milliseconds) for
+// alpha's second job to start running — the default job then reaches its
+// queue only after alpha's first job released the slot, the late enqueue a
+// loaded host can produce. A bound that passes without the start is no
+// failure: the scenario goes on.
+func w348RRInjectLateDefault(t *testing.T, h *w348Host, a2 string) {
+	t.Helper()
+	raw := os.Getenv("W348_RR_INJECT_LATE_DEFAULT_MS")
+	if raw == "" {
+		return
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		t.Fatalf("W348_RR_INJECT_LATE_DEFAULT_MS=%q is not a positive millisecond count", raw)
+	}
+	deadline := time.Now().Add(time.Duration(ms) * time.Millisecond)
+	for time.Now().Before(deadline) {
+		for _, j := range w348Jobs(w348StatusDoc(t, h)) {
+			id, _ := j["work_item_id"].(string)
+			st, _ := j["status"].(string)
+			if id == a2 && st == "running" {
+				t.Logf("injection: alpha's second job started before the default job was submitted")
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Logf("injection: alpha's second job did not start within %dms; submitting the default job", ms)
+}
+
 // TestW348RoundRobinServesTheOtherCellBeforeTheBusyOne — AC7: with one Host
 // slot, a startable Cell that did not just run gets the next slot ahead of a
 // second queued job on the Cell that just finished.
@@ -2160,6 +2192,7 @@ func TestW348RoundRobinServesTheOtherCellBeforeTheBusyOne(t *testing.T) {
 	if out, code := h.pf("", "--profile", "alpha", "submit", a2); code != 0 {
 		t.Fatalf("submit alpha second queued: exit %d (%q)", code, out)
 	}
+	w348RRInjectLateDefault(t, h, a2)
 	if out, code := h.pf("", "submit", d1); code != 0 {
 		t.Fatalf("submit default queued: exit %d (%q)", code, out)
 	}
