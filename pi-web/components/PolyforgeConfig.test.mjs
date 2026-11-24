@@ -1189,3 +1189,48 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
     globalThis.fetch = originalFetch;
   }
 });
+
+// polyforge#259 T4 AC2 (owner 2A, review r3#1): a config row's write refused
+// with `{error, code: "config-cas-409"}` reads, on a Chinese page, as the
+// conflict line — chosen by the route's code — and the server's English (with
+// its diff) sits only inside the 详情 fold. Expected lines are hand-copied from
+// lib/i18n/messages/zh-CN.ts (serverError.conflict / serverError.forbidden /
+// i18n.detailsLabel), never from the page's own output.
+async function feedbackSsr() {
+  const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+  const React = await jiti.import("react");
+  const { renderToStaticMarkup } = await jiti.import("react-dom/server");
+  const { RowFeedbackLine, failureLine } = await jiti.import("./PolyforgeConfig.tsx");
+  const { responseError } = await jiti.import("../lib/server-error.ts");
+  const { zhCNLocale } = await jiti.import("../lib/i18n/messages/zh-CN.ts");
+  const { translateMessage } = await jiti.import("../lib/i18n/format.ts");
+  const t = (key, params) => translateMessage("zh-CN", key, { "zh-CN": zhCNLocale.messages }, params);
+  const render = (line) => {
+    const html = renderToStaticMarkup(React.createElement(RowFeedbackLine, {
+      feedback: { tone: "error", message: line.text, ...(line.details ? { details: line.details } : {}) },
+      detailsLabel: t("i18n.detailsLabel"),
+    }));
+    const fold = /<details[^>]*>([\s\S]*?)<\/details>/.exec(html);
+    const outside = html.replace(/<details[^>]*>[\s\S]*?<\/details>/g, "").replace(/<[^>]+>/g, "");
+    return { html, fold: fold ? fold[1].replace(/<[^>]+>/g, "") : null, outside };
+  };
+  return { failureLine, responseError, t, render };
+}
+
+test("a row's refused write reads as the conflict line in Chinese, and the raw words sit inside the details fold", async () => {
+  const { failureLine, responseError, t, render } = await feedbackSsr();
+  const line = failureLine(t, responseError({ error: "config changed since it was read", code: "config-cas-409", diff: { "daemon.port": [1, 2] } }, 409));
+  const { fold, outside } = render(line);
+  assert.ok(fold !== null && fold.includes("config changed since it was read"), "the raw words sit inside the details fold");
+  assert.ok(fold.startsWith("详情"), "the fold is not labelled 详情");
+  assert.ok(fold.includes("daemon.port"), "the CAS diff was dropped from the fold");
+  assert.equal(outside, "目标在此期间被别的写入改过，请重新读取后再试。", "the main line is not the conflict line");
+  assert.ok(!outside.includes("config changed"), "the server's English is the main line");
+});
+
+test("a row's refused write with no body reads as the forbidden line in Chinese", async () => {
+  const { failureLine, responseError, t, render } = await feedbackSsr();
+  const { fold, outside } = render(failureLine(t, responseError(null, 403)));
+  assert.equal(outside, "服务端拒绝了这次改动，原文在「详情」里。");
+  assert.ok(fold !== null && fold.includes("HTTP 403"), "the status line is not kept for the fold");
+});
