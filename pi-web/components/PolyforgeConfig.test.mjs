@@ -945,7 +945,8 @@ test("the page is layered — a Host region of Host-only keys, each Cell's file 
   assert.match(region, /HOST_SCALAR_KEYS\.map\(\(key\) => \(/, "the scalar Host keys keep the one-line row");
   assert.match(region, /HOST_LIST_KEYS\.map\(\(key\) => \(/, "the pattern lists render their own editor");
   assert.match(region, /data-pf-pattern-list=\{key\}/, "the list editor is addressable");
-  assert.match(region, /split\("\\n"\)/, "the list is edited one pattern per line");
+  // polyforge#277: the line split lives in lib/host-pattern-lines.ts (its own unit test).
+  assert.match(region, /patternLines\(/, "the list is edited one pattern per line");
   assert.match(source, /polyforge\.settings\.hostPatternsHint/, "the list editor carries its hint");
   assert.doesNotMatch(source, /ScopedSettingsRegion|CELL_REGION_KEYS|regionEditableKeys/, "no Cell region is left");
   // a Cell's api_key: write-only in its file card — a password input, its set state, never its value
@@ -1092,6 +1093,8 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
       "@/lib/settings-dirty": modulePath("lib/settings-dirty.ts"),
       // build finding u14#1: the page's error splitter, through the package alias.
       "@/lib/server-error": modulePath("lib/server-error.ts"),
+      // polyforge#277: the Host pattern lists' written lines, one pure module.
+      "@/lib/host-pattern-lines": modulePath("lib/host-pattern-lines.ts"),
       react: fixture("react-hook-shim.mjs"),
       "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
       "@/hooks/useI18n": fixture("polyforge-tasks-stubs.mjs"),

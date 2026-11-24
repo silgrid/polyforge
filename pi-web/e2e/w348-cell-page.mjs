@@ -1,5 +1,6 @@
 // carries: lib/polyforge-cells*, app/api/polyforge/cells/*
 // carries: app/api/polyforge/polyforge-cells-routes*
+// carries: components/ConfigDangerMenu*
 // — Settings › Polyforge Host and Cells page acceptance.
 //
 // Authored against artifacts/spec.md (AC8) and reproduced in the capsule's
@@ -248,8 +249,14 @@ try {
     await selectAlpha();
     await alphaRow().getByRole("button", { name: "Repair", exact: true }).click();
     assert.ok(await waitForCall((call) => call.args.includes("cell") && call.args.includes("repair") && call.args.includes("alpha")), "Cell repair never reached pf cell repair");
-    await alphaRow().getByRole("button", { name: "Remove", exact: true }).click();
-    await alphaRow().getByRole("button", { name: /Confirm remove/ }).click();
+    // A named Cell's Remove sits behind its head's ⋯ danger menu
+    // (ConfigDangerMenu): the trigger opens the menu, its Remove only asks,
+    // and the confirm row's Remove is the one click that writes.
+    await alphaRow().locator('button[aria-label="More actions"]').click();
+    await alphaRow().getByRole("group", { name: "More actions", exact: true })
+      .getByRole("button", { name: "Remove", exact: true }).click();
+    await alphaRow().getByRole("group", { name: "Confirm remove (state is kept)", exact: true })
+      .getByRole("button", { name: "Remove", exact: true }).click();
     assert.ok(await waitForCall((call) => call.args.includes("cell") && call.args.includes("remove") && call.args.includes("alpha")), "Cell remove never reached pf cell remove");
 
     // The Cell region's api_key is write-only: a password input, set/unset
