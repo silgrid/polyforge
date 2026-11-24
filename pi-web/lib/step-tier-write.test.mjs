@@ -72,3 +72,30 @@ test("a caller's smaller limit is the bound it obeys", async () => {
   assert.equal(h.writes.length, 5);
   assert.equal(h.tiers.size, 1);
 });
+
+test("a plan that finishes on its last allowed write reports success", async () => {
+  const initial = {};
+  for (let i = 0; i < 32; i++) initial[`tier-${i}`] = ["pi:a/one"];
+  const h = harness(initial);
+  const result = await m.runStepTierWritePlan(h.read, h.write, { harness: "pi", model: "a/one" }, null);
+  assert.deepEqual(result, { ok: true }, "the final read after the 32nd write finds an empty plan");
+  assert.equal(h.writes.length, 32, "the limit bounds writes, not the confirming read");
+  assert.equal(h.tiers.size, 0);
+});
+
+test("a one-write plan succeeds with a limit of one", async () => {
+  const h = harness({ only: ["pi:a/one"] });
+  const result = await m.runStepTierWritePlan(h.read, h.write, { harness: "pi", model: "a/one" }, null, 1);
+  assert.deepEqual(result, { ok: true });
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.tiers.size, 0);
+});
+
+test("a plan exactly filling a smaller limit also succeeds", async () => {
+  const initial = {};
+  for (let i = 0; i < 5; i++) initial[`tier-${i}`] = ["pi:a/one"];
+  const h = harness(initial);
+  assert.deepEqual(await m.runStepTierWritePlan(h.read, h.write, { harness: "pi", model: "a/one" }, null, 5), { ok: true });
+  assert.equal(h.writes.length, 5);
+  assert.equal(h.tiers.size, 0);
+});
