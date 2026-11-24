@@ -63,3 +63,14 @@ export function serverErrorText(payload: ServerErrorPayload | string | null | un
   const params = raw.params && Object.keys(raw.params).length > 0 ? { ...raw.params } : undefined;
   return { summaryKey, ...(params ? { summaryParams: params } : {}), details };
 }
+/** 一条带 code/params 的服务端拒绝（桩）。 */
+export class ServerError extends Error {
+  code: string | null = null;
+  params?: Record<string, string | number>;
+}
+
+/** 把一次失败的响应体变成 ServerError（桩）。 */
+export function responseError(body: unknown, _status: number): ServerError {
+  const error = (body as { error?: unknown } | null)?.error;
+  return new ServerError(String(error ?? ""));
+}
