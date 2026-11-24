@@ -43,7 +43,6 @@ run over it too, a red fixed before
 the hand-off; a plan this lane writes maps the ticket's `## 已定`
 rulings in its `## 已定对照` section, as the skill states, an unmapped
 ruling red; the
-the hand-off; the
 self-review reads the full diff review judges — the WHOLE epic against
 the default branch
 (`git diff $(git merge-base HEAD origin/<the default branch>)..HEAD`) —
@@ -52,6 +51,16 @@ this round owns (the commits since the heads the FAILing gate's header
 stamps). `pf step ask` only on the cases
 your skill names, right after the
 plan, never at the end.
+
+## 完成判据 — done criteria
+
+`done` only when every item below holds:
+
+1. **Every point the round that sent the lane back raised** — the 回退's findings or the owner's words, numbered as there — has its numbered answer in 回应上一轮: a commit, a `units.json` entry, or the evidence for leaving it as it was.
+2. **Every unit of the inherited plan** is either unchanged for a recorded reason, or has its `artifacts/build/units.json` entry red then green; **every criterion** of the plan's `## Coverage` keeps its row.
+3. **Every existing test** `artifacts/build/change-analysis.json` lists passes at HEAD, and its `uncovered[<repo>]` names every changed path no `carries:` declaration covers.
+4. **The close's facts results** are green (`artifacts/facts/build.json` with the replay, `artifacts/facts/carries.json`, and `artifacts/facts/plan-conformance.json` for a plan this lane wrote), and `artifacts/self-review.md` lists every document compared with its conclusion.
+5. **The daemon's fast-check proof** passes at HEAD for every repo the increment touched — `artifacts/build/fast-checks/<repo>.json`.
 
 ## 交接要写什么 — what your hand-off carries
 
