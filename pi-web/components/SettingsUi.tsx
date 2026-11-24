@@ -780,6 +780,17 @@ export function ConfigFooterStatus({
   );
 }
 
+/** 一条设置页的错误 notice（polyforge#259 T4 AC2）：中文主文案，服务端原文折叠进详情。 */
+export function ConfigErrorNotice({ id, summary, detailsLabel, details }: {
+  id?: string;
+  summary: ReactNode;
+  detailsLabel?: string;
+  /** The server's own words; rendered inside the details fold only. */
+  details?: ReactNode;
+}) {
+  return null;
+}
+
 /** A button; `ref` reaches it (a prop since React 19), so a panel can move focus to it. */
 export function ConfigButton({
   variant = "secondary",
