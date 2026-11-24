@@ -125,13 +125,16 @@ func TestFutureDispatchable(t *testing.T) {
 			step: "audit", want: false,
 		},
 		{
+			// review r1#2: the rewind-only step sits inside the gate's
+			// [on_fail target, gate) span — the only place a rewind covers it
+			// (workflow-contract: a rewind-only step after its gate is WFC-112).
 			name: "a rewind-only step a reachable gate rewinds over runs",
 			wf: testLane(3,
 				spec("build"),
-				gateSpec("review", "build"),
 				StepSpec{ID: "audit", RewindOnly: true},
+				gateSpec("review", "build"),
 				spec("merge")),
-			exec: fdExec(map[string]string{"build": capsule.StepDone, "review": capsule.StepInProgress}, nil),
+			exec: fdExec(map[string]string{"build": capsule.StepDone, "audit": capsule.StepSkipped, "review": capsule.StepInProgress}, nil),
 			step: "audit", want: true,
 		},
 		{
@@ -154,6 +157,73 @@ func TestFutureDispatchable(t *testing.T) {
 			wf:   fdLane(),
 			exec: fdExec(map[string]string{"build": capsule.StepInProgress}, nil),
 			step: "nosuch", want: false,
+		},
+	} {
+		if got := tc.wf.FutureDispatchable(tc.step, tc.exec, tc.skips); got != tc.want {
+			t.Errorf("%s: FutureDispatchable(%q) = %v, want %v", tc.name, tc.step, got, tc.want)
+		}
+	}
+}
+
+// TestFutureDispatchableBoundaries pins the rest of the owner's Q1 B
+// boundary fixtures (review r1#2) and the rewind span (review r1#3): a gate's
+// rewind re-runs [on_fail target, gate) only, so a rewind-only step after
+// that gate is covered by its own gates or by none; the live last step can
+// be preset for its next legal retry; a spent rewind budget does not count
+// (the owner may grant one more round).
+func TestFutureDispatchableBoundaries(t *testing.T) {
+	spent := fdExec(map[string]string{"build": capsule.StepDone, "review": capsule.StepInProgress}, nil)
+	spent.RewindStats.Count = 3
+	for _, tc := range []struct {
+		name  string
+		wf    *Workflow
+		exec  *capsule.Execution
+		skips []string
+		step  string
+		want  bool
+	}{
+		{
+			name: "the live last step can be preset for its next dispatch",
+			wf:   fdLane(),
+			exec: fdExec(map[string]string{"build": capsule.StepDone, "review": capsule.StepDone, "verification": capsule.StepDone, "publish": capsule.StepDone, "merge": capsule.StepInProgress}, nil),
+			step: "merge", want: true,
+		},
+		{
+			name: "a spent rewind budget still leaves a done build reachable (awaiting the owner)",
+			wf:   fdLane(),
+			exec: spent,
+			step: "build", want: true,
+		},
+		{
+			name: "a rewind-only step inside a reachable gate's span runs on its rewind",
+			wf: testLane(3,
+				spec("build"),
+				StepSpec{ID: "audit", RewindOnly: true},
+				gateSpec("review", "build"),
+				spec("merge")),
+			exec: fdExec(map[string]string{"build": capsule.StepDone, "audit": capsule.StepSkipped, "review": capsule.StepInProgress}, nil),
+			step: "audit", want: true,
+		},
+		{
+			name: "a rewind-only step after the gate whose covering gate is skipped never runs",
+			wf: testLane(3,
+				spec("build"),
+				gateSpec("review", "build"),
+				StepSpec{ID: "audit", RewindOnly: true},
+				StepSpec{ID: "audit-gate", Gate: true, Skippable: true, OnFail: &OnFail{Target: "audit"}}),
+			exec:  fdExec(map[string]string{"build": capsule.StepDone, "review": capsule.StepInProgress}, nil),
+			skips: []string{"audit-gate"},
+			step:  "audit", want: false,
+		},
+		{
+			name: "a rewind-only step after the gate no gate covers never runs",
+			wf: testLane(3,
+				spec("build"),
+				gateSpec("review", "build"),
+				StepSpec{ID: "audit", RewindOnly: true},
+				spec("merge")),
+			exec: fdExec(map[string]string{"build": capsule.StepDone, "review": capsule.StepInProgress}, nil),
+			step: "audit", want: false,
 		},
 	} {
 		if got := tc.wf.FutureDispatchable(tc.step, tc.exec, tc.skips); got != tc.want {
