@@ -35,5 +35,8 @@ test("a partial save settles only what it wrote, so the rest stays dirty", () =>
   // Only `name` landed; `maxTurns` was refused and keeps the draft.
   const settled = settleDraft(draft, { name: "critic" });
   assert.equal(settled.maxTurns, 12, "a failed field was dropped to the saved value");
-  assert.equal(dirtyCount(BASE, settled), 1, "the failed field no longer reads as unsaved");
+  // build finding u7#1: the landed field's saved value is the new baseline, so
+  // the leftover is counted against it — the draft against the old base would
+  // also count the field that just landed.
+  assert.equal(dirtyCount({ ...BASE, name: "critic" }, settled), 1, "the failed field no longer reads as unsaved");
 });
