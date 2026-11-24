@@ -320,7 +320,104 @@ func (w *Workflow) WithSkipped(ids []string) *Workflow {
 // off never counts. The rewind budget is not consulted: an exhausted budget
 // still leaves the owner's own authorization to run another round.
 func (w *Workflow) FutureDispatchable(step string, exec *capsule.Execution, skips []string) bool {
-	return false
+	if w == nil || len(w.Steps) == 0 {
+		return false
+	}
+	target, ok := w.indexOf(step)
+	if !ok {
+		return false
+	}
+	listed := make(map[string]bool, len(skips))
+	for _, id := range skips {
+		listed[id] = true
+	}
+	skipped := make([]bool, len(w.Steps))
+	for i, s := range w.Steps {
+		skipped[i] = s.Skippable && listed[s.ID]
+	}
+	statusOf := func(id string) string {
+		if exec == nil {
+			return ""
+		}
+		if st := exec.Steps[id]; st != nil {
+			return st.Status
+		}
+		return ""
+	}
+	activated := func(i int) bool {
+		if exec == nil {
+			return false
+		}
+		st := exec.Steps[w.Steps[i].ID]
+		if st == nil {
+			return false
+		}
+		for _, a := range st.Attempts {
+			if rewindArchive(a.Cause) {
+				return true
+			}
+		}
+		return false
+	}
+	// current is the step the next plan pass selects: the first one neither
+	// done nor skipped. Every step after it can still run; the rewind-only
+	// steps among them wait for a rewind that covers them.
+	current := 0
+	for current < len(w.Steps) {
+		st := statusOf(w.Steps[current].ID)
+		if st != capsule.StepDone && st != capsule.StepSkipped {
+			break
+		}
+		current++
+	}
+	if current >= len(w.Steps) {
+		return false // every step done or skipped: nothing dispatches again
+	}
+	reachable := make([]bool, len(w.Steps))
+	markForward := func(from int, rewound bool) {
+		for i := from; i < len(w.Steps); i++ {
+			if skipped[i] {
+				continue
+			}
+			if w.Steps[i].RewindOnly && !rewound && !activated(i) {
+				continue
+			}
+			reachable[i] = true
+		}
+	}
+	markForward(current, false)
+	// A reachable gate can FAIL and rewind to its target; from that target
+	// the forward order runs again, so the target and everything after it
+	// (a rewind covers the rewind-only steps it passes) become reachable —
+	// and with them any gate they contain. Repeat until nothing new.
+	for {
+		before := 0
+		for _, r := range reachable {
+			if r {
+				before++
+			}
+		}
+		for i, s := range w.Steps {
+			if !reachable[i] || !s.Gate || s.OnFail == nil {
+				continue
+			}
+			t, ok := w.indexOf(s.OnFail.Target)
+			if !ok {
+				continue
+			}
+			markForward(t, true)
+		}
+		after := 0
+		for _, r := range reachable {
+			if r {
+				after++
+			}
+		}
+		if after == before {
+			break
+		}
+	}
+	return reachable[target]
 }
 
 // LoadWorkflow reads the lane at bundleDir through the one lane loader

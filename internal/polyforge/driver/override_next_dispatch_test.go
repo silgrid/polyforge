@@ -193,12 +193,12 @@ func overrideRewindToBuild(t *testing.T, d *Driver) {
 		t.Fatal(err)
 	}
 	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "build", SpawnN: 1,
-		Result: completedResult("build", 1, `{"summary":"round one"}`)}); err != nil {
+		Result: &StepResult{WIID: "wi_od", StepID: "build", SpawnN: 1, Outcome: OutcomeCompleted, Output: json.RawMessage(`{"summary":"round one"}`)}}); err != nil {
 		t.Fatal(err)
 	}
 	mustStart(t, d, "review", 2)
 	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "review", SpawnN: 2,
-		Result: &StepResult{StepID: "review", SpawnN: 2, Outcome: OutcomeGateFailed, Output: json.RawMessage(structuralVerdict)}}); err != nil {
+		Result: &StepResult{WIID: "wi_od", StepID: "review", SpawnN: 2, Outcome: OutcomeGateFailed, Output: json.RawMessage(structuralVerdict)}}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -222,7 +222,7 @@ func TestOverrideNextDispatchAfterRewind(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if sp.Candidate != "pi:prov/new-b" || sp.Model != "new-b" {
+		if sp.Candidate != "pi:prov/new-b" || sp.Model != "prov/new-b" {
 			t.Fatalf("the re-dispatch candidate %q/%q, want the new chain's head pi:prov/new-b", sp.Candidate, sp.Model)
 		}
 	})
