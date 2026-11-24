@@ -99,10 +99,10 @@ func landingEnv(t *testing.T, enter, exit string, steps ...StepSpec) (*Driver, *
 	return d, sp, log, fl
 }
 
-// TestLockIntervalIntervalAndRelease: one hold covers the interval, the
+// TestLandingLockIntervalAndRelease: one hold covers the interval, the
 // release comes when the plan leaves it, and a step outside the interval
 // dispatches no second hold.
-func TestLockIntervalIntervalAndRelease(t *testing.T) {
+func TestLandingLockIntervalAndRelease(t *testing.T) {
 	d, sp, _, fl := landingEnv(t, "sync", "merge",
 		spec("build"), spec("sync"), spec("merge"), spec("after"))
 	sp.script = []fakeEntry{done(""), done(""), done(""), done("")}
@@ -118,10 +118,10 @@ func TestLockIntervalIntervalAndRelease(t *testing.T) {
 	}
 }
 
-// TestLockIntervalQueueWaitAnnounced: waiting for the lease is a queue
+// TestLandingLockQueueWaitAnnounced: waiting for the lease is a queue
 // fact, not a rewind — the driver takes the lease before the enter
 // step's first dispatch and announces the position.
-func TestLockIntervalQueueWaitAnnounced(t *testing.T) {
+func TestLandingLockQueueWaitAnnounced(t *testing.T) {
 	d, sp, log, fl := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), spec("merge"))
 	fl.queued = true
 	sp.script = []fakeEntry{done(""), done(""), done("")}

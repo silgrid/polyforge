@@ -21,7 +21,7 @@ func landingFront(block string) string {
 	return "max_rewinds: 1\n" + block + "steps:\n  - id: build\n  - id: sync\n  - id: merge\n    gate: true\n    on_fail: { target: build }\n"
 }
 
-func TestLeaseIntervalDeclaration(t *testing.T) {
+func TestLandingLockDeclaration(t *testing.T) {
 	// absent: no interval
 	lane, errs := workflow.Load(workflowtest.WriteLane(t, t.TempDir(), "demo", landingFront("")))
 	if len(errs) > 0 || lane == nil {
@@ -64,9 +64,9 @@ func TestLeaseIntervalDeclaration(t *testing.T) {
 	}
 }
 
-// TestLeaseIntervalCarriedEverywhere: the registry dump, the generated lane
+// TestLandingLockCarriedEverywhere: the registry dump, the generated lane
 // Schema and the two lanes the ticket names carry the one optional key.
-func TestLeaseIntervalCarriedEverywhere(t *testing.T) {
+func TestLandingLockCarriedEverywhere(t *testing.T) {
 	if dump := workflow.RegistryDump(); !strings.Contains(dump, "\nlanding_lock: map {enter, exit}") {
 		t.Errorf("the registry dump carries no landing_lock lane key:\n%s", dump)
 	}
