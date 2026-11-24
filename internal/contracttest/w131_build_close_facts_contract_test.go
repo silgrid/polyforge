@@ -50,15 +50,17 @@ func TestW131BuildCloseFactsTexts(t *testing.T) {
 			"never `blocked` for it",
 			"exit 2 is no pass either (fix the input it names; a real machine blocker is `blocked`)",
 			"no file here is review's evidence",
-			// polyforge#235: the consolidated done criteria stand before the
-			// "If you cannot finish" section, each item naming its set and the
-			// file, field or command that shows it — the fast-check proof and
-			// the mechanical facts gate are one pointer each, never a second
-			// copy of their rules.
-			"`done` only when every item below holds; each names the set it covers and the file, field or command that shows it",
+			// polyforge#235 (review r1#1): the consolidated done criteria stand
+			// before "If you cannot finish", each item naming its set and the
+			// file, field or command that shows it — naming the legit branches
+			// (a plain unit, a `pre_existing_red` unit, a doc-type criterion;
+			// the full-tier and owner-ruling scoped branches) and one pointer
+			// each for the tool-enforced gates, never a second copy of their
+			// rules.
+			"`done` only when every item below holds on its own branch; each names the set it covers and the file, field or command that shows it",
 			"has exactly one row in the plan's `## Coverage` table, kind `test`, `existing` or `doc`",
-			"has one entry in `artifacts/build/units.json`: `test_commit` an ancestor of `impl_commit`, its recorded `run` red at `test_commit` and green at HEAD",
-			"the fast-check proof (`artifacts/build/fast-checks/<repo>.json`) and the mechanical facts (`artifacts/build/handoff-facts/<repo>.json`) — pass at HEAD for every repo build changed",
+			"a plain unit, a `pre_existing_red` unit, a doc-type criterion — resolves under the close's own replay, `artifacts/facts/build.json`",
+			"`artifacts/build/fast-checks/<repo>.json` and `artifacts/build/handoff-facts/<repo>.json` (the daemon's rules; 3c produces both)",
 		},
 		"workflows/_shared/skills/build.md": {
 			planLine,
