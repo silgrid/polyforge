@@ -1,3 +1,4 @@
+// carries: test/v2_6c_ask_awaiting_owner_test.go, internal/common/capsule/asks.go, internal/polyforge/driver/ask.go
 package test
 
 // v2_6c_ask_awaiting_owner_test.go: `pf step ask` and the awaiting-owner state
@@ -9,14 +10,18 @@ package test
 // queued job starts under max_concurrent_jobs 1), nothing is judged
 // (no rule-1b retry after the grace), the warm window ends the idle
 // process and the step stays awaiting on the same dispatch, and a daemon
-// restart parks it again without a new dispatch (lifecycle (i)). A turn
-// that ends with neither a result nor an ask stays rule 1b
-// (TestW159ClaudeD7, v1_s06).
+// restart parks it again without a new dispatch (lifecycle (i)). The
+// capsule's asks.jsonl holds the ask and, once the daemon observes the
+// wait, the one `awaiting` line polyforge#239 records beside it (the wait's
+// T0, bound to that ask and never rewritten by a restart). A turn that
+// ends with neither a result nor an ask stays rule 1b (TestW159ClaudeD7,
+// v1_s06).
 
 import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -112,18 +117,48 @@ func v26cBody(e protocol.EventEntry) map[string]any {
 	return b
 }
 
-// v26cOpenAsk answers the capsule record's one open ask of (fix, 1).
+// v26cOpenAsk answers the capsule record's one open ask of (fix, 1) and
+// checks the wait beside it: the ask first, then the one `awaiting` line
+// polyforge#239's daemon writes when it observes the wait.
 func v26cOpenAsk(t *testing.T, capDir string) capsule.AskLine {
 	t.Helper()
 	lines, err := capsule.ReadAsks(capDir)
-	if err != nil || len(lines) != 1 {
-		t.Fatalf("asks.jsonl: %+v %v", lines, err)
+	if err != nil || len(lines) != 2 || lines[0].Kind != capsule.AskKindAsk || lines[1].Kind != capsule.AskKindAwaiting {
+		t.Fatalf("asks.jsonl (one ask, then its one awaiting): %+v %v", lines, err)
 	}
 	open := capsule.OpenAsk(lines, "fix", 1)
 	if open == nil || open.Kind != "ask" || open.Text != v26cQuestion || open.Step != "fix" || open.Spawn != 1 {
 		t.Fatalf("the open ask: %+v", open)
 	}
+	v26cAwaitingLine(t, capDir, open.Step, open.Spawn, open.At)
 	return *open
+}
+
+// v26cAwaitingLine answers the record's one `awaiting` line of the ask
+// (step, spawn, askAt) and checks polyforge#239's shape: the wait's T0 is a
+// parseable RFC3339Nano stamp of its own, bound to exactly that ask, and it
+// carries no question, author or message stamp (it is metadata, never the
+// owner's words).
+func v26cAwaitingLine(t *testing.T, capDir, step string, spawn int64, askAt string) capsule.AskLine {
+	t.Helper()
+	lines, err := capsule.ReadAsks(capDir)
+	if err != nil {
+		t.Fatalf("asks.jsonl: %v", err)
+	}
+	var found []capsule.AskLine
+	for _, l := range lines {
+		if l.Kind == capsule.AskKindAwaiting {
+			found = append(found, l)
+		}
+	}
+	if len(found) != 1 || found[0].Step != step || found[0].Spawn != spawn || found[0].AskAt != askAt ||
+		found[0].Text != "" || found[0].MsgAt != "" || found[0].By != "" {
+		t.Fatalf("the awaiting line of %s/%d/%s (one line bound to the ask, no words, author or message): %+v", step, spawn, askAt, found)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, found[0].At); err != nil {
+		t.Fatalf("the awaiting line's stamp %q is no RFC3339Nano time: %v", found[0].At, err)
+	}
+	return found[0]
 }
 
 // Claude persona: the ask parks the step awaiting the owner; the rule-1b
@@ -155,18 +190,21 @@ func TestV26cClaudeAskParksAwaitingOwner(t *testing.T) {
 		t.Fatalf("awaiting_owner body: %v", ev)
 	}
 	// `pf step ask` itself: recorded as the turn's tool call, exit 0, and the
-	// one instruction it prints
-	var ran bool
-	for _, e := range fakeJournal(t, capDir) { // the shared run journal (logs/fakepi.jsonl)
-		if e["type"] == "run" && strings.Contains(e["cmd"].(string), "pf step ask") {
-			ran = true
-			if e["exit_code"] != float64(0) || !strings.Contains(e["output"].(string), "now end your turn") {
-				t.Fatalf("pf step ask run: %v", e)
+	// one instruction it prints. The persona journals the call after it ran
+	// the command — the awaiting_owner event waits for neither — so poll the
+	// journal for the line instead of reading it once.
+	var askRun map[string]any
+	waitUntil(t, 30*time.Second, "the persona's pf step ask run record", func() bool {
+		askRun = nil
+		for _, e := range fakeJournal(t, capDir) { // the shared run journal (logs/fakepi.jsonl)
+			if e["type"] == "run" && strings.Contains(e["cmd"].(string), "pf step ask") {
+				askRun = e
 			}
 		}
-	}
-	if !ran {
-		t.Fatal("the persona never ran pf step ask")
+		return askRun != nil
+	})
+	if askRun["exit_code"] != float64(0) || !strings.Contains(askRun["output"].(string), "now end your turn") {
+		t.Fatalf("pf step ask run: %v", askRun)
 	}
 	// the faces: the watch snapshot's pending question is the ask (id =
 	// its stamp), `pf watch --once` prints the question text, the status
@@ -258,21 +296,24 @@ func TestV26cPiAskReleasesSlotAndSurvivesRestart(t *testing.T) {
 	})
 	ask := v26cOpenAsk(t, capDir)
 	survivor := latestSpawnPID(t, d, wi)
-	// the fake ran pf step ask as a tool call inside the turn, then ended it
-	var ran, ended bool
-	for _, e := range fakeJournal(t, capDir) {
-		switch e["type"] {
-		case "run":
-			if strings.Contains(e["cmd"].(string), "pf step ask") && e["exit_code"] == float64(0) {
-				ran = true
+	// the fake ran pf step ask as a tool call inside the turn, then ended it.
+	// Both journal lines are written only after the command ran, which the
+	// awaiting_owner event above does not wait for: poll the journal for
+	// them.
+	waitUntil(t, 30*time.Second, "the persona to ask and end its turn", func() bool {
+		var ran, ended bool
+		for _, e := range fakeJournal(t, capDir) {
+			switch e["type"] {
+			case "run":
+				if strings.Contains(e["cmd"].(string), "pf step ask") && e["exit_code"] == float64(0) {
+					ran = true
+				}
+			case "end_turn":
+				ended = true
 			}
-		case "end_turn":
-			ended = true
 		}
-	}
-	if !ran || !ended {
-		t.Fatalf("the persona did not ask then end its turn (ran=%v ended=%v)", ran, ended)
-	}
+		return ran && ended
+	})
 	// the status face: the job waits on the ask (its stamp in the
 	// QUESTION column) and holds no running slot
 	waitQuestion(t, d, wi, ask.At, 30*time.Second)
@@ -291,6 +332,13 @@ func TestV26cPiAskReleasesSlotAndSurvivesRestart(t *testing.T) {
 	}
 	// (the owner's reply into the asking session is the relay's,
 	// v2_6d_owner_relay_test.go: here the ask stays open)
+
+	// the record the restart must find unchanged: the ask and its one
+	// awaiting line, the wait's T0 included
+	record, err := capsule.ReadAsks(capDir)
+	if err != nil || len(record) != 2 {
+		t.Fatalf("asks.jsonl before the crash: %+v %v", record, err)
+	}
 
 	// a crash inside the warm window (the step process alive, idle)
 	if !hasPID(orphanPIDs(wi), survivor) {
@@ -346,8 +394,8 @@ func TestV26cPiAskReleasesSlotAndSurvivesRestart(t *testing.T) {
 	if out := d2.pf(t, "watch", wi, "--once"); !strings.Contains(out, v26cQuestion) {
 		t.Fatalf("pf watch --once after the restart: %s", out)
 	}
-	if lines, _ := capsule.ReadAsks(capDir); len(lines) != 1 || lines[0].At != ask.At {
-		t.Fatalf("the record changed across the restart: %+v", lines)
+	if after, err := capsule.ReadAsks(capDir); err != nil || !reflect.DeepEqual(after, record) {
+		t.Fatalf("the record changed across the restart (a new line, a moved T0 or a rebound awaiting): %+v, was %+v (%v)", after, record, err)
 	}
 	if pids := orphanPIDs(wi); len(pids) != 0 {
 		t.Fatalf("step processes alive after the restart parked the step: %v", pids)
