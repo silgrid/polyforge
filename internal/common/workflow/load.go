@@ -390,9 +390,6 @@ func (l *loader) load() *Lane {
 			lane.ResumeReset = v
 		}
 	}
-	if n, ok := keys["landing_lock"]; ok {
-		lane.LeaseInterval = l.landingLock(file, off, n)
-	}
 	stepsNode, ok := keys["steps"]
 	if !ok {
 		l.at(CodeMissingKey, file, off, root, "steps", "the lane declares no steps")
