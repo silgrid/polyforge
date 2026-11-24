@@ -392,7 +392,9 @@ test("loading, a failed load and an empty listing each say so", () => {
   assert.match(denied, /<div role="alert" class="config-sidebar-message is-error">Could not read the MCP settings\. Pi Web may not read this folder\.<\/div>/);
   // An internal failure has no reason to translate: the generic line, its diagnostic in the 详情 fold (T4 AC2, u19).
   const internalLoad = decode(view({ load: { state: "failed", error: { error: "EACCES: permission denied", reason: "internal" } } }));
-  assert.match(text(internalLoad.replace(/<details[\s\S]*?<\/details>/g, "")), /Could not read the MCP settings\. That did not work\. The server's own words are under Details\.$/);
+  const internalLine = text(internalLoad.replace(/<details[\s\S]*?<\/details>/g, ""));
+  assert.match(internalLine, /Could not read the MCP settings\. That did not work\. The server's own words are under Details\./);
+  assert.doesNotMatch(internalLine, /EACCES/, "the diagnostic is outside the fold");
   assert.match(internalLoad, /<details[^>]*><summary>Details<\/summary><div class="config-error-notice-original">EACCES: permission denied<\/div><\/details>/);
   // A load that never answered ends with a way out, never "Loading..." for good.
   assert.match(
@@ -919,7 +921,7 @@ test("the group switch names what it left undone under the heading", () => {
   assert.ok(status, "the status sits under the Global heading");
   assert.ok(html.indexOf("config-sidebar-group-status") > html.indexOf(">global<"));
   assert.match(status, /<div role="status" class="config-sidebar-group-note">1 server\(s\) that reference PI_WEB_PASSWORD stayed off\.<\/div>/);
-  assert.match(status, /<div role="alert" class="config-sidebar-group-error">Could not change 2 of 3 servers:\ngone: The file no longer defines this server\.\nodd: That did not work\. The server's own words are under Details\.<\/div>/);
+  assert.match(status, /<div role="alert" class="config-sidebar-group-error">Could not change 2 of 3 servers:\ngone: The file no longer defines this server\.\nodd: That did not work\. The server's own words are under Details\.$/);
   // T4 AC2 (u19): the internal failure's own words only in the 详情 fold under the group.
   assert.match(html, /<details[^>]*><summary>Details<\/summary><div class="config-error-notice-original">odd: EIO<\/div><\/details>/);
   const whole = decode(writeView({ view: { groupStatus: { scope: "project", keptOff: 0, failures: [], total: 1, error: { error: "x", reason: "project-untrusted" } } } }));
