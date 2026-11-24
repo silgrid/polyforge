@@ -9,7 +9,7 @@ import os
 import stat
 import tempfile
 import unittest
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from unittest import mock
 
 from pfstep.gitmerge.ctx import Ctx, GoError
@@ -19,7 +19,7 @@ from pfstep.gitmerge.git import Git
 class RecordingGit(Git):
     """A Git that records the commands it would run."""
 
-    def __init__(self, environ: Optional[dict] = None) -> None:
+    def __init__(self, environ: Optional[Dict[str, str]] = None) -> None:
         super().__init__(Ctx(), environ if environ is not None else {})
         self.calls: List[Tuple[str, ...]] = []
         self.refuse_lock = False
