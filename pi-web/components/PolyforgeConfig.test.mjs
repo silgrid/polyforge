@@ -1089,6 +1089,8 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
       // build finding u12#3: the page's new dirty model import (tsconfig's `@/`
       // alias, which would otherwise pull the real i18n provider in here).
       "@/lib/settings-dirty": modulePath("lib/settings-dirty.ts"),
+      // build finding u14#1: the page's error splitter, through the package alias.
+      "@/lib/server-error": modulePath("lib/server-error.ts"),
       react: fixture("react-hook-shim.mjs"),
       "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
       "@/hooks/useI18n": fixture("polyforge-tasks-stubs.mjs"),
