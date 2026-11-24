@@ -120,6 +120,15 @@ const (
 	// as skipped instead of dispatching it: no derivation,
 	// no position move; it emits step_skipped.
 	TransStepSkipped TransitionKind = "step_skipped"
+	// TransLeaseReentry lands a landing-lock release as a rewind to the
+	// interval's declared enter step (polyforge#245, Q8): an ask's answer,
+	// a lost lease or a step failure re-enters there, charged to no
+	// rewind budget.
+	TransLeaseReentry TransitionKind = "lease_reentry"
+	// TransLeaseMark writes or clears the persisted landing-lock re-entry
+	// intent (execution.LeaseReentry): a release that must re-queue for a
+	// restart/blocked resume, and its clearance once consumed.
+	TransLeaseMark TransitionKind = "lease_mark"
 )
 
 // TransitionRequest is one submitted execution.json mutation. SpawnN is
@@ -164,7 +173,9 @@ type TransitionRequest struct {
 	// starts, read before the transition takes the driver's lock: recorded
 	// as the step's round start commits when this dispatch opens its round.
 	StartHeads map[string]string
-	SpawnN     int64
+	// LeaseReentry (lease_mark) is the persisted re-entry step: "" clears.
+	LeaseReentry string
+	SpawnN       int64
 }
 
 // GateVerdict is one business gate FAIL judgment (01 §6.2): the policy
@@ -284,6 +295,11 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		return d.applyStepSkippedLocked(req)
 	case TransEpicResume:
 		return d.applyEpicResumeLocked(req, info)
+	case TransLeaseReentry:
+		return d.applyLeaseReentryLocked(req, info)
+	case TransLeaseMark:
+		d.exec.LeaseReentry = req.LeaseReentry
+		return nil
 	case TransBlocked:
 		if isTerminalStatus(d.exec.WorkflowStatus) {
 			return fmt.Errorf("driver: workflow is terminal (%s)", d.exec.WorkflowStatus)
@@ -742,6 +758,23 @@ func (d *Driver) applyRewindRangeLocked(from, to int, target, rewindGate, target
 	})
 	d.exec.CurrentStep = target
 	info.target = target
+}
+
+// applyLeaseReentryLocked rewinds the steps of the landing interval from
+// its enter step through the current one: a released lock re-enters at the
+// declared enter (Q8), its records charged to nothing.
+func (d *Driver) applyLeaseReentryLocked(req TransitionRequest, info *appliedInfo) error {
+	enter, exit, ok := d.leaseInterval()
+	if !ok {
+		return fmt.Errorf("driver: the lane declares no lease_interval interval")
+	}
+	cur, ok := d.workflow.indexOf(req.StepID)
+	if !ok || cur < enter || cur > exit {
+		return fmt.Errorf("driver: step %q is outside the landing-lock interval", req.StepID)
+	}
+	d.applyRewindRangeLocked(enter, cur+1, d.workflow.Steps[enter].ID, "lock_interval", CauseGateFailRewind, capsule.RewindLockCycle, info)
+	d.exec.LeaseReentry = ""
+	return nil
 }
 
 // applyTerminalLocked lands a terminal workflow_status. completed is

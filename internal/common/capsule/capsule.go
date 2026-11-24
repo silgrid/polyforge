@@ -172,6 +172,12 @@ type Execution struct {
 	// naming the request: `pf cancel` finishes it, and the owner's resume
 	// drops this intent.
 	CancelRequested *CancelIntent `json:"cancel_requested,omitempty"`
+	// LeaseReentry names the landing-lock interval's enter step a released
+	// lease must re-enter at (polyforge#245 Q8): written before a release
+	// that re-queues (an ask of a non-gate step, a lost lease, a blocked
+	// workflow), consumed by the next dispatch planning, never counting as
+	// a rewind. Empty = none.
+	LeaseReentry string `json:"lease_reentry,omitempty"`
 }
 
 // CancelIntent is one owner's cancel the daemon carries out: an `intent:
@@ -355,6 +361,12 @@ const (
 	// (`uncounted_rewinds`): a gate FAIL whose one-line reason falls in
 	// the class. It counts toward nothing but its own cap.
 	RewindUncounted = "uncounted"
+	// RewindLockCycle is the driver's landing-lock re-entry (polyforge#245):
+	// a lease loss or an ask released the interval's lock, so the steps
+	// from the declared enter step re-run after the daemon re-queues. It
+	// counts toward nothing (a wait or a lost lease is not the work's
+	// defect, decided Q8).
+	RewindLockCycle = "landing"
 )
 
 type RewindStats struct {

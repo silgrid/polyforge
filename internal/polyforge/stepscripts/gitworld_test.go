@@ -66,6 +66,11 @@ func newGitWorld(t *testing.T, repos ...string) *gitWorld {
 	if err := os.WriteFile(filepath.Join(w.bin, "gh"), gh, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// the landing lock's before-merge check (polyforge#245): the step
+	// environment's pf answers held for every repo
+	if err := os.WriteFile(filepath.Join(w.bin, "pf"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	heads := map[string]string{}
 	for _, r := range repos {
 		origin := filepath.Join(w.origins, r+".git")

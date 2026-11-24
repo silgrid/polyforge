@@ -26,6 +26,10 @@ const (
 	VerbRecall     = "recall"
 	VerbMemoryShow = "memory.show"
 	VerbRemember   = "remember"
+	// VerbLockCheck is `pf step lock-check`: the daemon renews the
+	// landing lease of the named claim repo and refuses a merge when the
+	// ticket no longer holds it (polyforge#245, decided Q6).
+	VerbLockCheck = "lock-check"
 	// VerbHubPrefix prefixes the hub verbs: hub.get, hub.list, hub.file,
 	// hub.attrs, hub.wrap-attrs, hub.batch.
 	VerbHubPrefix = "hub."

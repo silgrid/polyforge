@@ -13,6 +13,7 @@ package cli
 //	pf step recall [--type T] [--tags a,b] [--limit N] [--any] <query>
 //	pf step memory show <id>
 //	pf step remember --type experience.wrap --title S [--tags a,b] <content | - | @file>
+//	pf step lock-check --repo <claim repo name>
 //	pf step hub get <wi> | list [--status S] [--bundle L] [--attr <path>=<value>]… [--limit N]
 //	pf step hub file --key K --lane L --goal G --content <text | @file> [--priority P] [--label X]…
 //	pf step hub attrs <wi | key:K> --set <key> <json | @file> [--if <path>=<value>]… [--per-owner <at>]
@@ -49,6 +50,7 @@ var cmdStep = &Command{
 		"       pf step recall [--type T] [--tags a,b] [--limit N] [--any] <query>\n" +
 		"       pf step memory show <id> [--max-bytes N]\n" +
 		"       pf step remember --type experience.wrap --title S [--tags a,b] <content | - (stdin) | @file>\n" +
+		"       pf step lock-check --repo <claim repo name>\n" +
 		"       pf step hub get <wi>\n" +
 		"       pf step hub list [--status S] [--bundle L] [--attr <path>=<value>]... [--limit N]\n" +
 		"       pf step hub file --key K --lane L --goal G --content <text | @file> [--priority P] [--label X]...\n" +
@@ -78,6 +80,8 @@ var cmdStep = &Command{
 			return memoryShowWith(ctx, "step memory show", rest[1:], ctx.stepReadMemory)
 		case "remember":
 			return stepRememberCall(ctx, rest)
+		case "lock-check":
+			return stepLockCheck(ctx, rest)
 		case "hub":
 			return stepHub(ctx, rest)
 		}
@@ -136,6 +140,36 @@ func stepHandoff(ctx *Context, args []string) error {
 		Path   string `json:"path"`
 	}) {
 		fmt.Fprintf(ctx.Stdout, "handed off %s (step %s, round %d, spawn %d): the section is appended to %s — now end your turn\n", r.Status, r.Step, r.Round, r.Spawn, r.Path)
+	})
+	return nil
+}
+
+// stepLockCheck is `pf step lock-check --repo <claim repo name>`: the one
+// before-merge check a lane's merge/revert scripts run (polyforge#245,
+// decided Q6). Any failure — the command refusing, no step environment, a
+// network error — means no merge runs.
+func stepLockCheck(ctx *Context, args []string) error {
+	f := subFlags(ctx, "step lock-check")
+	repo := f.String("repo", "", "the claim repo name whose landing lease the daemon renews")
+	rest, err := parseCommandArgs(f, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
+		return fmt.Errorf("step lock-check: unexpected argument %q", rest[0])
+	}
+	if strings.TrimSpace(*repo) == "" {
+		return fmt.Errorf("step lock-check: --repo <claim repo name> is required")
+	}
+	raw, err := ctx.stepCall("lock-check", map[string]any{"repo": *repo})
+	if err != nil {
+		return err
+	}
+	finishAs(ctx, raw, func(l *struct {
+		Repo   string `json:"repo"`
+		Status string `json:"status"`
+	}) {
+		fmt.Fprintf(ctx.Stdout, "lock-check %s: %s\n", l.Repo, l.Status)
 	})
 	return nil
 }

@@ -89,6 +89,7 @@ at once, each with its code, file, line and YAML path.
 | `children_branch` | a branch-name template, one string (`WFC-112` any other shape): it must carry `{seq}` (the parent's seq — polyforge#1 → `epic/1`), may carry `{project}` (the parent's project name); the rest is literal and the substituted name must be a legal git branch ref ([Properties](#properties)). A sub-ticket of a work item whose parent runs on the lane has its task repos checked out on the substituted branch: the first claim fixes it into `runtime-state/target-branch.json`, every (re-)claim checks the fixed value out, and a claim that cannot read the parent or its lane is refused; a parent bound to no lane declares nothing the same way — the claim keeps the default branch |
 | `epic` | bool, default `false` ([Properties](#properties)): the lane's own work items are epics — each works on the children branch of its own seq (`children_branch`, which the lane must declare with the key, `WFC-112` otherwise) and merges into the origin's default branch; a built-in lane and a user lane alike; any other value is `WFC-112` |
 | `resume_reset` | a step id, one string (`WFC-112` any other shape): the step an owner-resumed epic's changed-children marker resets the lane to ([Properties](#properties)) — required when the lane declares `epic`, refused without it, and it must name a step of this lane; a built-in lane and a user lane alike |
+| `landing_lock` | a map holding `enter` and `exit` ([landing_lock keys](#landing_lock-keys)): the closed step interval in which the daemon holds the server landing lease of the ticket's repositories at its target branch; optional — absent means no interval and today's behaviour |
 | `defaults` | a map holding `model_candidates` and `tiers` |
 | `steps` | a non-empty list of step entries, in execution order (`WFC-113` missing or empty) |
 
@@ -161,12 +162,37 @@ default branch, a sub-ticket's fixed target branch alike) from looping a
 work item for ever: past it the lane stops and waits for
 the owner, exactly like a spent `max_rewinds`.
 
+### landing_lock keys
+
+| Key | Rule |
+|---|---|
+| `enter` | a step id of this lane, required (`WFC-113` missing, `WFC-112` not a step): the interval's first step and its re-entry point after a release |
+| `exit` | a step id of this lane, required: the interval's last step (the same step is a legal one-step interval); it may not precede `enter` (`WFC-112`) |
+
+The interval is closed: the driver takes the server landing lease of the
+ticket's repositories at its target branch before the `enter` step first
+dispatches, holds it across the interval's dispatches (the daemon renews
+it on the server clock) and releases it when the `exit` step is done or
+the workflow leaves the interval. A lease loss and an ask of a non-gate step release the group and re-enter
+at `enter`, charged to no rewind budget; a gate's ask (verification's
+waiver, the human merge's person) resumes that gate in place, so the
+owner's decision is not preceded by another sync/verification round
+(owner ruling 2026-11-24, 1A — the narrowing applies to gates only). A
+step inside the interval takes no single-step `resources: {locks: [merge]}`
+of its own: the interval's lease is the one lock. A wait for the lease is a
+`merge_lock_queued` fact, never a stall. The server lease
+is generic (`kind: landing`): its key, FIFO order, 300 s lease, 30 s
+renewal, 5 s poll and server-side identity normalization live in
+[uds-routes.md](uds-routes.md)'s lease routes; the lane only declares the
+interval and names no step in the Go code. Develop and epic declare
+`sync..merge`.
+
 ### resources keys
 
 | Key | Rule |
 |---|---|
 | `admission` | `none` (the default) or `heavy`: the dispatch takes a heavy-run admission slot before its process starts and gives it back when the process is gone |
-| `locks` | a list holding `merge` at most once: the dispatch holds the per-repo merge lock of every task repo (the lock develop's merge and the integration lane's revert hold). `bar` is `WFC-112` with its rewrite: "the bar lock is gone; delete `bar` from resources.locks (a step that runs heavy commands declares `resources: {admission: heavy}`)" |
+| `locks` | a list holding `merge` at most once: the dispatch takes the server landing lease of every task repo for its dispatch (the single-dispatch merge lock micro's merge and the integration lane's revert hold — the same key and before-merge check as a declared `landing_lock` interval). `bar` is `WFC-112` with its rewrite: "the bar lock is gone; delete `bar` from resources.locks (a step that runs heavy commands declares `resources: {admission: heavy}`)" |
 
 Admission first, the lock after, all or nothing; released in reverse
 order when the dispatch ends. A step holding either is not kept warm while

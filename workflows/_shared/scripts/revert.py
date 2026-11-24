@@ -554,6 +554,9 @@ class Revert:
     def __init__(self, inv: Invocation, g: Git, ctx: Ctx, fix_reverting: List[RevertEntry]) -> None:
         self.inv = inv
         self.g = g
+        # the repair/revert merges run under the landing lock too
+        # (polyforge#245, Q6): every gh pr merge is preceded by its check
+        self.g.landing_gate = True
         self.ctx = ctx
         # the reverts this run carries: a fix blaming one of their items
         # never lands

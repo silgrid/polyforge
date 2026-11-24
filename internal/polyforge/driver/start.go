@@ -116,6 +116,9 @@ type StartConfig struct {
 	// Forge is the forge binding (Config.Forge): the command environment
 	// and the per-repo merge lock a step declaring it holds.
 	Forge Forge
+	// IntervalLeases is the daemon's landing-lease manager (Config.IntervalLeases,
+	// landing.go): a lane declaring a lease_interval interval holds it.
+	IntervalLeases IntervalLeases
 	// HubWrites makes a step round's pending `pf step hub` writes when it
 	// hands off done (Config.HubWrites, workflow contract 4).
 	HubWrites pendingwrites.Sink
@@ -167,26 +170,27 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 		cfg.Link.Reset() // a new driver epoch: no fence or verdict of a predecessor leaks in
 	}
 	drv, err := New(Config{
-		WI:            wi,
-		BundleDir:     adapter.BundleDir,
-		Workflow:      adapter.Workflow,
-		Spawner:       adapter,
-		SpawnN:        int64(stepSeed),
-		Log:           cfg.Log,
-		Link:          cfg.Link,
-		Limits:        cfg.Limits,
-		LimitsFunc:    cfg.LimitsFunc,
-		TextRulesFunc: cfg.TextRulesFunc,
-		Compose:       cfg.Compose,
-		EpicChildren:  cfg.EpicChildren,
-		Params:        cfg.Params,
-		Interrupted:   cfg.Interrupted,
-		StepEnded:     cfg.StepEnded,
-		Admission:     cfg.Admission,
-		Forge:         cfg.Forge,
-		OwnerWait:     cfg.OwnerWait,
-		HubWrites:     cfg.HubWrites,
-		Language:      cfg.Language,
+		WI:             wi,
+		BundleDir:      adapter.BundleDir,
+		Workflow:       adapter.Workflow,
+		Spawner:        adapter,
+		SpawnN:         int64(stepSeed),
+		Log:            cfg.Log,
+		Link:           cfg.Link,
+		Limits:         cfg.Limits,
+		LimitsFunc:     cfg.LimitsFunc,
+		TextRulesFunc:  cfg.TextRulesFunc,
+		Compose:        cfg.Compose,
+		EpicChildren:   cfg.EpicChildren,
+		Params:         cfg.Params,
+		Interrupted:    cfg.Interrupted,
+		StepEnded:      cfg.StepEnded,
+		Admission:      cfg.Admission,
+		Forge:          cfg.Forge,
+		IntervalLeases: cfg.IntervalLeases,
+		OwnerWait:      cfg.OwnerWait,
+		HubWrites:      cfg.HubWrites,
+		Language:       cfg.Language,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("driver: %w", err)
