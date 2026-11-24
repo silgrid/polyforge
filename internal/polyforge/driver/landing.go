@@ -92,12 +92,12 @@ func (d *Driver) releaseLeaseForAsk(stepID string) {
 		return
 	}
 	if d.leaseHold != nil {
-		// An ask at the interval's exit step (develop's merge — the human
-		// merge mode's wait) is the interval's end: release and let the
-		// reply resume that step, so a person's landing is not preceded by
-		// another sync/verification round. An ask before the exit re-enters
-		// at the declared enter step after the reply.
-		if _, exit, ok := d.leaseInterval(); !ok || d.workflow.Steps[exit].ID != stepID {
+		// A gate's ask is its own judgment (verification's waiver, the
+		// human merge's person): release and let the reply resume that
+		// gate, so the owner's decision is not preceded by another
+		// sync/verification round. An ask of a non-gate step re-enters at
+		// the declared enter step after the reply.
+		if spec := d.workflow.step(stepID); spec == nil || !spec.Gate {
 			d.leaseReentry = true
 		}
 		d.releaseLease("ask")
