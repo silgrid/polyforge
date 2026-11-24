@@ -176,6 +176,36 @@ func w224AwaitNextSummary(t *testing.T, inst *v1Install, d *v1Daemon, wi string,
 	return w224Snap{}
 }
 
+// w224DemandUntilFact waits for the FIRST summarize fact of a WI whose
+// step is running: a marked request that lands before the step's dispatch
+// is live (agent handle, spawn journal, transcript) arms nothing and
+// records nothing (watchsnap.go summarizeDemand, lane.go Marked), so —
+// as the panel does on every read — it re-issues the marked request until
+// a fact lands. Each round reads a plain snapshot first and stops at the
+// first summary or error, so no request follows the call that produced
+// it. It answers that snapshot, the time right after the LAST marked
+// request (the call starts inside a marked request, so an interval
+// measured from here is measured from no earlier than the call's start)
+// and the number of marked requests sent; bound caps the wait.
+func w224DemandUntilFact(t *testing.T, inst *v1Install, d *v1Daemon, wi string, bound time.Duration) (w224Snap, time.Time, int) {
+	t.Helper()
+	deadline := time.Now().Add(bound)
+	var lastDemand time.Time
+	sent := 0
+	for time.Now().Before(deadline) {
+		s := w224SnapOf(t, inst, d, wi)
+		if s.Summary != nil || s.SummaryError != nil {
+			return s, lastDemand, sent
+		}
+		w224Demand(t, inst, d, wi)
+		lastDemand = time.Now()
+		sent++
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Fatalf("no summarize fact ever landed in the snapshot of %s within %v ((no summary, no error) after %d marked requests; daemon log tail: %s)", wi, bound, sent, d.logTail())
+	return w224Snap{}, time.Time{}, sent
+}
+
 // w224AssertSummaryLine pins the held line's content contract and the
 // dispatch facts the fake narrates: ONE plain-text line, at most 200
 // characters, held with its age and no error, naming the model, a
@@ -483,11 +513,10 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	})
 	// W224_INJECT_EARLY_DEMAND=1 (test-only, off by default) issues the
 	// first marked request before the submit — the daemon has no live
-	// dispatch for the WI yet, so the request arms nothing — and sends no
-	// marked request at the usual place: the first demand a loaded host
-	// lands before the step's agent and transcript are ready.
-	earlyDemand := os.Getenv("W224_INJECT_EARLY_DEMAND") == "1"
-	if earlyDemand {
+	// dispatch for the WI yet, so the request arms nothing — the first
+	// demand a loaded host lands before the step's agent and transcript
+	// are ready.
+	if os.Getenv("W224_INJECT_EARLY_DEMAND") == "1" {
 		w224Demand(t, inst, d, wi)
 	}
 	d.pf(t, "submit", wi)
@@ -498,14 +527,15 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	// The first call fails raw: the snapshot carries the RAW error text
 	// (the harness's own stderr wording, never faked), no summary, and
 	// the failure breaks nothing (the snapshot stays whole).
-	if !earlyDemand {
-		w224Demand(t, inst, d, wi)
+	// A marked request landing before the step's dispatch is live arms
+	// nothing, so the marked request is re-issued until the first fact
+	// lands. The first call started inside the last of them (Marked sets
+	// the interval clock before the route answers), so the interval is
+	// measured from no later than firstDemandAt.
+	s, firstDemandAt, demands := w224DemandUntilFact(t, inst, d, wi, 15*time.Second)
+	if demands < 1 {
+		t.Fatalf("a summarize fact landed before any marked request (%+v): a plain fetch armed the lane", s)
 	}
-	// The first call started inside that request (Marked sets the
-	// interval clock before the route answers), so the interval is
-	// measured from no later than here.
-	firstDemandAt := time.Now()
-	s := w224AwaitSummary(t, inst, d, wi, 15*time.Second)
 	if s.Summary != nil {
 		t.Fatalf("a summary is held for a failed call: %q", *s.Summary)
 	}
