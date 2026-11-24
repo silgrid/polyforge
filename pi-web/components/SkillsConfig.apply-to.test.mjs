@@ -16,6 +16,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const {
   rowSwitchTargets,
+  rowSwitchValues,
   rowSwitchItems,
   applyRowSwitchResults,
   rowsToSwitch,
@@ -107,4 +108,35 @@ test("the group switch acts on the rows whose pi side would change, pi alone (85
   assert.deepEqual(rowsToSwitch(rows, false).map((row) => row.key), ["/a/SKILL.md"]);
   const allShown = rows.map((row) => row.pi ? { ...row, pi: { ...row.pi, disableModelInvocation: false } } : row);
   assert.deepEqual(rowsToSwitch(allShown, true), []);
+});
+
+// polyforge#259 T4 AC1 (review #2/#6): the undo's previous value is READ from the
+// row, never derived from the state being written — pi's effective state and
+// claude's own native word. Expected values come from the row fixture, not from
+// the component's output; a "derive it from the new state" implementation
+// returns "disabled" for the first case and "enabled" for claude's native word,
+// and both assertions turn red.
+test("the undo's previous values are the row's own, per harness", () => {
+  const row = {
+    key: "user:/skills/a/SKILL.md",
+    scope: "user",
+    name: "a",
+    harnesses: ["pi", "claude"],
+    sameName: [],
+    pi: { filePath: "/skills/a/SKILL.md", disableModelInvocation: false, sourceInfo: {} },
+    claude: { name: "a", filePath: "/skills/a/SKILL.md", state: "user-invocable-only" },
+  };
+  assert.deepEqual(rowSwitchValues(row, ["pi", "claude"]), [
+    { harness: "pi", state: "enabled" },
+    { harness: "claude", state: "user-invocable-only" },
+  ], "a previous value was derived from the new state instead of read");
+  // A pi side that hides the skill reads as disabled, and a claude side with no
+  // stored word reads as enabled.
+  const hidden = { ...row, pi: { ...row.pi, disableModelInvocation: true }, claude: { name: "a", filePath: "/skills/a/SKILL.md" } };
+  assert.deepEqual(rowSwitchValues(hidden, ["pi", "claude"]), [
+    { harness: "pi", state: "disabled" },
+    { harness: "claude", state: "enabled" },
+  ]);
+  // A harness the row does not list carries nothing to restore.
+  assert.deepEqual(rowSwitchValues({ ...row, claude: undefined }, ["pi", "claude"]), [{ harness: "pi", state: "enabled" }]);
 });

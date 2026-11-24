@@ -1649,3 +1649,18 @@ test("the group badge keeps the harness spelling and stands off the group name (
   assert.match(badge, /text-transform:\s*none/, "text-transform inherits, so the badge must opt out");
   assert.match(badge, /margin-left:\s*[1-9]/, "the badge needs its own space from the group name");
 });
+
+// polyforge#259 T4 AC1 (review #1, owner 1A): a landed switch offers 「已保存 · 撤销」
+// in the panel, and an undo dropped because the server moved says so. The toast's
+// window comes from the write record; the expected words are the locale tables'.
+test("a server switch offers its undo in a toast, and a dropped undo says why", () => {
+  const record = { field: "global\0docs", previous: [{ harness: "global\0docs", state: "off" }], written: [{ harness: "global\0docs", state: "on" }], at: Date.now(), lifetimeMs: 6000 };
+  const offered = decode(view({ switchUndo: { record } }));
+  assert.match(offered, /role="status"/, "the toast is not a status");
+  assert.match(offered, new RegExp(messages["settings.saved"]), "the toast does not say 已保存");
+  assert.match(offered, new RegExp(`<button[^>]*>${messages["settings.undo"]}<\/button>`), "the toast offers no undo");
+  assert.doesNotMatch(offered, /data-mcp-switch-note/, "a dropped undo shows without one");
+  const dropped = decode(view({ switchSuperseded: true }));
+  assert.match(dropped, new RegExp(messages["mcp.undoSuperseded"]), "a dropped undo does not say why");
+  assert.doesNotMatch(dropped, new RegExp(`>${messages["settings.undo"]}<`), "a dropped undo still offers its button");
+});
