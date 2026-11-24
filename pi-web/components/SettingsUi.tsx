@@ -796,7 +796,18 @@ export function ConfigSaveFooter({ status, dirty, saving, discardLabel, saveLabe
   onDiscard: () => void;
   onSave: () => void;
 }) {
-  return null;
+  return (
+    <ConfigFooter status={status}>
+      {dirty > 0 && (
+        <>
+          <ConfigButton size="small" disabled={saving} onClick={onDiscard}>{discardLabel}</ConfigButton>
+          <ConfigButton variant="primary" disabled={saving} onClick={onSave}>
+            {saveLabel(dirty)}
+          </ConfigButton>
+        </>
+      )}
+    </ConfigFooter>
+  );
 }
 
 /** 一条设置页的错误 notice（polyforge#259 T4 AC2）：中文主文案，服务端原文折叠进详情。 */

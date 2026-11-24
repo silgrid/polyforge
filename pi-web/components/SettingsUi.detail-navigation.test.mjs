@@ -45,7 +45,11 @@ test("a phone's Settings levels live in the history: Back goes up one, closing d
   assert.match(hook, /window\.history\.pushState\(window\.history\.state, ""\)/);
   assert.match(hook, /if \(pushedRef\.current > 0\) window\.history\.back\(\);/);
   assert.match(hook, /if \(pushed > 0\) window\.history\.go\(-pushed\);/);
-  assert.match(panelSource, /const onClose = useCallback\(\(\) => \{\s*if \(!mayLeaveModels\(\)\) return;\s*dropHistory\(\);\s*closeSettings\(\);/);
+  // polyforge#259 T4 AC1: the close guard now covers every tab that reports an
+  // unsaved draft, so the source names the shared mayLeave() rather than the
+  // model page's own flag.
+  assert.match(panelSource, /const onClose = useCallback\(\(\) => \{\s*if \(!mayLeave\(\)\) return;\s*dropHistory\(\);\s*closeSettings\(\);/);
+  assert.match(panelSource, /unsavedSections\[section\] && !window\.confirm\(t\("settings\.unsavedLeave"\)\)/, "switching tabs skips the unsaved draft prompt");
   // A desktop is always on the section, so narrowing the window keeps it.
   assert.match(hook, /if \(!isPhone && level !== "section"\) setLevel\("section"\);/);
 });
