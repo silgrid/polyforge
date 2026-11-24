@@ -884,6 +884,12 @@ try {
       { key: "transient_error_patterns", value: ["timeout"], source: "file", set: true },
       { key: "model_error_patterns", value: [], source: "default", set: false },
     ];
+    // The Host-only keys render only when the Cell registry reads (the upgrade
+    // hint stands in otherwise), and the verify container has no pf
+    // (build finding u11#7).
+    await page.route("**/api/polyforge/cells", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      capabilities: ["cell-list", "cell-scoped-write"], supported: true, cells: [{ profile: "default", state: "serving" }],
+    }) }));
     await page.route("**/api/polyforge/config?host=1", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       capable: true, file: { path: "/root/.config/polyforge/cli.toml", sha256: "e2e-host-sha" }, items: hostItems, memoryPolicy: null,
     }) }));
