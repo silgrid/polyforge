@@ -285,6 +285,7 @@ const T = {
   S35: "S85-35: default model and reasoning change nothing until Save; a delayed save locks the controls, a failed save keeps its draft, a partial save shows the landed value and retries (polyforge#258 r2 #1/#2/#3)",
   S36: "S85-36: a 409 on the drawer's first harness keeps the draft, marks the rest not attempted and retries successfully (polyforge#258 r2 #1)",
   S37: "S85-37: Escape closes only the drawer and returns focus to its label (polyforge#258 r2 #5)",
+  S38: "S85-38: the Provider editor's models.json draft survives a subpage round trip and sends no save (polyforge#258 r3 #1)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
