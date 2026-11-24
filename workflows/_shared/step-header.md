@@ -134,7 +134,8 @@ pf step handoff --status <status> --body @<file> [--evidence <path>]... [--to <s
 `--per-owner <at>` is the `at` stamp, in `runtime-state/asks.jsonl`, of the owner's
 message to this step in this round whose words you carry out. Use `cancel`, `waive` and
 `rewind` only on such a message, and state the words and your reading of them in
-Decisions and why / 关键决定和理由. The daemon checks that the message exists, not what it says.
+Decisions and why / 关键决定和理由. The daemon checks that the message exists and quotes it in your header; reading its
+words is yours.
 
 ## Memory
 
