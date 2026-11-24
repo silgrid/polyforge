@@ -413,11 +413,13 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
             <SectionTitle>{t("i18n.provider")}</SectionTitle>
           </ConfigDetailHeaderInfo>
           <ConfigDetailActions>
-            <EnabledModelsProviderSwitch providerId={name} controller={enabledModels} noteId={switchNoteId} />
+            {/* Chat availability has one home — the model list (T3); the
+                Provider subpage edits connection parameters only. */}
+            {!contextOnly && <EnabledModelsProviderSwitch providerId={name} controller={enabledModels} noteId={switchNoteId} />}
             <ConfigButton variant="danger" size="small" onClick={onDelete}>{t("i18n.delete")}</ConfigButton>
           </ConfigDetailActions>
         </ConfigDetailHeader>
-        <EnabledModelsProviderSwitchNote providerId={name} controller={enabledModels} id={switchNoteId} />
+        {!contextOnly && <EnabledModelsProviderSwitchNote providerId={name} controller={enabledModels} id={switchNoteId} />}
       </div>
 
        <Field label={t("i18n.providerName")}>
@@ -1725,11 +1727,17 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
                 <select aria-label={t("i18n.model")} value={selection?.type === "model" ? String(selection.index) : ""}
                   onChange={(event) => {
                     if (!customProvider) return;
+                    if (event.target.value === "__provider__") {
+                      setSelection({ type: "provider", name: customProvider });
+                      openDetail();
+                      return;
+                    }
                     if (event.target.value === "__new__") { addModel(customProvider); openDetail(); return; }
                     setSelection({ type: "model", providerName: customProvider, index: Number(event.target.value) });
                     openDetail();
                   }}>
                   <option value="" disabled>{t("i18n.selectProviderModel")}</option>
+                  <option value="__provider__">{t("models.providerSettings")}</option>
                   {(customEntry.models ?? []).map((model, index) =>
                     <option key={index} value={index}>{modelSidebarLabel(model) || t("i18n.newModel")}</option>)}
                   <option value="__new__">+ {t("i18n.model")}</option>

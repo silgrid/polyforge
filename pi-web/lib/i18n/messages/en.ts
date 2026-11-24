@@ -1911,6 +1911,7 @@ export const enLocale: LocalePlugin = {
     "models.defaultHeading": "Default model",
     "models.providersHeading": "pi Providers",
     "models.providerLabel": "Provider",
+    "models.providerSettings": "Provider settings",
     "models.claudeCustomHeading": "Claude custom models",
     "models.claudeCustomLoading": "Loading…",
     "models.claudeCustomEmpty": "No custom models. Add one — any name Claude's --model accepts.",

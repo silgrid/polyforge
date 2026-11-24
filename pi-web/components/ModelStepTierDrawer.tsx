@@ -7,7 +7,7 @@
 // a failure stops there with the draft kept — the #151 rules, restored after
 // #256 removed the inline editor.
 
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { ModelViewRow } from "@/lib/harness/model-view";
 import {
@@ -21,6 +21,7 @@ import {
 } from "@/lib/step-tiers";
 import { HarnessApplyTo, applyToTargets, type HarnessApplyToResult, type HarnessApplyToSelection } from "./HarnessApplyTo";
 import { ConfigButton } from "./SettingsUi";
+import { openStackedDialog } from "@/lib/stacked-dialog";
 
 export interface StepTierColumn {
   capable: boolean;
@@ -67,6 +68,12 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
   const [selection, setSelection] = useState<HarnessApplyToSelection>({ mode: "all", selected: [] });
   const [results, setResults] = useState<HarnessApplyToResult[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  // A dialog above Settings: Escape is taken in the capture phase, so one press
+  // closes only this drawer, and focus returns to the label that opened it.
+  useLayoutEffect(() => openStackedDialog(document, dialogRef.current, () => onCloseRef.current()), []);
   if (!tier.capable) return null;
   const target = draft !== null ? draft : view.kind === "all" ? view.tier : "";
 
@@ -113,9 +120,11 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
   return (
     <div className="model-tier-drawer-backdrop" onClick={onClose}>
       <aside
+        ref={(node) => { dialogRef.current = node; }}
         role="dialog"
         aria-modal="true"
         aria-label={`${t("models.stepTier")} — ${row.name}`}
+        tabIndex={-1}
         data-step-tier-drawer=""
         className="model-tier-drawer"
         onClick={(event) => event.stopPropagation()}

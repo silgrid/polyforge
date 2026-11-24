@@ -127,7 +127,7 @@ export function StepTierBadges({ row, tier, onOpen }: { row: ModelViewRow; tier:
   >{content}</button>;
 }
 
-export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effortValues = {}, onEffort, tier, onOpenTier }: {
+export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effortValues = {}, onEffort, tier, onOpenTier, saving = false }: {
   rows: ModelViewRow[];
   enabled?: EnabledModelsController;
   levels?: Record<string, string[]>;
@@ -137,6 +137,8 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effo
   onEffort?: (provider: string, id: string, level: string) => void;
   tier?: StepTierColumnView;
   onOpenTier?: (row: ModelViewRow) => void;
+  /** The explicit save is in flight: the draft must not accept a newer edit. */
+  saving?: boolean;
 }) {
   const { t } = useI18n();
   return <table className="settings-model-table" style={{ width: "100%", textAlign: "left" }}>
@@ -161,6 +163,7 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effo
           {onEffort && row.harnesses.includes("pi") && supported.length > 0
             ? <label>pi <select
               aria-label={`${t("models.reasoning")} — ${key}`}
+              disabled={saving}
               value={key in effortValues ? effortValues[key] : piSettings?.perModelReasoningEffort[key]?.raw ?? ""}
               onChange={(event) => onEffort(row.provider, row.id, event.target.value)}>
               <option value="">{t("models.followGlobal", { level: piSettings?.reasoningEffort?.raw ?? t("models.notProvided") })}</option>
@@ -182,6 +185,31 @@ export function ModelSaveBar({ count, saving, onSave }: { count: number; saving:
     <ConfigButton data-model-save="" variant="primary" disabled={saving || count === 0} onClick={onSave}>
       {count > 0 ? t("models.saveChanges", { count }) : t("i18n.save")}
     </ConfigButton>
+  </div>;
+}
+
+/** The model list's provider-wide enable/disable entry (T3): chat
+ *  availability has one home, so the provider switch that used to sit in the
+ *  Provider editor lives here as a bulk action instead. */
+export function ModelEnabledBulk({ enabled }: { enabled: EnabledModelsController }) {
+  const { t } = useI18n();
+  const [provider, setProvider] = useState("");
+  const providers = enabled.view?.providers ?? [];
+  if (providers.length === 0) return null;
+  const editable = enabled.view?.editable === true;
+  const busy = enabled.pending !== null;
+  return <div className="settings-model-bulk" data-model-bulk="">
+    <label className="settings-model-bulk-field">
+      <span>{t("models.providerLabel")}</span>
+      <select aria-label={t("models.providerLabel")} value={provider} onChange={(event) => setProvider(event.target.value)} disabled={busy}>
+        <option value="">{t("models.providerLabel")}</option>
+        {providers.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+      </select>
+    </label>
+    <ConfigButton size="small" disabled={!editable || !provider || busy}
+      onClick={() => { if (provider) enabled.setProvider(provider, true); }}>{t("models.enableAll")}</ConfigButton>
+    <ConfigButton size="small" disabled={!editable || !provider || busy}
+      onClick={() => { if (provider) enabled.setProvider(provider, false); }}>{t("models.disableAll")}</ConfigButton>
   </div>;
 }
 
@@ -209,6 +237,9 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [saving, setSaving] = useState(false);
+  // A save failure is not a read failure: a reload after a landed write must
+  // not clear the message that belongs to the failed draft entry.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [hostTierConfig, setHostTierConfig] = useState<HostTierConfig | null>(null);
   const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
 
@@ -280,10 +311,12 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
 
   const dirty = draftDirtyCount(draft);
   const saveDraft = useCallback(async () => {
+    if (saving) return;
     const writes = draftWrites(draft, cwd);
     if (writes.length === 0) return;
     setSaving(true);
     setError(null);
+    setSaveError(null);
     let next = draft;
     for (const request of writes) {
       try {
@@ -294,16 +327,28 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
         });
         const data = await response.json();
         if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
+        // A landed write is the saved value from now on: the UI shows it even
+        // when a later write of the same round fails, and the draft keeps only
+        // the failed entries for a retry. The controls are disabled while
+        // saving, so this settlement never races a newer edit.
+        if (request.kind === "default" && next.defaultModel) setDefaultModel(next.defaultModel);
+        if (request.kind === "effort" && request.key) {
+          const level = next.efforts[request.key] ?? "";
+          setPiSettings((previous) => previous ? {
+            ...previous,
+            perModelReasoningEffort: { ...previous.perModelReasoningEffort, [request.key as string]: { neutral: null, raw: level } },
+          } : previous);
+        }
         next = settleWrite(next, request);
         setDraft(next);
+        setRevision((previous) => previous + 1);
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setSaveError(cause instanceof Error ? cause.message : String(cause));
         break;
       }
     }
     setSaving(false);
-    if (draftDirtyCount(next) === 0) setRevision((previous) => previous + 1);
-  }, [cwd, draft]);
+  }, [cwd, draft, saving]);
 
   // One Host catalog read: the items the plan derives from AND the file hash
   // the write expects, from the SAME GET — the CAS guards exactly that state.
@@ -375,7 +420,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   const invalidTiers = tierColumn?.capable ? stepTierInvalidReferences(tierColumn.tiers, defined) : [];
   return (
     <div className="settings-section settings-models" data-model-page="unified">
-      {(error || enabled.failure) && <div role="alert">{error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}</div>}
+      {(error || saveError || enabled.failure) && <div role="alert">{saveError ?? error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}</div>}
       <ConfigSplitView>
         <ModelPageNav page={page} onSelect={changePage} />
         <ConfigDetail>
@@ -410,7 +455,9 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
                   {t("models.stepTierInvalidNote", { candidates: invalidTiers.join("、") })}
                 </p>
               )}
+              <ModelEnabledBulk enabled={enabled} />
               <HarnessModelTable rows={rows} enabled={enabled} levels={levels} piSettings={piSettings}
+                saving={saving}
                 effortValues={draft.efforts}
                 tier={tierColumn ?? undefined}
                 onOpenTier={(row) => { setDrawerTier(tierColumn); setDrawerRow(row); }}

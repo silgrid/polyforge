@@ -3814,3 +3814,23 @@ select.mcp-add-input {
 @media (max-width: 640px) {
   .model-tier-drawer { width: 100%; }
 }
+.settings-model-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-model-bulk-field { display: flex; flex: 0 1 220px; flex-direction: column; gap: 3px; min-width: 0; }
+.settings-model-bulk-field > span { color: var(--text-muted); font-size: 11px; }
+.settings-model-bulk-field > select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
