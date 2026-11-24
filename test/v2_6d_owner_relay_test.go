@@ -1,4 +1,5 @@
 // carries: test/v2_6d_owner_relay_test.go, test/v2_6c_ask_awaiting_owner_test.go, internal/polyforge/driver/relay.go
+// carries: internal/common/capsule/asks*.go, internal/polyforge/driver/ask*.go, internal/polyforge/driver/relay*.go, internal/polyforge/driver/autoanswer*.go, internal/polyforge/daemon/stepcall.go, internal/polyforge/daemon/answer.go, internal/polyforge/driver/ownermsg.go
 package test
 
 // v2_6d_owner_relay_test.go: the owner-message relay (workflow contract
