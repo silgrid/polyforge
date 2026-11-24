@@ -44,6 +44,14 @@ never a question the daemon asks and never a FAIL.
 4. Everything holds: hand off `done`, the body carrying the row table's
    path and the epic branch's tips.
 
+## 完成判据 — done criteria
+
+`done` only when every item below holds:
+
+1. **Every child** of `runtime-state/children.json` has exactly one row in `artifacts/verify-children.md`, and its status there is `wrapped`.
+2. **Every child's every `merge_commits` entry** — per repo, from the child's landing record — is an ancestor of `origin/<the checkout branch>` (`git merge-base --is-ancestor`), and the row records that check.
+3. **Every task repo** of the capsule appears in the table with the epic branch's tip.
+
 ## 交接要写什么 — what your hand-off carries
 
 - **Status.** `done` only when every child is wrapped and merged into the
