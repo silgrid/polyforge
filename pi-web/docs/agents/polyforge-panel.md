@@ -47,7 +47,7 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
 - `GET /api/polyforge/watch?wi=<slug|wi_id>` → 200 `{status:{wi,slug,workflowStatus,
   currentStep,updatedAt,steps:[{name,status,startedAt?}],declared_steps:[{id}]|null,
   skippableSteps?:[id],overrides?:{[id]:{models?,skip?,pending?}},
-  overrideView?:{wi,posture,steps:[{id,status,skippable,models?,modelsBy?,skip?,skipBy?,pending?,effective?,source?}]},
+  overrideView?:{wi,posture,steps:[{id,status,skippable,models?,modelsBy?,skip?,skipBy?,pending?,effective?,source?,canOverrideModels?,modelOverrideReason?,modelEffectScope?}]},
   paramsView?:{wi,posture,steps:[{id,status,params:[{name,value,source?}]}]},
   events:[{at,kind,step?,…,question?,question_id?,by?,disposition?,intent?}],progress?:{command,command_age_sec,tool_calls,
   recent_files},origin?:{kind:"chat",owner},summary?,summary_age_sec?,
@@ -715,8 +715,12 @@ keep no read of their own (polyforge#42 G11: a read per selection was a
 click-caused request): everything they render rides the watch snapshot —
 the declarations and the overlay's values (`skippableSteps`, `overrides`),
 and the effective chains with their source labels (`step overlay`, `pf
-submit --models`, the yaml/bundle level) through the view the watch route
-composes into its own response (`status.overrideView`, one
+submit --models`, the yaml/bundle level) — and, since polyforge#270, the
+daemon's per-row next-dispatch face (`canOverrideModels`,
+`modelOverrideReason`, `modelEffectScope: "next_dispatch"` — the scope only
+on a row the daemon still accepts a write for, so the timing note never
+shows on a step with no next dispatch) — through the
+view the watch route composes into its own response (`status.overrideView`, one
 `pf --json override <wi>` read per asked watch answer; a failed view read
 degrades to a snapshot without it, and the override route's GET face is
 gone with its last caller; polyforge#48: the view is opt-in — `?overrides=1`,
@@ -734,9 +738,14 @@ composes beside the overlay one (`status.paramsView`, one
 for an ended ticket; G11 keeps holding — the section fetches nothing on
 selection). The write controls — the model setter, the skip switch and a
 set/clear row per declared param (the same one-action POST face, `pf
-override --param` / `--clear-param`'s shapes) — stay an UNSTARTED step's
-only; a step that already ran or holds a live dispatch shows its params
-read-only, and the daemon's typed refusal of a write shows inline. The model
+override --param` / `--clear-param`'s shapes) — keep the old reach, with
+one addition (polyforge#270): a done or live step whose view row says
+`canOverrideModels` renders the model setter again, with the
+`polyforge.stepControls.nextDispatch` note, because the daemon accepts that
+write for the step's NEXT dispatch (the finished round or live dispatch is
+unchanged); its params and the skip switch stay read-only. A started step
+with no such row shows its params read-only, and the daemon's typed refusal
+of a write shows inline. The model
 setter is the shared `ModelCandidatePicker` (85b2): the manual fill keeps
 the `data-pf-step-controls-model` hook and takes the full candidate string,
 the grouped select rides the watch snapshot's composed `status.stepTiers`

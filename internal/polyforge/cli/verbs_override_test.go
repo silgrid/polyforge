@@ -7,6 +7,7 @@ package cli
 
 import (
 	"encoding/json"
+	"flag"
 	"io"
 	"net/http"
 	"strings"
@@ -130,6 +131,101 @@ func TestW79OverrideQueuedFace(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the queued answer's rendering lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestOverrideNextDispatchHelpAndView (polyforge#270 u4, AC3): the verb's
+// help, the view and the write answer all say that a models/tier overlay is
+// accepted on a step that already ran or is running and takes effect on
+// that step's NEXT dispatch — never the finished round or the live one.
+// The tier branch is pinned beside the models branch (a past render only
+// handled models).
+func TestOverrideNextDispatchHelpAndView(t *testing.T) {
+	if !strings.Contains(cmdOverride.Summary, "next dispatch") {
+		t.Fatalf("the verb's Summary must name the next dispatch: %q", cmdOverride.Summary)
+	}
+	fs := flag.NewFlagSet("override", flag.ContinueOnError)
+	cmdOverride.Setup(fs)
+	for _, name := range []string{"step", "models", "clear-models", "tier", "clear-tier"} {
+		f := fs.Lookup(name)
+		if f == nil {
+			t.Fatalf("the verb declares no --%s", name)
+		}
+		if !strings.Contains(f.Usage, "next dispatch") {
+			t.Fatalf("--%s must say when the overlay applies: %q", name, f.Usage)
+		}
+	}
+
+	d := newDaemonFixture(t)
+	view := protocol.OverrideView{WorkItem: "wi_nd5", Posture: "running", Steps: []protocol.OverrideStepView{
+		{ID: "build", Status: "done", Models: []string{"claude:strong"}, ModelsBy: "usr_nd",
+			Effective: []string{"claude:strong"}, Source: "step override",
+			CanOverrideModels: true, ModelEffectScope: "next_dispatch"},
+		{ID: "merge", Status: "in_progress", CanOverrideModels: false,
+			ModelOverrideReason: "step merge will not be dispatched again from the work item's current position (no runnable later step can rewind to it): the model overlay is for a step that runs again"},
+	}}
+	raw, _ := json.Marshal(view)
+	d.answer("GET", "/jobs/wi_nd5/overrides", string(raw))
+	code, out, _ := runPf(t, map[string]string{"PF_DAEMON_SOCKET": d.sock}, "override", "wi_nd5")
+	if code != 0 {
+		t.Fatalf("the view exit = %d, stderr %q", code, out)
+	}
+	for _, want := range []string{
+		"step build          status=done",
+		"model-overlay=next-dispatch",
+		"next dispatch: claude:strong (step override)",
+		"step merge          status=in_progress",
+		"model-overlay=refused",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the view lacks %q:\n%s", want, out)
+		}
+	}
+
+	// a done step's models write: the answer says the next dispatch takes it
+	write := protocol.OverrideWriteResult{WorkItem: "wi_nd5", Changed: true, Posture: "running", Published: true,
+		Note: "the change applies on the step's next dispatch; the round that already ran is unchanged",
+		Step: protocol.OverrideStepView{ID: "build", Status: "done", Models: []string{"claude:strong"}, ModelsBy: "usr_nd",
+			CanOverrideModels: true, ModelEffectScope: "next_dispatch"}}
+	wraw, _ := json.Marshal(write)
+	d.answer("POST", "/jobs/wi_nd5/overrides", string(wraw))
+	code, out, _ = runPf(t, map[string]string{"PF_DAEMON_SOCKET": d.sock},
+		"override", "wi_nd5", "--step", "build", "--models", "claude:strong", "--by", "usr_nd")
+	if code != 0 {
+		t.Fatalf("the models write exit = %d, stderr %q", code, out)
+	}
+	for _, want := range []string{
+		"overlay models=claude:strong",
+		"published: the capsule chain carries it",
+		"next dispatch:",
+		"the round that already ran is unchanged",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the models answer lacks %q:\n%s", want, out)
+		}
+	}
+
+	// a tier write: the same next-dispatch line, and the tier's own operator
+	tier := protocol.OverrideWriteResult{WorkItem: "wi_nd5", Changed: true, Posture: "running", Published: true,
+		Note: "the change applies on the step's next dispatch; the live dispatch is not interrupted",
+		Step: protocol.OverrideStepView{ID: "build", Status: "in_progress", Tier: "strong", TierBy: "usr_nd",
+			CanOverrideModels: true, ModelEffectScope: "next_dispatch"}}
+	traw, _ := json.Marshal(tier)
+	d.answer("POST", "/jobs/wi_nd5/overrides", string(traw))
+	code, out, _ = runPf(t, map[string]string{"PF_DAEMON_SOCKET": d.sock},
+		"override", "wi_nd5", "--step", "build", "--tier", "strong", "--by", "usr_nd")
+	if code != 0 {
+		t.Fatalf("the tier write exit = %d, stderr %q", code, out)
+	}
+	for _, want := range []string{
+		"overlay tier=strong",
+		"(posture running, by usr_nd)",
+		"next dispatch:",
+		"the live dispatch is not interrupted",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the tier answer lacks %q:\n%s", want, out)
 		}
 	}
 }

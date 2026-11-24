@@ -92,7 +92,13 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted,
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
   };
-  if (params === undefined && !unstarted) {
+  // polyforge#270 (Q6 B/Q7 A): a done or live step whose daemon row says
+  // the models/tier overlay is accepted writes it for the step's NEXT
+  // dispatch — the same single-model setter, with the timing note. The
+  // params and the skip switch keep the old unstarted-only rules.
+  const canModels = row?.canOverrideModels === true;
+  const nextDispatch = row?.modelEffectScope === "next_dispatch";
+  if (params === undefined && !unstarted && !canModels && !nextDispatch) {
     return null; // no params to show, nothing to write: no shell at all
   }
   const effective = row?.effective ?? [];
@@ -145,7 +151,7 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted,
           ))}
         </div>
       )}
-      {unstarted && (
+      {(unstarted || canModels || nextDispatch) && (
         <>
           <span data-pf-step-controls-source="">
             {t("polyforge.stepControls.source")}:{" "}
@@ -156,6 +162,15 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted,
                 : t("polyforge.stepControls.sourceNone")}
             {pending ? ` ${t("polyforge.stepControls.pending")}` : ""}
           </span>
+          {nextDispatch && (
+            <span data-pf-step-controls-next-dispatch="" style={{ color: "var(--text-dim)" }}>
+              {t("polyforge.stepControls.nextDispatch")}
+            </span>
+          )}
+        </>
+      )}
+      {(unstarted || canModels) && (
+        <>
           <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
             {/* polyforge#151 (85b2): the single-model override is the shared
                 tier-grouped picker — the catalog rides the watch snapshot
@@ -182,7 +197,7 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted,
             >
               {busy ? t("polyforge.stepControls.busy") : t("polyforge.stepControls.apply")}
             </button>
-            {skippable ? (
+            {unstarted && (skippable ? (
               <button
                 type="button"
                 data-pf-step-controls-skip=""
@@ -194,11 +209,16 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted,
               </button>
             ) : (
               <span data-pf-step-controls-waive="" style={{ color: "var(--text-dim)" }}>{t("polyforge.stepControls.waiveHint")}</span>
-            )}
+            ))}
           </div>
         </>
       )}
-      {applied && <span data-pf-step-controls-applied="" style={{ color: "var(--accent)" }}>{t("polyforge.stepControls.applied")}</span>}
+      {applied && (
+        <span data-pf-step-controls-applied="" style={{ color: "var(--accent)" }}>
+          {t("polyforge.stepControls.applied")}
+          {nextDispatch ? ` — ${t("polyforge.stepControls.nextDispatch")}` : ""}
+        </span>
+      )}
       {error && <span data-pf-step-controls-error="" style={{ color: "#dc2626" }}>{error}</span>}
     </div>
   );

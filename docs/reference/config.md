@@ -912,10 +912,23 @@ label says `step override tier <name>` (or
 `step override (pending) tier <name>`) and names a missing/empty tier's
 fallback.
 
-Writability: a step with a live dispatch (a running ticket's current
-`in_progress` step) and a step that already ran refuse every action; a
+Writability (polyforge#270): the model aspects — `--models`/`--clear-models`
+and `--tier`/`--clear-tier` — are accepted on any step the lane can still
+dispatch again: a step that already ran (while a reachable gate's rewind
+span `[on_fail target, gate)` still covers it — Q1 B's reachability over
+the lane, the execution record and the effective skips) and the running current step
+included. They are recorded for that step's **next dispatch**; the round
+that already ran or the dispatch in flight is never changed. A step with
+no next dispatch (a done step past its last rewind, an effectively skipped
+one, a completed lane) refuses them `DAEMON-409` naming the reason, and the
+view carries the same judgement in `can_override_models`,
+`model_override_reason` and `model_effect_scope: "next_dispatch"` (the write
+answer too) — the scope only on a row that can still be written: an overlay
+left on a step with no next dispatch never claims one. The skip switch and a param keep the old step-status rule: a
+step with a live dispatch or one that already ran refuses them. A
 **paused** ticket accepts chains for every step that has not finished —
-its frozen current step included, the change-before-wake window — and a
+its frozen current step included, the change-before-wake window — and, as
+a running one, for a done step the lane can still dispatch again; and a
 **blocked** ticket's change rides the daemon's local pending record into
 the fresh capsule of its next `pf resume` there (the sealed scene of the
 blocked close is never written). A parked (paused or blocked) ticket's
@@ -954,8 +967,8 @@ it outranks the project's yaml value and the lane default from the step's
 next dispatch until cleared (`--clear-param <name>`). Only a param the
 capsule's lane snapshot declares on the step is accepted (any other is
 refused `DAEMON-400`, as is a value that is not one line of at most 256
-bytes), one action per call, and it follows the writability above (a live
-dispatch or a step that already ran refuses it `DAEMON-409`). The view
+bytes), one action per call, and it keeps the old step-status rule above (a
+live dispatch or a step that already ran refuses it `DAEMON-409`). The view
 lists the param overrides only, never the final value (`pf workflows
 --cwd` shows the lane and project layers).
 

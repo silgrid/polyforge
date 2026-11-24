@@ -84,6 +84,7 @@ func TestPF25OverrideSkillContract(t *testing.T) {
 		"models.json",
 		"override_set",
 		"pf watch",
+		"next dispatch",
 	} {
 		if !strings.Contains(frag, tok) {
 			t.Errorf("%s must carry the override surface marker %q — the fragment exists but does not teach the surface shipped", pf25FragRel, tok)
