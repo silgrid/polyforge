@@ -70,16 +70,16 @@ test("the control never submits: the page's save model does", () => {
   assert.doesNotMatch(specific, /<button/, "the expanded chip renders a button");
 });
 
-test("the chip lists every target, and an unsupported one is greyed with its reason in text", () => {
-  const all = render();
-  assert.match(all, /<input[^>]*type="radio"/, "the mode choice is missing from the chip's menu");
-  // Every target is listed whether the chip is open or closed (the details'
-  // content is in the markup; CSS shows it while open).
-  assert.deepEqual(all.match(/data-harness="[^"]+"/g), ['data-harness="pi"', 'data-harness="claude"']);
-  assert.match(all, /claude is not installed/, "the unsupported target gives no reason");
-  assert.match(all, /<input[^>]*type="checkbox"[^>]*disabled/, "the unsupported target is not disabled");
+test("the chip's menu holds the targets, and an unsupported one is greyed with its reason in text", () => {
+  // build finding u2#1: the target list exists only for a specific selection
+  // (the all mode reaches every target), so the assertion renders that mode.
+  const specific = render({ value: { mode: "specific", selected: ["pi"] } });
+  assert.match(specific, /<details[\s\S]*class="harness-apply-to-menu"[\s\S]*<\/details>/, "the targets are not in the chip's menu");
+  assert.deepEqual(specific.match(/data-harness="[^"]+"/g), ['data-harness="pi"', 'data-harness="claude"']);
+  assert.match(specific, /claude is not installed/, "the unsupported target gives no reason");
+  assert.match(specific, /<input[^>]*type="checkbox"[^>]*disabled/, "the unsupported target is not disabled");
   // The reason is visible text, never only a title tooltip.
-  assert.doesNotMatch(all, /title="/, "a reason hides in a tooltip");
+  assert.doesNotMatch(specific, /title="/, "a reason hides in a tooltip");
 });
 
 test("the chip shows each target's last result when the page has one", () => {
