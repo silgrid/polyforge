@@ -717,7 +717,9 @@ the declarations and the overlay's values (`skippableSteps`, `overrides`),
 and the effective chains with their source labels (`step overlay`, `pf
 submit --models`, the yaml/bundle level) — and, since polyforge#270, the
 daemon's per-row next-dispatch face (`canOverrideModels`,
-`modelOverrideReason`, `modelEffectScope: "next_dispatch"`) — through the
+`modelOverrideReason`, `modelEffectScope: "next_dispatch"` — the scope only
+on a row the daemon still accepts a write for, so the timing note never
+shows on a step with no next dispatch) — through the
 view the watch route composes into its own response (`status.overrideView`, one
 `pf --json override <wi>` read per asked watch answer; a failed view read
 degrades to a snapshot without it, and the override route's GET face is

@@ -914,19 +914,21 @@ fallback.
 
 Writability (polyforge#270): the model aspects — `--models`/`--clear-models`
 and `--tier`/`--clear-tier` — are accepted on any step the lane can still
-dispatch again: a step that already ran (while a later runnable gate's
-`on_fail` can rewind to it — Q1 B's reachability over the lane, the
-execution record and the effective skips) and the running current step
+dispatch again: a step that already ran (while a reachable gate's rewind
+span `[on_fail target, gate)` still covers it — Q1 B's reachability over
+the lane, the execution record and the effective skips) and the running current step
 included. They are recorded for that step's **next dispatch**; the round
 that already ran or the dispatch in flight is never changed. A step with
 no next dispatch (a done step past its last rewind, an effectively skipped
 one, a completed lane) refuses them `DAEMON-409` naming the reason, and the
 view carries the same judgement in `can_override_models`,
 `model_override_reason` and `model_effect_scope: "next_dispatch"` (the write
-answer too). The skip switch and a param keep the old step-status rule: a
+answer too) — the scope only on a row that can still be written: an overlay
+left on a step with no next dispatch never claims one. The skip switch and a param keep the old step-status rule: a
 step with a live dispatch or one that already ran refuses them. A
 **paused** ticket accepts chains for every step that has not finished —
-its frozen current step included, the change-before-wake window — and a
+its frozen current step included, the change-before-wake window — and, as
+a running one, for a done step the lane can still dispatch again; and a
 **blocked** ticket's change rides the daemon's local pending record into
 the fresh capsule of its next `pf resume` there (the sealed scene of the
 blocked close is never written). A parked (paused or blocked) ticket's

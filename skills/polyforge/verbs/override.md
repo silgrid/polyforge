@@ -57,9 +57,11 @@ accepted on a step that already ran (done) or is running right now
 - **Reachability is the judge**: the daemon computes, from the lane graph,
   the execution record and the effective skips, whether the step can still
   be dispatched again. A later step that still runs can re-dispatch it; a
-  done step counts only while a runnable gate's `on_fail` can rewind to it
-  (a done build with review/verification still ahead, for example); a
-  rewind_only step waits for a rewind that covers it; the rewind budget is
+  done step counts only while a reachable gate's rewind still covers it —
+  a rewind re-runs `[on_fail target, gate)`, so the target and the done
+  steps between it and the gate (a done build, or a done review while
+  verification can rewind to build); a rewind_only step waits for a rewind
+  whose span holds it; the rewind budget is
   not consulted (the owner's own authorization can open another round).
 - **A step with no next dispatch refuses** (`DAEMON-409` naming the
   reason): the done prefix past its last rewind, an effectively skipped
@@ -71,7 +73,8 @@ accepted on a step that already ran (done) or is running right now
   governs the next composition (Q4 A).
 - **The view and the answer say so**: the step row carries
   `can_override_models`, `model_override_reason` when it cannot be written
-  and `model_effect_scope: "next_dispatch"`; the write answer says the
+  and `model_effect_scope: "next_dispatch"` only while it can (an overlay
+  left on a step with no next dispatch never claims one); the write answer says the
   change applies on the next dispatch (the finished or live one
   unchanged). The skip switch and params keep their old rules.
 
@@ -99,15 +102,17 @@ accepted on a step that already ran (done) or is running right now
   candidate and round. The skip switch and a param keep the old refusal
   (`DAEMON-409`): they would change the dispatch in flight.
 - A step that **already ran** (done/skipped): the model aspects are
-  accepted while the lane can still dispatch the step again — a later
-  runnable gate's `on_fail` rewinds to it (a done build with a running
-  review or verification gate, for instance) — and take effect on that
+  accepted while the lane can still dispatch the step again — a reachable
+  gate's rewind span `[on_fail target, gate)` covers it (a done build with a
+  running review or verification gate, for instance) — and take effect on that
   step's next dispatch; the round that ran keeps its candidate, round and
   attempts. A step the lane will not dispatch again (no rewind left, an
   effective skip, a completed lane) refuses them `DAEMON-409` naming the
   reason; skip and params are refused for every done step.
 - A **paused** ticket: every step that has not finished accepts a chain —
-  including the frozen current step (the change-before-wake window); the
+  including the frozen current step (the change-before-wake window) — and,
+  as on a running ticket, so does a done step the lane can still dispatch
+  again; the
   change stays in the kept scene, not published, until the resume here
   publishes the chain.
 - A **blocked** ticket (this machine's capsule): the change lands in the
