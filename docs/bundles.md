@@ -335,7 +335,8 @@ error (`WFC-195`), never a dispatch failure:
   engineering principles every bundle shares, is one). No `vars` entry
   declares it; the loader renders the fragment's trimmed text, verbatim
   and never re-scanned. A declared var that shadows a fragment file is a
-  load error.
+  load error. A fragment may also carry advisory text — develop's build
+  renders `{{readability_checklist}}`, a checklist no gate reads (polyforge#236).
 - `{{<name>}}` — any other placeholder renders with the workflow.yaml
   step entry's `vars` (and `vars_files`) or `params`. Rendering fails
   closed both ways: a placeholder with neither a var, a param nor a
