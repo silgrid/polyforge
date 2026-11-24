@@ -48,6 +48,7 @@ import {
   ConfigSplitView,
   useConfigDetailNavigation,
 } from "./SettingsUi";
+import { ConfigDangerMenu } from "./ConfigDangerMenu";
 import {
   EnabledModelsSection,
   EnabledModelsBanner,
@@ -315,7 +316,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── Provider detail ───────────────────────────────────────────────────────────
 
-function ProviderDetail({ name, editingName, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels, contextOnly = false }: {
+export function ProviderDetail({ name, editingName, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels, contextOnly = false }: {
   name: string; editingName: string; provider: ProviderEntry;
   onChange: (p: ProviderEntry) => void; onEditingNameChange: (n: string) => void;
   onRename: (n: string) => void; onDelete: () => void;
@@ -416,7 +417,16 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
             {/* Chat availability has one home — the model list (T3); the
                 Provider subpage edits connection parameters only. */}
             {!contextOnly && <EnabledModelsProviderSwitch providerId={name} controller={enabledModels} noteId={switchNoteId} />}
-            <ConfigButton variant="danger" size="small" onClick={onDelete}>{t("i18n.delete")}</ConfigButton>
+            <ConfigDangerMenu
+              texts={{
+                menu: t("settings.dangerMenu"),
+                action: t("i18n.delete"),
+                confirmText: t("settings.dangerConfirm", { action: t("i18n.delete") }),
+                confirm: t("i18n.delete"),
+                cancel: t("i18n.cancel"),
+              }}
+              onConfirm={onDelete}
+            />
           </ConfigDetailActions>
         </ConfigDetailHeader>
         {!contextOnly && <EnabledModelsProviderSwitchNote providerId={name} controller={enabledModels} id={switchNoteId} />}
@@ -839,7 +849,7 @@ function fillEmptyModelFields(
   return { model: next, appliedCount };
 }
 
-function ModelDetail({
+export function ModelDetail({
   providerName,
   provider,
   model,
@@ -1114,7 +1124,16 @@ function ModelDetail({
             )}
              {testState.phase === "testing" ? t("i18n.checking") : testState.phase === "success" ? t("common.ok") : t("i18n.test")}
           </ConfigButton>
-          <ConfigButton variant="danger" size="small" onClick={onDelete}>{t("i18n.remove")}</ConfigButton>
+          <ConfigDangerMenu
+            texts={{
+              menu: t("settings.dangerMenu"),
+              action: t("i18n.remove"),
+              confirmText: t("settings.dangerConfirm", { action: t("i18n.remove") }),
+              confirm: t("i18n.remove"),
+              cancel: t("i18n.cancel"),
+            }}
+            onConfirm={onDelete}
+          />
         </ConfigDetailActions>
       </ConfigDetailHeader>
 

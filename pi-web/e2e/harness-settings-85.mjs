@@ -865,7 +865,9 @@ try {
     // claude's own sections: the extra values' radio, denyInsteadOfPrompting,
     // and the Pi Web approval channel (the moved claude tool permissions).
     await pane.getByRole("radio", { name: /bypassPermissions/ }).waitFor({ state: "visible", timeout: ACTION_MS });
-    await pane.getByRole("switch", { name: "denyInsteadOfPrompting" }).waitFor({ state: "visible", timeout: ACTION_MS });
+    // polyforge#259 T4 AC2: the switch is named by its display name now; the raw
+    // key stays as the second line inside it.
+    await pane.getByRole("switch", { name: /deny instead of prompting/i }).waitFor({ state: "visible", timeout: ACTION_MS });
     await pane.getByRole("radiogroup", { name: "Permission mode", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     await pane.getByRole("switch", { name: "Push a reminder when a permission waits" }).waitFor({ state: "visible", timeout: ACTION_MS });
     // The retired page's Claude Code report block renders again (owner
@@ -1458,7 +1460,10 @@ try {
     await waitFor(async () => (await drawer.innerText()).includes("Not attempted"),
       ACTION_MS, "the harness after the refused one was never marked not attempted");
     assert.equal(tierWrites().length, before + 1, "a refused first harness attempted the next one");
-    assert.match(await drawer.innerText(), /config-cas-409|changed since it was read/i, "the drawer shows the CAS refusal");
+    // polyforge#259 T4 AC2: the refusal's own words sit in the result's details
+    // fold, so the check reads the text content rather than the visible text.
+    const drawn = await drawer.locator(".harness-apply-to-results").evaluate((node) => node.textContent ?? "");
+    assert.match(drawn, /config-cas-409|changed since it was read/i, "the drawer shows the CAS refusal");
     assert.equal(await drawer.locator("[data-step-tier-select]").inputValue(), "fast-chat", "the draft target survives the conflict");
     await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
     await waitFor(async () => ((await drawer.innerText()).match(/Applied/g) ?? []).length >= 2,

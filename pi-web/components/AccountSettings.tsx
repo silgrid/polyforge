@@ -15,11 +15,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { AccountCellRow, AccountHarnessRow } from "@/lib/harness/account-rows";
+import { accountTargetName } from "@/lib/settings-display-names";
+import { serverErrorText } from "@/lib/server-error";
 import type { HarnessLoginCommand } from "@/lib/harness/concepts";
 import {
   ConfigButton,
   ConfigDetail,
   ConfigDetailActions,
+  ConfigErrorNotice,
   ConfigDetailHeader,
   ConfigDetailHeaderInfo,
   ConfigDetailTitle,
@@ -132,7 +135,16 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
                 <div><dt>{t("settings.accountConfigRoot")}</dt><dd data-account-field="config-root">{row.configRoot ?? "—"}</dd></div>
                 <div><dt>{t("settings.accountUsable")}</dt><dd data-account-field="usable">{row.usable ? t("settings.accountUsableYes") : t("settings.accountUsableNo")}</dd></div>
                 {(row.reason || cell.executionDisabled) && (
-                  <div><dt>{t("settings.accountReason")}</dt><dd data-account-field="reason">{row.reason ?? cell.executionDisabled}</dd></div>
+                  <div>
+                    <dt>{t("settings.accountReason")}</dt>
+                    <dd data-account-field="reason">
+                      {/* The doctor's own English stays folded (polyforge#259 T4 AC2). */}
+                      <details className="settings-reason-details">
+                        <summary>{t("settings.accountReasonSeeDetails")}</summary>
+                        <span className="settings-reason-original">{row.reason ?? cell.executionDisabled}</span>
+                      </details>
+                    </dd>
+                  </div>
                 )}
                 {row.credentialsFile === "present" && (
                   <div><dt>{t("settings.accountResidualOauthTitle")}</dt><dd>{t("settings.accountResidualOauth")}</dd></div>
@@ -241,16 +253,24 @@ export function ClaudeCredentialForm({ cells, onSave }: {
         <fieldset>
           <legend>{t("settings.accountTargets")}</legend>
           <p className="settings-general-description">{t("settings.accountSharedDefaultNote")}</p>
-          {allTargets.map((target) => (
-            <label key={target} className="settings-account-checkbox">
-              <input type="checkbox" data-account-target={target} checked={effective.includes(target)} onChange={(event) => {
-                setTargets(event.target.checked
-                  ? [...effective, target]
-                  : effective.filter((entry) => entry !== target));
-              }} />
-              <span>{target}</span>
-            </label>
-          ))}
+          {allTargets.map((target) => {
+            // Display name first (`交互会话` / `Cell default`); the raw target id
+            // stays as the second line (polyforge#259 T4 AC2).
+            const name = accountTargetName(target);
+            return (
+              <label key={target} className="settings-account-checkbox">
+                <input type="checkbox" data-account-target={target} checked={effective.includes(target)} onChange={(event) => {
+                  setTargets(event.target.checked
+                    ? [...effective, target]
+                    : effective.filter((entry) => entry !== target));
+                }} />
+                <span className="settings-name-stack">
+                  <span>{name.labelKey ? t(name.labelKey, name.params) : name.id}</span>
+                  {name.labelKey && <code className="settings-secondary-id">{name.id}</code>}
+                </span>
+              </label>
+            );
+          })}
         </fieldset>
         <ConfigDetailActions>
           <ConfigButton data-account-action="save" onClick={save}>{t("settings.accountSaveCredential")}</ConfigButton>
@@ -260,13 +280,22 @@ export function ClaudeCredentialForm({ cells, onSave }: {
   );
 }
 
-/** One write outcome per target, with its reason (the reason carries no
- * value — file names and refusal words only). Placeholder: the test-first
- * commit carries only the signature; the implementation lands with the
- * unit.
- */
-export function CredentialWriteResults({ results }: { results: { target: string; status: string; reason?: string }[] }) {
-  const { t } = useI18n();
+/** One account write's outcome for one target, as the route answers it: a
+ *  refused target carries its reason (no value — file names and refusal words
+ *  only) and its code (polyforge#259 T4, owner 2A). */
+export interface CredentialWriteResult {
+  target: string;
+  status: string;
+  reason?: string;
+  code?: string;
+}
+
+/** One write outcome per target (polyforge#259 T4 AC2): a refused target reads
+ *  「未写入」 plus the Chinese line its route code names; the server's own
+ *  reason stays in the 详情 fold. `t` overrides the page's translator (tests). */
+export function CredentialWriteResults({ results, t: tOverride }: { results: CredentialWriteResult[]; t?: (key: string, params?: Record<string, string | number>) => string }) {
+  const i18n = useI18n();
+  const t = tOverride ?? i18n.t;
   if (results.length === 0) return null;
   return (
     <ul className="settings-account-write-results">
@@ -274,7 +303,15 @@ export function CredentialWriteResults({ results }: { results: { target: string;
         <li key={entry.target} data-write-target={entry.target} data-write-status={entry.status}>
           <strong>{entry.target}</strong>
           <span>{entry.status === "written" ? t("settings.accountWriteOk") : t("settings.accountWriteNo")}</span>
-          {entry.status !== "written" && entry.reason && <span>{entry.reason}</span>}
+          {entry.status !== "written" && (entry.reason || entry.code) && (
+            <span>{t(serverErrorText({ code: entry.code ?? null, message: entry.reason ?? null }).summaryKey)}</span>
+          )}
+          {entry.status !== "written" && entry.reason && (
+            <details className="settings-reason-details">
+              <summary>{t("i18n.detailsLabel")}</summary>
+              <span className="settings-reason-original">{entry.reason}</span>
+            </details>
+          )}
         </li>
       ))}
     </ul>
@@ -379,8 +416,10 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
     })();
   }, [pane]);
 
-  const [writeResults, setWriteResults] = useState<{ target: string; status: string; reason?: string }[] | null>(null);
-  const [writeNote, setWriteNote] = useState<string | null>(null);
+  const [writeResults, setWriteResults] = useState<CredentialWriteResult[] | null>(null);
+  // review #10: the failure line carries its own split — a localized summary and
+  // the server's words for the fold — never a translated string re-inspected.
+  const [writeNote, setWriteNote] = useState<{ summary: string; details: string | null } | null>(null);
   const saveCredentials = useCallback((body: Record<string, unknown>) => {
     void (async () => {
       try {
@@ -389,7 +428,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         });
-        const answer = await response.json() as { results?: { target: string; status: string; reason?: string }[]; message?: string };
+        const answer = await response.json() as { results?: CredentialWriteResult[]; message?: string; code?: string; params?: Record<string, string | number> };
         if (response.ok && answer.results) {
           setWriteResults(answer.results);
           setWriteNote(null);
@@ -397,11 +436,12 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
           load();
         } else {
           setWriteResults(null);
-          setWriteNote(answer.message ?? t("settings.accountWriteFailed"));
+          const failure = serverErrorText(answer.code ? { code: answer.code, params: answer.params, message: answer.message } : answer.message);
+          setWriteNote({ summary: t(failure.summaryKey, failure.summaryParams), details: failure.details });
         }
       } catch {
         setWriteResults(null);
-        setWriteNote(t("settings.accountWriteFailed"));
+        setWriteNote({ summary: t(serverErrorText(null).summaryKey), details: null });
       }
     })();
   }, [t, load]);
@@ -441,7 +481,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
             onSaveCredentials={pane === "claude" ? saveCredentials : undefined}
           />
           {writeResults && <CredentialWriteResults results={writeResults} />}
-          {writeNote && <p data-account-field="write-note">{writeNote}</p>}
+          {writeNote && <ConfigErrorNotice summary={writeNote.summary} detailsLabel={t("i18n.detailsLabel")} details={writeNote.details} />}
           {loginTerminal && (
             <div data-account-login-terminal className="settings-account-login-terminal">
               {/* Attach, never create: the server already started this

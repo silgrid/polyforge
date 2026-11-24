@@ -101,11 +101,14 @@
   overflow: hidden;
 }
 
+/* The settings sidebar scales with the dialog (polyforge#259 T4 AC3):
+   `clamp(200px, 20%, 260px)` keeps a wide dialog's split view in proportion
+   and never squeezes the list below a readable 200px. */
 .config-sidebar {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  width: 240px;
+  width: clamp(200px, 20%, 260px);
   min-height: 0;
   border-right: 1px solid var(--border);
   background: var(--bg-panel);
@@ -1423,10 +1426,13 @@
   outline: none;
 }
 
+/* The dialog is as wide as the viewport allows and never wider than 1280px
+   (polyforge#259 T4 AC3): a fixed 1080px left wide screens with big margins
+   and a narrow one with a squeezed pane. */
 .settings-dialog-surface {
   display: flex;
   flex-direction: column;
-  width: 1080px;
+  width: min(1280px, calc(100vw - 32px));
   max-width: calc(100vw - 16px);
   height: 84vh;
   max-height: calc(100dvh - 16px);
@@ -1456,6 +1462,7 @@
 
 .settings-section-tabs {
   display: flex;
+  flex: 1 1 auto;
   align-items: stretch;
   gap: 2px;
   min-width: 0;
@@ -1527,6 +1534,35 @@
 
 .settings-section-tab:focus-visible[aria-current="page"] {
   outline: none;
+}
+
+/* The tab bar keeps every section's text (owner ruling 2026-11-23, no icon-only
+   bar) and scrolls once it does not fit. Nine tabs at 96px need more than a
+   1000px dialog, so below that width the bar scrolls and this chevron is its
+   visible scroll hint (polyforge#259 T4 AC3): the bar never leaves the
+   dialog and the user still sees that more sections are off the edge. */
+.settings-section-tabs-more {
+  display: none;
+}
+
+@media (max-width: 1000px) {
+  .settings-section-tabs {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .settings-section-tabs-more {
+    position: absolute;
+    top: 0;
+    right: 46px;
+    display: flex;
+    align-items: center;
+    height: 50px;
+    padding-left: 12px;
+    background: linear-gradient(to right, transparent, var(--bg) 45%);
+    color: var(--text-muted);
+    pointer-events: none;
+  }
 }
 
 .settings-section-icon {
@@ -2197,6 +2233,10 @@
   }
 
   .settings-section-tabs {
+    display: none;
+  }
+
+  .settings-section-tabs-more {
     display: none;
   }
 
@@ -3560,10 +3600,86 @@ select.mcp-add-input {
 .pi-account-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .pi-account-state { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
 
-/* ---- 「应用到」 ---- */
-.harness-apply-to { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.harness-apply-to > h3 { margin: 0; }
+/* 详情 header 的「⋯」菜单与它的二次确认（polyforge#259 T4 AC1）。 */
+.config-danger-menu-trigger { width: 26px; height: 26px; padding: 0; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.config-danger-menu-trigger:hover { background: var(--bg-hover); color: var(--text); }
+.config-danger-menu-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.config-danger-menu { display: flex; flex-direction: column; padding: 3px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); }
+.config-danger-menu-item { padding: 5px 9px; border: 0; border-radius: 4px; background: transparent; color: #ef4444; cursor: pointer; font-family: inherit; font-size: 12px; text-align: left; white-space: nowrap; }
+.config-danger-menu-item:hover { background: rgba(239, 68, 68, 0.12); }
+.config-danger-confirm { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 3px 6px; border: 1px solid #ef4444; border-radius: 6px; background: rgba(239, 68, 68, 0.08); }
+.config-danger-confirm-text { color: #ef4444; font-size: 11px; }
+
+/* 「已保存 · 撤销」（polyforge#259 T4 AC1）：开关立即写之后的那条 toast。 */
+.settings-saved-toast { display: inline-flex; align-items: center; gap: 10px; margin-top: 8px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-panel); color: var(--text-muted); font-size: 11px; }
+.settings-saved-toast-text { color: var(--text); }
+.settings-saved-toast-undo { padding: 0; border: 0; background: transparent; color: var(--accent); cursor: pointer; font-family: inherit; font-size: 11px; text-decoration: underline; }
+.settings-saved-toast-undo:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* 服务端原文的折叠：账号页 doctor 理由、插件的写入结果（polyforge#259 T4 AC2）。 */
+.settings-reason-details { color: var(--text-dim); font-size: 11px; }
+.settings-reason-details > summary { cursor: pointer; }
+.settings-reason-original { display: block; margin-top: 2px; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.harness-apply-to-result-details { color: var(--text-dim); font-size: 10px; }
+.harness-apply-to-result-details > summary { cursor: pointer; }
+.harness-apply-to-result-original { font-family: var(--font-mono); overflow-wrap: anywhere; }
+
+/* 中文主文案 + 详情折叠里的服务端原文（polyforge#259 T4 AC2）。 */
+.config-error-notice { display: flex; flex-direction: column; gap: 3px; padding: 7px 9px; border: 1px solid #ef4444; border-radius: 6px; background: rgba(239, 68, 68, 0.08); color: #ef4444; font-size: 12px; }
+.config-error-notice-summary { min-width: 0; overflow-wrap: anywhere; }
+.config-error-notice-details { min-width: 0; color: var(--text-dim); font-size: 11px; }
+.config-error-notice-details > summary { cursor: pointer; }
+.config-error-notice-original { margin-top: 3px; font-family: var(--font-mono); overflow-wrap: anywhere; }
+
+/* 显示名为主、原始 id 作次行等宽灰字（polyforge#259 T4 AC2）：开关、单选与
+   凭据目标共用这一个两行名字块，第二行永远是 id 本身。 */
+.settings-name-stack { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }
+.settings-secondary-id { color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
+
+/* ---- 「应用到」 chip（polyforge#259 T4 AC2）----
+   A native <details>: the summary is the compact chip 「应用到：全部 ▾」, the menu
+   holds the all/specific choice and the harness checkboxes. The chip never
+   submits — the page that shows it owns the save. */
+.harness-apply-to { min-width: 0; }
+.harness-apply-to-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.6;
+  list-style: none;
+  white-space: nowrap;
+}
+/* Safari and Chromium draw their own disclosure triangle on a summary. */
+.harness-apply-to-chip::-webkit-details-marker { display: none; }
+.harness-apply-to-chip-label { color: var(--text-dim); }
+.harness-apply-to-chip-mode { color: var(--text); font-weight: 500; }
+.harness-apply-to-chip-chevron { flex-shrink: 0; transition: transform 0.15s ease; }
+.harness-apply-to[open] .harness-apply-to-chip { border-color: var(--accent); }
+.harness-apply-to[open] .harness-apply-to-chip-chevron { transform: rotate(180deg); }
+.harness-apply-to-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.harness-apply-to-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
 .harness-apply-to-modes { display: flex; flex-wrap: wrap; gap: 12px; }
+/* The chip and the page's own submit button on one line (MCP's rows): the
+   chip picks the target, the button is the save the page owns. */
+.mcp-apply-to-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; min-width: 0; }
 .harness-apply-to-mode { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; }
 .harness-apply-to-targets { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .harness-apply-to-targets > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; }
@@ -3572,7 +3688,7 @@ select.mcp-add-input {
 .harness-apply-to-target input,
 .harness-apply-to-mode input { margin: 0; accent-color: var(--accent); }
 .harness-apply-to-target-reason { color: var(--text-dim); font-size: 11px; }
-.harness-apply-to-results { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: 11px; }
+.harness-apply-to-results { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 0; padding: 0; list-style: none; font-size: 11px; }
 .harness-apply-to-results li[data-ok="true"] { color: #16a34a; }
 .harness-apply-to-results li[data-ok="false"] { color: #ef4444; }
 

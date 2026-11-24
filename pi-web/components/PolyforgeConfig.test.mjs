@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
+import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const fixture = (name) => fileURLToPath(new URL(`../hooks/__fixtures__/${name}`, import.meta.url));
@@ -232,7 +233,7 @@ test("visible reasons: capability floor and an incomplete workflow read are text
   assert.doesNotMatch(source, /config\.mapped|configUnmapped/);
   // the step facts moved to the workflow card, whose failed or
   // daemon-less read is a visible alert line (the old steps_complete note's role).
-  assert.match(source, /\{readError && <p role="alert" className="config-add-source-error">\{readError\}<\/p>\}/);
+  assert.match(source, /<FailureNotice failure=\{readError\} t=\{t\} \/>/);
   assert.match(source, /polyforge\.settings\.configMachineScope/);
 });
 
@@ -623,7 +624,7 @@ test("per-key results render under their own row; the footer keeps page-level st
   assert.match(source, /setInstallMessage\(t\("polyforge\.settings\.installCopied"\)\)/);
   assert.doesNotMatch(source, /setActionMessage\(t\("polyforge\.settings\.installCopied"\)\)/);
   // The footer's summary is the page-level status.
-  assert.match(source, /summary=\{actionError \?\? actionMessage \?\? \(detect \? t\("polyforge\.settings\.detected"\) : t\("polyforge\.loading"\)\)\}/);
+  assert.match(source, /summary=\{actionError\?\.text \?\? actionMessage \?\? \(detect \? t\("polyforge\.settings\.detected"\) : t\("polyforge\.loading"\)\)\}/);
   // Element budget: still exactly one switch; numeric inputs only via the two preference rows plus pf's own int keys.
   assert.equal((source.match(/<ConfigSwitch\b/g) ?? []).length, 1, "exactly one role=switch");
   const css = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
@@ -658,7 +659,7 @@ test("the workflow card reads its own route afresh per click with the #204 refre
   // A failed read keeps the last good list: it never clears `read`.
   assert.doesNotMatch(workflowCard, /setRead\(null\)/);
   assert.match(workflowCard, /if \(!good\) \{\s*\n\s*\/\/ Keep the list on screen; the error sits above it\.\s*\n\s*setReadError\(/);
-  assert.match(workflowCard, /\{readError && <p role="alert" className="config-add-source-error">\{readError\}<\/p>\}/);
+  assert.match(workflowCard, /<FailureNotice failure=\{readError\} t=\{t\} \/>/);
   // The 26px ↻: disabled, aria-busy and spinning while the newest read is in flight; the existing keys.
   assert.match(workflowCard, /className=\{`polyforge-workflow-refresh\$\{refreshing \? " animate-spin" : ""\}`\}/);
   assert.match(workflowCard, /disabled=\{refreshing\}\s*\n\s*aria-busy=\{refreshing\}/);
@@ -923,7 +924,11 @@ test("the Cell lifecycle reads /api/polyforge/cells, gates on the capability, ke
   assert.match(add, /setDraft\(\(current\) => \(\{ \.\.\.current, apiKey: "" \}\)\)/, "the key is cleared on every submit");
   assert.match(source, /<AddCellPane\s*\n\s*read=\{cellsRead !== null\}\s*\n\s*supported=\{cellsSupported\}/, "the pane gets the capability gate");
   assert.match(source, /\{cell && cellsSupported && \(\s*\n\s*<ConfigDetailActions>/, "repair/remove only with the capabilities");
-  assert.match(source, /profile !== POLYFORGE_DEFAULT_PROFILE && \(confirmRemove === profile \?/, "remove needs a confirmation and never offers default");
+  // polyforge#259 T4 AC1: the Cell's removal is the shared ⋯ menu, which asks
+  // once before it writes and never offers the default Cell. Asserted where it
+  // renders — e2e/w364-cell-master-detail.mjs M3 (the trigger is visible on the
+  // Cell's pane and no bare Remove button is) — not as a regex over this file's
+  // source (review #5).
   assert.doesNotMatch(source, /cells\/[^"`]*cleanup|"cleanup"/, "no permanent-cleanup control on the page");
 });
 
@@ -1082,6 +1087,11 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
   const jiti = createJiti(import.meta.url, {
     jsx: { runtime: "automatic" },
     alias: {
+      // build finding u12#3: the page's new dirty model import (tsconfig's `@/`
+      // alias, which would otherwise pull the real i18n provider in here).
+      "@/lib/settings-dirty": modulePath("lib/settings-dirty.ts"),
+      // build finding u14#1: the page's error splitter, through the package alias.
+      "@/lib/server-error": modulePath("lib/server-error.ts"),
       react: fixture("react-hook-shim.mjs"),
       "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
       "@/hooks/useI18n": fixture("polyforge-tasks-stubs.mjs"),
@@ -1179,4 +1189,54 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// polyforge#259 T4 AC2 (owner 2A, review r3#1): a config row's write refused
+// with `{error, code: "config-cas-409"}` reads, on a Chinese page, as the
+// conflict line — chosen by the route's code — and the server's English (with
+// its diff) sits only inside the 详情 fold. Expected lines are hand-copied from
+// lib/i18n/messages/zh-CN.ts (serverError.conflict / serverError.forbidden /
+// i18n.detailsLabel), never from the page's own output.
+async function feedbackSsr() {
+  // The step-tier test above loads the page against the hook shim; drop that
+  // build from the shared module cache so react-dom/server gets the real one
+  // (lib/server-error.ts stays shared, so the page and the test read one
+  // ServerError class).
+  delete createRequire(import.meta.url).cache[modulePath("components/PolyforgeConfig.tsx")];
+  const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+  const React = await jiti.import("react");
+  const { renderToStaticMarkup } = await jiti.import("react-dom/server");
+  const { RowFeedbackLine, failureLine } = await jiti.import("./PolyforgeConfig.tsx");
+  const { responseError } = await jiti.import("../lib/server-error.ts");
+  const { zhCNLocale } = await jiti.import("../lib/i18n/messages/zh-CN.ts");
+  const { translateMessage } = await jiti.import("../lib/i18n/format.ts");
+  const t = (key, params) => translateMessage("zh-CN", key, { "zh-CN": zhCNLocale.messages }, params);
+  const render = (line) => {
+    const html = renderToStaticMarkup(React.createElement(RowFeedbackLine, {
+      feedback: { tone: "error", message: line.text, ...(line.details ? { details: line.details } : {}) },
+      detailsLabel: t("i18n.detailsLabel"),
+    }));
+    const fold = /<details[^>]*>([\s\S]*?)<\/details>/.exec(html);
+    const outside = html.replace(/<details[^>]*>[\s\S]*?<\/details>/g, "").replace(/<[^>]+>/g, "");
+    return { html, fold: fold ? fold[1].replace(/<[^>]+>/g, "") : null, outside };
+  };
+  return { failureLine, responseError, t, render };
+}
+
+test("a row's refused write reads as the conflict line in Chinese, and the raw words sit inside the details fold", async () => {
+  const { failureLine, responseError, t, render } = await feedbackSsr();
+  const line = failureLine(t, responseError({ error: "config changed since it was read", code: "config-cas-409", diff: { "daemon.port": [1, 2] } }, 409));
+  const { fold, outside } = render(line);
+  assert.ok(fold !== null && fold.includes("config changed since it was read"), "the raw words sit inside the details fold");
+  assert.ok(fold.startsWith("详情"), "the fold is not labelled 详情");
+  assert.ok(fold.includes("daemon.port"), "the CAS diff was dropped from the fold");
+  assert.equal(outside, "目标在此期间被别的写入改过，请重新读取后再试。", "the main line is not the conflict line");
+  assert.ok(!outside.includes("config changed"), "the server's English is the main line");
+});
+
+test("a row's refused write with no body reads as the forbidden line in Chinese", async () => {
+  const { failureLine, responseError, t, render } = await feedbackSsr();
+  const { fold, outside } = render(failureLine(t, responseError(null, 403)));
+  assert.equal(outside, "服务端拒绝了这次改动，原文在「详情」里。");
+  assert.ok(fold !== null && fold.includes("HTTP 403"), "the status line is not kept for the fold");
 });

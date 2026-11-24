@@ -82,7 +82,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 type RefusalParams = Omit<McpErrorResponse, "error" | "reason">;
 
 function refusal(status: number, reason: McpRefusalReason, error: string, params: RefusalParams = {}) {
-  return NextResponse.json({ error, reason, ...params } satisfies McpErrorResponse, { status });
+  // polyforge#259 T4 (owner 2A): `code` rides beside the existing fields.
+  return NextResponse.json({ error, reason, code: reason ?? "mcp-refused", ...params } satisfies McpErrorResponse & { code?: string }, { status });
 }
 
 /** A typed refusal: the whole answer of a request, or one server's result in a bulk switch. */

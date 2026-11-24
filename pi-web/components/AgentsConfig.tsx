@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { dirtyCount } from "@/lib/settings-dirty";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { ProjectTrustStatus, SubagentProfilesResponse, SubagentSettingsResponse } from "@/lib/api-types";
 import { sendAgentCommand } from "@/lib/agent-client";
@@ -25,6 +26,7 @@ import {
   ConfigFooter,
   ConfigListAction,
   ConfigPanelShell,
+  ConfigSaveFooter,
   ConfigSaveTarget,
   ConfigScopeTag,
   ConfigSidebar,
@@ -36,6 +38,7 @@ import {
   ConfigStatusDot,
   ConfigSwitch,
 } from "./SettingsUi";
+import { ConfigDangerMenu } from "./ConfigDangerMenu";
 import { ModelSelector } from "./ModelSelector";
 import { projectTrustReloadKey } from "./settings-ui-helpers";
 
@@ -160,6 +163,50 @@ function Toggle({ checked, disabled, label, onChange }: { checked: boolean; disa
   );
 }
 
+/** The saved profile's header actions: Duplicate, the ⋯ delete menu (writable
+ *  scope in edit mode only, polyforge#259 T4 AC1), and the enable switch. */
+export function AgentDetailActions({
+  canDuplicate,
+  deletableName,
+  busy,
+  enabled,
+  switchDisabled,
+  onDuplicate,
+  onDelete,
+  onToggle,
+}: {
+  canDuplicate: boolean;
+  /** The profile's display name when it can be deleted here, otherwise null. */
+  deletableName: string | null;
+  busy: boolean;
+  enabled: boolean;
+  switchDisabled: boolean;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onToggle: (checked: boolean) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <ConfigDetailActions>
+      {canDuplicate && <ConfigButton size="small" onClick={onDuplicate} disabled={busy}>{t("agents.duplicate")}</ConfigButton>}
+      {deletableName !== null && (
+        <ConfigDangerMenu
+          texts={{
+            menu: t("settings.dangerMenu"),
+            action: t("agents.delete"),
+            confirmText: t("agents.deleteConfirm", { name: deletableName }),
+            confirm: t("agents.delete"),
+            cancel: t("i18n.cancel"),
+          }}
+          busy={busy}
+          onConfirm={onDelete}
+        />
+      )}
+      <ConfigSwitch checked={enabled} disabled={switchDisabled} label={enabled ? t("agents.disable") : t("agents.enable")} onChange={onToggle} />
+    </ConfigDetailActions>
+  );
+}
+
 export function AgentsConfig({
   cwd,
   sessionId = null,
@@ -167,6 +214,7 @@ export function AgentsConfig({
   onReloaded,
   embedded = false,
   trust,
+  onUnsavedChange,
 }: {
   cwd: string;
   sessionId?: string | null;
@@ -175,6 +223,8 @@ export function AgentsConfig({
   embedded?: boolean;
   /** The page's trust status for `cwd`; a new decision loads the model list again. */
   trust?: ProjectTrustStatus | null;
+  /** Whether the open draft has unsaved changes; Settings asks before dropping it (T4 AC1). */
+  onUnsavedChange?: (dirty: boolean) => void;
 }) {
   const isMobile = useIsMobile();
   const { t } = useI18n();
@@ -184,6 +234,9 @@ export function AgentsConfig({
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(() => getLastSettingsSelection("agents", cwd));
   const [draft, setDraft] = useState<EditableProfile>(EMPTY_PROFILE);
+  // The profile as last read or saved: the footer's dirty count is the draft
+  // against it (polyforge#259 T4 AC1).
+  const [baseDraft, setBaseDraft] = useState<EditableProfile>(EMPTY_PROFILE);
   const [mode, setMode] = useState<EditorMode>("view");
   const [targetScope, setTargetScope] = useState<SubagentWritableScope>("global");
   const [loading, setLoading] = useState(true);
@@ -227,6 +280,7 @@ export function AgentsConfig({
       setSelectedKey(chosen ? profileKey(chosen) : null);
       if (chosen) {
         setDraft(editableProfile(chosen));
+        setBaseDraft(editableProfile(chosen));
         setMode(isWritableScope(chosen.scope) ? "edit" : "view");
         if (isWritableScope(chosen.scope)) setTargetScope(chosen.scope);
       }
@@ -301,6 +355,7 @@ export function AgentsConfig({
   const selectProfile = (profile: SubagentProfile) => {
     setSelectedKey(profileKey(profile));
     setDraft(editableProfile(profile));
+    setBaseDraft(editableProfile(profile));
     setMode(isWritableScope(profile.scope) ? "edit" : "view");
     if (isWritableScope(profile.scope)) setTargetScope(profile.scope);
     setError(null);
@@ -312,6 +367,7 @@ export function AgentsConfig({
     while (profiles.some((profile) => profile.name === name)) name = `custom-agent-${suffix++}`;
     setSelectedKey(null);
     setDraft({ ...EMPTY_PROFILE, name, displayName: name });
+    setBaseDraft({ ...EMPTY_PROFILE, name, displayName: name });
     setMode("create");
     setTargetScope("global");
     setError(null);
@@ -343,6 +399,7 @@ export function AgentsConfig({
       });
       const data = await response.json() as { profile?: SubagentProfile; error?: string };
       if (!response.ok || data.error || !data.profile) throw new Error(data.error ?? `HTTP ${response.status}`);
+      setBaseDraft(draft);
       await loadProfiles(profileKey(data.profile));
       setSavedOk(true);
       setTimeout(() => setSavedOk(false), 2000);
@@ -355,7 +412,7 @@ export function AgentsConfig({
 
   const remove = async () => {
     if (!selected || !isWritableScope(selected.scope)) return;
-    if (!window.confirm(t("agents.deleteConfirm", { name: selected.displayName }))) return;
+    // The ⋯ menu asked already (polyforge#259 T4 AC1).
     setSaving(true);
     setError(null);
     try {
@@ -400,6 +457,13 @@ export function AgentsConfig({
   const switchDisabled = creating
     ? disabled
     : !selected || !isTogglableScope(selected.scope) || saving || toggling;
+  const dirty = dirtyCount(baseDraft as unknown as Record<string, unknown>, draft as unknown as Record<string, unknown>);
+  // Settings asks before it drops an unsaved draft (T4 AC1): the footer's count
+  // is that fact, reported to the panel that owns the tab bar.
+  useEffect(() => {
+    onUnsavedChange?.(dirty > 0);
+  }, [dirty, onUnsavedChange]);
+
   const update = <K extends keyof EditableProfile>(key: K, value: EditableProfile[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
   };
@@ -591,11 +655,16 @@ export function AgentsConfig({
                         </>
                       )}
                     </ConfigDetailHeaderInfo>
-                    <ConfigDetailActions>
-                      {selected && (mode === "view" || mode === "edit") && <ConfigButton size="small" onClick={beginDuplicate} disabled={saving || toggling}>{t("agents.duplicate")}</ConfigButton>}
-                      {selected && isWritableScope(selected.scope) && mode === "edit" && <ConfigButton variant="danger" size="small" onClick={() => void remove()} disabled={saving || toggling}>{t("agents.delete")}</ConfigButton>}
-                      <ConfigSwitch checked={draft.enabled} disabled={switchDisabled} label={draft.enabled ? t("agents.disable") : t("agents.enable")} onChange={(checked) => void toggleEnabled(checked)} />
-                    </ConfigDetailActions>
+                    <AgentDetailActions
+                      canDuplicate={!!selected && (mode === "view" || mode === "edit")}
+                      deletableName={selected && isWritableScope(selected.scope) && mode === "edit" ? selected.displayName : null}
+                      busy={saving || toggling}
+                      enabled={draft.enabled}
+                      switchDisabled={switchDisabled}
+                      onDuplicate={beginDuplicate}
+                      onDelete={() => void remove()}
+                      onToggle={(checked) => void toggleEnabled(checked)}
+                    />
                   </ConfigDetailHeader>
 
                   <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 1fr) minmax(0, 1fr)", gap: 12 }}>
@@ -718,23 +787,19 @@ export function AgentsConfig({
           </ConfigDetailStack>
         </ConfigDetail>
       </ConfigSplitView>
-      <ConfigFooter status={(settingsError || error) && <span role="alert" style={{ color: "#ef4444" }}>{settingsError || error}</span>}>
-        {editing && (
-          <ConfigButton
-            variant="primary"
-            onClick={() => void save()}
-            disabled={saving || savedOk || toggling || !draft.name.trim()}
-            className={savedOk ? "is-success" : undefined}
-          >
-            {savedOk && (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="config-button-success-icon">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            )}
-            <span>{savedOk ? t("i18n.saved") : saving ? t("agents.saving") : t("agents.save")}</span>
-          </ConfigButton>
-        )}
-      </ConfigFooter>
+      {/* One footer save for the whole draft: the count is the fields it would
+          write, and a clean profile offers no button (polyforge#259 T4 AC1). */}
+      <ConfigSaveFooter
+        status={(settingsError || error)
+          ? <span role="alert" style={{ color: "#ef4444" }}>{settingsError || error}</span>
+          : dirty > 0 ? t("settings.unsavedCount", { count: dirty }) : undefined}
+        dirty={editing ? dirty : 0}
+        saving={saving || toggling}
+        discardLabel={t("settings.discard")}
+        saveLabel={(count) => t("settings.saveWithCount", { count })}
+        onDiscard={() => setDraft(baseDraft)}
+        onSave={() => void save()}
+      />
     </ConfigPanelShell>
   );
 }

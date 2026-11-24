@@ -780,6 +780,57 @@ export function ConfigFooterStatus({
   );
 }
 
+/**
+ * 一个详情页的保存 footer（polyforge#259 T4 AC1）：左边是未保存改动的条数，
+ * 右边是「保存（n）」与「丢弃」。没有改动时不渲染保存/丢弃按钮——n=0 时没有
+ * 要写的东西。词全由调用方给（`saveLabel` 收到 n）。
+ */
+export function ConfigSaveFooter({ status, dirty, saving, discardLabel, saveLabel, onDiscard, onSave }: {
+  status?: ReactNode;
+  /** 未保存改动的条数（`settings-dirty` 的 dirtyCount）。 */
+  dirty: number;
+  saving?: boolean;
+  discardLabel: string;
+  /** 「保存（n 项改动）」；n 是 dirty。 */
+  saveLabel: (count: number) => string;
+  onDiscard: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <ConfigFooter status={status}>
+      {dirty > 0 && (
+        <>
+          <ConfigButton size="small" disabled={saving} onClick={onDiscard}>{discardLabel}</ConfigButton>
+          <ConfigButton variant="primary" disabled={saving} onClick={onSave}>
+            {saveLabel(dirty)}
+          </ConfigButton>
+        </>
+      )}
+    </ConfigFooter>
+  );
+}
+
+/** 一条设置页的错误 notice（polyforge#259 T4 AC2）：中文主文案，服务端原文折叠进详情。 */
+export function ConfigErrorNotice({ id, summary, detailsLabel, details }: {
+  id?: string;
+  summary: ReactNode;
+  detailsLabel?: string;
+  /** The server's own words; rendered inside the details fold only. */
+  details?: ReactNode;
+}) {
+  return (
+    <div id={id} role="alert" className="config-error-notice">
+      <div className="config-error-notice-summary">{summary}</div>
+      {details ? (
+        <details className="config-error-notice-details">
+          <summary>{detailsLabel}</summary>
+          <div className="config-error-notice-original">{details}</div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 /** A button; `ref` reaches it (a prop since React 19), so a panel can move focus to it. */
 export function ConfigButton({
   variant = "secondary",

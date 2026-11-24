@@ -41,6 +41,7 @@ import {
   ConfigDetailHeaderInfo,
   ConfigDetailStack,
   ConfigEmptyState,
+  ConfigErrorNotice,
   ConfigField,
   ConfigFooter,
   ConfigListAction,
@@ -60,6 +61,9 @@ import {
 } from "./SettingsUi";
 import { projectTrustReloadKey } from "./settings-ui-helpers";
 import { HarnessApplyTo, applyToCanSubmit, applyToTargets, type HarnessApplyToSelection, type HarnessApplyToResult, type HarnessApplyToTarget } from "./HarnessApplyTo";
+import { SettingsSavedToast } from "./SettingsSavedToast";
+import { recordWriteItems, undoPlan, type SettingsWriteItem, type SettingsWriteItems } from "@/lib/settings-undo";
+import { responseError, serverErrorText } from "@/lib/server-error";
 import { MarkdownBody } from "./MarkdownBody";
 
 type Translate = ReturnType<typeof useI18n>["t"];
@@ -89,6 +93,68 @@ export function rowSwitchTargets(
       ...(row.claude ? {} : { disabled: true, disabledReason: texts.notListed }),
     },
   ];
+}
+
+
+/** A refusal as a result row: the Chinese line, with the server's own words folded (T4 AC2). */
+export function refusalResult(t: Translate, harness: "pi" | "claude", failure: string | { message?: string; code?: string; params?: Record<string, string | number> }): HarnessApplyToResult {
+  const payload = typeof failure === "string" ? { message: failure } : failure;
+  const text = serverErrorText(payload);
+  return {
+    harness,
+    ok: false,
+    text: t(text.summaryKey, text.summaryParams),
+    ...(text.details ? { details: text.details } : {}),
+  };
+}
+
+/** One switch round's result item as the route sends it: a refused item carries its code (owner 2A). */
+export type SkillSwitchResult = SkillApplyResult & { code?: string };
+
+/** A save failure as the panel shows it: the Chinese line, the server's words for the fold. */
+export interface SkillSaveError {
+  summary: string;
+  details?: string;
+}
+
+/** A failure (a ServerError keeps its route code) as the panel's save error. */
+export function saveErrorOf(t: Translate, failure: unknown): SkillSaveError {
+  const text = serverErrorText(failure);
+  return { summary: t(text.summaryKey, text.summaryParams), ...(text.details ? { details: text.details } : {}) };
+}
+
+/** One switch result as its result row: a refused item reads by its route code (T4 AC2). */
+export function switchResultRow(t: Translate, result: SkillSwitchResult): HarnessApplyToResult {
+  return result.error
+    ? refusalResult(t, result.harness, { message: result.error, ...(result.code ? { code: result.code } : {}) })
+    : { harness: result.harness, ok: true, text: t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten") };
+}
+
+/**
+ * What each of these harnesses holds right now, as the undo record stores it:
+ * pi's effective state, claude's own native word (polyforge#259 T4, review #5 —
+ * the previous value is read, never derived from the state being written).
+ */
+export function rowSwitchValues(
+  row: Pick<UnifiedSkillRow, "pi" | "claude">,
+  harnesses: readonly ("pi" | "claude")[],
+): SettingsWriteItem[] {
+  const values: SettingsWriteItem[] = [];
+  for (const harness of harnesses) {
+    if (harness === "pi" && row.pi) values.push({ harness, state: row.pi.disableModelInvocation ? "disabled" : "enabled" });
+    else if (harness === "claude" && row.claude) values.push({ harness, state: row.claude.state ?? "enabled" });
+  }
+  return values;
+}
+
+/** One stored value back to the wire shape the skills route takes. */
+function rowWireItem(
+  row: Pick<UnifiedSkillRow, "pi" | "claude" | "scope">,
+  item: SettingsWriteItem,
+): SkillSwitchItemWire | null {
+  if (item.harness === "pi" && row.pi) return { skill: row.pi.filePath, harness: "pi", state: item.state === "enabled" ? "enabled" : "disabled" };
+  if (item.harness === "claude" && row.claude) return { skill: row.claude.name, harness: "claude", state: item.state, scope: row.scope };
+  return null;
 }
 
 /**
@@ -280,7 +346,7 @@ function HarnessChips({ row }: { row: Pick<UnifiedSkillRow, "harnesses"> }) {
   );
 }
 
-function SkillDetail({
+export function SkillDetail({
   row,
   piSkill,
   cwd,
@@ -305,8 +371,8 @@ function SkillDetail({
   cwd: string | null;
   applyResults: HarnessApplyToResult[] | null;
   applyBusy: boolean;
-  saveError: string | null;
-  claudeSaveError: string | null;
+  saveError: SkillSaveError | null;
+  claudeSaveError: SkillSaveError | null;
   updateStatus?: SkillUpdateResult;
   checkingUpdate: boolean;
   updating: boolean;
@@ -410,25 +476,22 @@ function SkillDetail({
             </span>
           )}
           {saveError && (
-            <span style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>
-              {saveError}
-            </span>
+            <ConfigErrorNotice summary={saveError.summary} detailsLabel={t("i18n.detailsLabel")} details={saveError.details} />
           )}
         </div>
       </div>
 
-      {/* The unified switch: 「应用到」 + 启用 / 停用, one request per chosen harness. */}
+      {/* The unified scope chip + 启用/停用: one request per chosen harness (the
+          chip only picks the target; these buttons are the page's save). */}
       <ConfigField label={t("skills.switchField")}>
         <HarnessApplyTo
           texts={{
             title: t("skills.applyTo.title"),
             all: t("skills.applyTo.all"),
             specific: t("skills.applyTo.specific"),
-            submit: "",
           }}
           targets={targets}
           value={selection}
-          busy={applyBusy}
           results={applyResults}
           onChange={setSelection}
         />
@@ -510,9 +573,7 @@ function SkillDetail({
             </span>
           )}
           {claudeSaveError && (
-            <span style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>
-              {claudeSaveError}
-            </span>
+            <ConfigErrorNotice summary={claudeSaveError.summary} detailsLabel={t("i18n.detailsLabel")} details={claudeSaveError.details} />
           )}
           <span style={{ fontSize: 11, color: "var(--text-dim)", display: "block", marginTop: 6 }}>
             {t("skills.claudeNotListedHint")}
@@ -931,9 +992,11 @@ export function SkillsConfig({
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(() => getLastSettingsSelection("skills", cwd));
   const [toggling, setToggling] = useState<Set<string>>(new Set());
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [claudeSaveError, setClaudeSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<SkillSaveError | null>(null);
+  const [claudeSaveError, setClaudeSaveError] = useState<SkillSaveError | null>(null);
   const [applyResults, setApplyResults] = useState<HarnessApplyToResult[] | null>(null);
+  // The last switch, undoable inside its toast (polyforge#259 T4 AC1).
+  const [undoRecord, setUndoRecord] = useState<{ record: SettingsWriteItems; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] } | null>(null);
   // The group switch that is running, and what the last one left undone.
   const [bulkGroup, setBulkGroup] = useState<string | null>(null);
   const [groupStatus, setGroupStatus] = useState<{ group: string; error: string } | null>(null);
@@ -1086,7 +1149,7 @@ export function SkillsConfig({
   const switchRound = useCallback(async (
     rowKeys: string[],
     items: SkillSwitchItemWire[],
-  ): Promise<SkillApplyResult[] | null> => {
+  ): Promise<SkillSwitchResult[] | null> => {
     if (items.length === 0) return [];
     setToggling((current) => new Set([...current, ...rowKeys]));
     setSaveError(null);
@@ -1096,11 +1159,11 @@ export function SkillsConfig({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items }),
       });
-      const d = (await res.json()) as { results?: SkillApplyResult[]; error?: string };
-      if (!res.ok || d.error || !d.results) throw new Error(d.error ?? `HTTP ${res.status}`);
+      const d = (await res.json()) as { results?: SkillSwitchResult[]; error?: string; code?: string };
+      if (!res.ok || d.error || !d.results) throw responseError(d, res.status);
       return d.results;
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError(saveErrorOf(t, e));
       return null;
     } finally {
       setToggling((current) => {
@@ -1109,7 +1172,7 @@ export function SkillsConfig({
         return next;
       });
     }
-  }, []);
+  }, [t]);
 
   /** The row's unified switch (AC2): only the chosen harnesses' own stores. */
   const applySwitch = useCallback(async (
@@ -1126,12 +1189,54 @@ export function SkillsConfig({
       ...(row.pi && harnesses.includes("pi") ? { pi: state } : {}),
       ...(row.claude && harnesses.includes("claude") ? { claude: state === "disabled" ? "user-invocable-only" : "enabled" } : {}),
     }));
-    setApplyResults(results.map((result) => ({
-      harness: result.harness,
-      ok: !result.error,
-      text: result.error ?? t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten"),
-    })));
+    setApplyResults(results.map((result) => switchResultRow(t, result)));
+    // A landed switch carries its own undo: each harness's real previous value
+    // (pi's effective state, claude's native word), captured before the write
+    // (review #5), for as long as the toast lives (T4 AC1).
+    const record = recordWriteItems({
+      field: row.key,
+      previous: rowSwitchValues(row, harnesses),
+      written: items.map((item) => ({ harness: item.harness, state: item.state })),
+      ok: results.every((result) => !result.error),
+      at: Date.now(),
+    });
+    setUndoRecord(record === null ? null : { record, row, harnesses });
   }, [switchRound, t]);
+
+  /**
+   * The toast's one click: write each harness's previous value back through the
+   * same route — unless the field has moved since (owner 4A: a concurrent change
+   * abandons the undo instead of overwriting it).
+   */
+  const undoSwitch = useCallback(async (entry: { record: SettingsWriteItems; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] }) => {
+    setUndoRecord(null);
+    // Read the server again before deciding: another tab, the CLI or a hand edit
+    // may have changed this row inside the toast's window, and owner 4A forbids
+    // overwriting that (review #6).
+    const fresh = await loadSkills();
+    const current = fresh.find((candidate) => candidate.key === entry.record.field);
+    const currentValues = current ? rowSwitchValues(current, entry.harnesses) : [];
+    const plan = undoPlan(entry.record, currentValues, Date.now());
+    if (!plan.ok) {
+      // `loadSkills` already refreshed the page; the prompt says the undo was dropped.
+      if (plan.reason === "changed") setSaveError({ summary: t("settings.undoSuperseded") });
+      return;
+    }
+    const items = plan.items
+      .map((item) => rowWireItem(entry.row, item))
+      .filter((item): item is SkillSwitchItemWire => item !== null);
+    if (items.length === 0) return;
+    const results = await switchRound([entry.row.key], items);
+    if (results === null) return;
+    const applied: { pi?: "enabled" | "disabled"; claude?: string } = {};
+    for (const item of plan.items) {
+      if (item.harness === "pi") applied.pi = item.state === "enabled" ? "enabled" : "disabled";
+      else applied.claude = item.state;
+    }
+    setRows((prev) => applyRowSwitchResults(prev, results, applied));
+    // A refused harness on the way back is shown like any other round's result.
+    setApplyResults(results.map((result) => switchResultRow(t, result)));
+  }, [loadSkills, switchRound, t]);
 
   /** claude's own partition: one native word through the same gated write. */
   const writeClaudeState = useCallback(async (row: UnifiedSkillRow, state: string) => {
@@ -1142,11 +1247,11 @@ export function SkillsConfig({
     if (results === null) return;
     const failed = results.find((result) => result.error);
     if (failed) {
-      setClaudeSaveError(failed.error ?? "the write was not made");
+      setClaudeSaveError(saveErrorOf(t, { message: failed.error, code: failed.code }));
       return;
     }
     setRows((prev) => applyRowSwitchResults(prev, results, { claude: state }));
-  }, [switchRound]);
+  }, [switchRound, t]);
 
   // One PATCH for the whole group: each side is written on its own and
   // reported separately, so a harness the route refuses keeps its state and
@@ -1190,11 +1295,11 @@ export function SkillsConfig({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filePath: skill.filePath }),
       });
-      const d = (await res.json()) as { success?: boolean; error?: string };
-      if (!res.ok || d.error) throw new Error(d.error ?? `HTTP ${res.status}`);
+      const d = (await res.json()) as { success?: boolean; error?: string; code?: string };
+      if (!res.ok || d.error) throw responseError(d, res.status);
       await loadSkills();
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError(saveErrorOf(t, e));
     } finally {
       setCleaningLegacy(null);
     }
@@ -1326,6 +1431,7 @@ export function SkillsConfig({
                 }}
               />
             ) : loading ? null : selectedRow ? (
+              <>
               <SkillDetail
                 key={selectedRow.key}
                 row={selectedRow}
@@ -1354,6 +1460,15 @@ export function SkillsConfig({
                 onApplySwitch={(row, harnesses, state) => void applySwitch(row, harnesses, state)}
                 onWriteClaudeState={(row, state) => void writeClaudeState(row, state)}
               />
+              {undoRecord && (
+                <SettingsSavedToast
+                  texts={{ saved: t("settings.saved"), undo: t("settings.undo") }}
+                  remainingMs={undoRecord.record.lifetimeMs}
+                  onUndo={() => void undoSwitch(undoRecord)}
+                  onExpire={() => setUndoRecord(null)}
+                />
+              )}
+              </>
               ) : (
                 <ConfigEmptyState>{t("i18n.selectSkill")}</ConfigEmptyState>
               )}

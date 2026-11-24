@@ -151,11 +151,12 @@ test("an exposure change follows the same guards as a switch", async () => {
 test("requests from another page, not sent as JSON, or naming nothing to do are refused", async () => {
   assert.deepEqual(
     await post({ action: "disable", scope: "global", name: "lint" }, { origin: "https://evil.example", "sec-fetch-site": "cross-site" }),
-    { status: 403, body: { error: "Untrusted API request", reason: "request-denied" } },
+    // polyforge#259 T4 (owner 2A): `code` rides beside the unchanged fields.
+    { status: 403, body: { error: "Untrusted API request", reason: "request-denied", code: "request-denied" } },
   );
   assert.deepEqual(
     await post({ action: "disable", scope: "global", name: "lint" }, { "Content-Type": "text/plain" }),
-    { status: 415, body: { error: "Content-Type must be application/json", reason: "content-type" } },
+    { status: 415, body: { error: "Content-Type must be application/json", reason: "content-type", code: "content-type" } },
   );
   for (const body of [
     "{ not json",

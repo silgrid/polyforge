@@ -268,7 +268,10 @@ try {
     assert.match(headText, /Cell ceiling 2/, "the Cell's head lost its Cell ceiling");
     assert.match(headText, /no model-credential source declared/, "the Cell's head does not say why execution is disabled");
     assert.ok(await head.getByRole("button", { name: "Repair", exact: true }).isVisible(), "the Cell's pane offers no repair");
-    assert.ok(await head.getByRole("button", { name: "Remove", exact: true }).isVisible(), "the Cell's pane offers no remove");
+    // polyforge#259 T4 AC1: the Cell's removal sits behind the ⋯ menu now, which
+    // asks once before it writes.
+    assert.ok(await head.getByRole("button", { name: "More actions", exact: true }).isVisible(), "the Cell's pane offers no remove");
+    assert.equal(await head.getByRole("button", { name: "Remove", exact: true }).count(), 0, "the Cell's pane still offers a bare Remove");
     assert.equal(await dialog.getByRole("button", { name: /cleanup/i }).count(), 0, "the page offers a permanent-cleanup control");
     // connection and identity, the write-only key, Cell concurrency, model source
     const region = cell.locator(".polyforge-config-cli").first();
@@ -310,6 +313,25 @@ try {
     }
     assert.match(await def.locator('[data-pf-model-source="default"]').first().innerText(), /operator_agent_dir/, "the default Cell does not say where its model credentials come from");
     assert.equal(await def.locator("[data-pf-settings-region]").count(), 0, "the default Cell opened a second region");
+    // review r3#2 (u12): the default Cell cannot be removed, so its head offers
+    // Repair and no ⋯ (nor a bare Remove). Repair is polled visible first — the
+    // head's actions have rendered — then the trigger's absence is polled until
+    // it has held for ten reads in a row, never read once.
+    const defHead = def.locator('[data-pf-cell="default"]').first();
+    let repairShown = false;
+    for (const deadline = Date.now() + 30_000; !repairShown && Date.now() < deadline;) {
+      repairShown = await defHead.getByRole("button", { name: "Repair", exact: true }).isVisible().catch(() => false);
+      if (!repairShown) await delay(100);
+    }
+    assert.ok(repairShown, "the default Cell's head never showed its actions");
+    let absentReads = 0;
+    for (const deadline = Date.now() + 10_000; absentReads < 10 && Date.now() < deadline;) {
+      const shown = await defHead.getByRole("button", { name: "More actions", exact: true }).count()
+        + await defHead.getByRole("button", { name: "Remove", exact: true }).count();
+      absentReads = shown === 0 ? absentReads + 1 : 0;
+      if (absentReads < 10) await delay(100);
+    }
+    assert.equal(absentReads, 10, "the default Cell's head offers a removal (⋯ or Remove)");
     await shot(page, "desktop-cell-default.png");
 
     // a pane keeps its draft across a switch (it stays mounted, hidden)
