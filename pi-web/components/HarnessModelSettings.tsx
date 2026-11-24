@@ -10,6 +10,7 @@ import {
   stepTierRowView,
   stepTierState,
   type StepTierItem,
+  type StepTierWrite,
 } from "@/lib/step-tiers";
 import { EnabledModelsBanner, useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
 import {
@@ -23,6 +24,7 @@ import {
 } from "@/lib/model-page-draft";
 import { ModelsConfig } from "./ModelsConfig";
 import { ClaudeCustomModels } from "./ClaudeCustomModels";
+import { ModelStepTierDrawer, stepTierIdentity, type StepTierRead, type StepTierWriteFn } from "./ModelStepTierDrawer";
 import { ConfigButton, ConfigSidebar, ConfigSidebarItem, ConfigSidebarList, ConfigDetail, ConfigSplitView } from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
@@ -89,20 +91,12 @@ export function stepTierReasonText(host: HostTierConfig, t: (key: string, params
   return t("models.stepTierReasonUnavailable");
 }
 
-/** The identity a row's harness addresses in the catalog: pi's
- *  provider/id, claude's model name (Q2's identity rule — the same one the
- *  write gate judges). */
-function stepTierIdentity(row: Pick<ModelViewRow, "provider" | "id">, harness: string): { harness: "pi" | "claude"; model: string } | null {
-  if (harness === "pi") return { harness: "pi", model: `${row.provider}/${row.id}` };
-  if (harness === "claude") return { harness: "claude", model: row.id };
-  return null;
-}
-
 /** One row's step-tier cell, read-only (polyforge#256 B7): the current state
  *  as short badges — a single shared tier shows its name, differing harnesses
  *  show `pi: default` / `claude: fast`, an unset or incapable row shows 「—」.
  *  The editing entry point is the row's drawer (T3, ModelStepTierDrawer). */
-export function StepTierBadges({ row, tier }: { row: ModelViewRow; tier: StepTierColumnView }) {
+export function StepTierBadges({ row, tier, onOpen }: { row: ModelViewRow; tier: StepTierColumnView; onOpen?: (row: ModelViewRow) => void }) {
+  const { t } = useI18n();
   if (!tier.capable) {
     return <span data-step-tier-cell="readonly" data-step-tier-state="readonly" style={{ color: "var(--text-dim)" }}>—</span>;
   }
@@ -112,22 +106,27 @@ export function StepTierBadges({ row, tier }: { row: ModelViewRow; tier: StepTie
   const perHarness: Record<string, string[]> = {};
   for (const identity of identities) perHarness[identity.harness] = stepTierState(tier.tiers, identity);
   const view = stepTierRowView(identities.map((identity) => identity.harness), perHarness);
-  if (view.kind === "unset") {
-    return <span data-step-tier-cell="readonly" data-step-tier-state="unset" style={{ color: "var(--text-dim)" }}>—</span>;
-  }
-  if (view.kind === "all") {
-    return <span data-step-tier-cell="readonly" data-step-tier-state="all">
-      <span data-step-tier-badge="all">{view.tier}</span>
-    </span>;
-  }
-  return <span data-step-tier-cell="readonly" data-step-tier-state="specific">
-    {view.per.map((entry) => <span key={entry.harness} data-step-tier-badge={entry.harness}>
-      {entry.harness}: {entry.tiers.length === 0 ? "—" : entry.tiers.join("、")}
-    </span>)}
-  </span>;
+  const content = view.kind === "unset"
+    ? <span data-step-tier-state="unset" style={{ color: "var(--text-dim)" }}>—</span>
+    : view.kind === "all"
+      ? <span data-step-tier-state="all"><span data-step-tier-badge="all">{view.tier}</span></span>
+      : <span data-step-tier-state="specific">
+        {view.per.map((entry) => <span key={entry.harness} data-step-tier-badge={entry.harness}>
+          {entry.harness}: {entry.tiers.length === 0 ? "—" : entry.tiers.join("、")}
+        </span>)}
+      </span>;
+  return <button
+    type="button"
+    className="settings-step-tier-button"
+    data-step-tier-cell="editable"
+    data-step-tier-open=""
+    aria-haspopup="dialog"
+    title={t("models.stepTierEdit")}
+    onClick={() => onOpen?.(row)}
+  >{content}</button>;
 }
 
-export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effortValues = {}, onEffort, tier }: {
+export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effortValues = {}, onEffort, tier, onOpenTier }: {
   rows: ModelViewRow[];
   enabled?: EnabledModelsController;
   levels?: Record<string, string[]>;
@@ -136,6 +135,7 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effo
   effortValues?: Record<string, string>;
   onEffort?: (provider: string, id: string, level: string) => void;
   tier?: StepTierColumnView;
+  onOpenTier?: (row: ModelViewRow) => void;
 }) {
   const { t } = useI18n();
   return <table className="settings-model-table" style={{ width: "100%", textAlign: "left" }}>
@@ -167,7 +167,7 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effo
             </select></label>
             : <span data-reasoning="readonly">{row.reasoning.join(", ") || t("models.notProvided")}</span>}
         </td>
-        {tier && <td><StepTierBadges row={row} tier={tier} /></td>}
+        {tier && <td><StepTierBadges row={row} tier={tier} onOpen={onOpenTier} /></td>}
       </tr>;
     })}</tbody>
   </table>;
@@ -197,6 +197,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   const enabled = useEnabledModels(cwd);
   const [page, setPage] = useState<ModelSubpage>(initialSubpage);
   const [draft, setDraft] = useState<ModelPageDraft>(emptyDraft);
+  const [drawerRow, setDrawerRow] = useState<ModelViewRow | null>(null);
   const [models, setModels] = useState<ModelViewInput[]>([]);
   const [defaultModel, setDefaultModel] = useState<ModelIdentity | null>(null);
   const [piSettings, setPiSettings] = useState<ModelPayload | null>(null);
@@ -300,6 +301,45 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
     if (draftDirtyCount(next) === 0) setRevision((previous) => previous + 1);
   }, [cwd, draft]);
 
+  // One Host catalog read: the items the plan derives from AND the file hash
+  // the write expects, from the SAME GET — the CAS guards exactly that state.
+  const tierRead: StepTierRead = useCallback(async () => {
+    try {
+      const response = await fetch("/api/polyforge/config?host=1");
+      const data = await response.json().catch(() => null);
+      if (!response.ok || data?.error) return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
+      return {
+        ok: true,
+        items: Array.isArray(data?.items) ? data.items.map((item: { key?: unknown; value?: unknown }) => ({ key: typeof item.key === "string" ? item.key : "", value: item.value })) : [],
+        hash: typeof data?.file?.sha256 === "string" ? data.file.sha256 : null,
+      };
+    } catch (cause) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }, []);
+
+  // One tier-key write; the CAS hash comes from the same read that planned it.
+  const tierWrite: StepTierWriteFn = useCallback(async (write: StepTierWrite, hash: string | null) => {
+    try {
+      const response = await fetch("/api/polyforge/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: write.action,
+          key: `step_tiers.${write.tier}`,
+          ...(write.action === "set" ? { value: write.candidates } : {}),
+          host: true,
+          ...(hash !== null ? { expect_state: { file_sha256: hash } } : {}),
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.error) return { ok: false, error: data.error ?? `HTTP ${response.status}` };
+      return { ok: true };
+    } catch (cause) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }, []);
+
   // The unsaved draft is reported to Settings and guarded on the page itself:
   // a subpage switch asks first, a close asks before anything is lost.
   useEffect(() => { onUnsavedChange?.(dirty > 0); }, [dirty, onUnsavedChange]);
@@ -369,6 +409,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
               <HarnessModelTable rows={rows} enabled={enabled} levels={levels} piSettings={piSettings}
                 effortValues={draft.efforts}
                 tier={tierColumn ?? undefined}
+                onOpenTier={setDrawerRow}
                 onEffort={(provider, id, level) => setDraft((previous) => setDraftEffort(previous, `${provider}/${id}`, level))} />
               <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
             </section>
@@ -386,6 +427,16 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
           )}
         </ConfigDetail>
       </ConfigSplitView>
+      {drawerRow && tierColumn?.capable && (
+        <ModelStepTierDrawer
+          row={drawerRow}
+          tier={tierColumn}
+          tierRead={tierRead}
+          tierWrite={tierWrite}
+          onClose={() => setDrawerRow(null)}
+          onSaved={() => setRevision((previous) => previous + 1)}
+        />
+      )}
     </div>
   );
 }
