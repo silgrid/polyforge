@@ -680,7 +680,8 @@ rewind — and reads no content, and no agent merges by hand:
   under the ticket's server landing lease — one per repository and target
   branch, normalized by AIHub so https and ssh clones of one repository
   share it, every repo of the item locked in one order and the lane's
-  declared interval (`landing_lock`) holding it across sync → merge) verifies first that
+  declared interval (`landing_lock`) holding it across sync → merge; a step
+  inside the interval takes no separate single-step merge lock) verifies first that
   every published repo's `head` is its entry in the verification result's
   `heads`, then runs the command, which judges every PR before anything
   merges — a PR already merged (a resume) counts only by the landing rules:

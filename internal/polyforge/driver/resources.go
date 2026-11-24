@@ -213,7 +213,11 @@ func (d *Driver) acquireStepResources(ctx context.Context, stepID string) (relea
 		return func() {}, nil
 	}
 	req := ResourceRequest{Admission: s.Resources.Heavy()}
-	if s.Resources.Holds(workflow.LockMerge) {
+	// A step inside the lane's landing-lock interval already runs under the
+	// interval's lease of the same repository and target branch: taking a
+	// single-dispatch lease again would queue behind the interval's own
+	// grant (a different request id on one key never shares it, decided Q1).
+	if s.Resources.Holds(workflow.LockMerge) && !d.inLeaseInterval(stepID) {
 		if d.cfg.Forge == nil {
 			return nil, errors.New("the step declares the merge lock and this daemon has no forge binding")
 		}

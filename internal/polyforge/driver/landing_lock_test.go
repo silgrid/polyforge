@@ -18,6 +18,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // fakeLander is one interval's IntervalLeases: it counts the holds and
@@ -27,6 +28,8 @@ type fakeLander struct {
 	holds    int
 	releases int
 	lost     error
+	sticky   bool
+	losings  int
 	queued   bool
 	// held records whether the group is currently held.
 	held bool
@@ -49,7 +52,10 @@ func (f *fakeLander) Err() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	err := f.lost
-	f.lost = nil
+	f.losings++
+	if !f.sticky || f.losings > 2 {
+		f.lost = nil
+	}
 	return err
 }
 
@@ -70,6 +76,13 @@ func (f *fakeLander) lose(err error) {
 	f.mu.Unlock()
 }
 
+// loseSticky keeps answering the loss (a renewal that stays failed).
+func (f *fakeLander) loseSticky(err error) {
+	f.mu.Lock()
+	f.lost, f.sticky = err, true
+	f.mu.Unlock()
+}
+
 func (f *fakeLander) counts() (holds, releases int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -78,8 +91,14 @@ func (f *fakeLander) counts() (holds, releases int) {
 
 func landingEnv(t *testing.T, enter, exit string, steps ...StepSpec) (*Driver, *fakeSpawner, *eventLog, *fakeLander) {
 	t.Helper()
-	dir := t.TempDir()
-	execPath := dir + "/runtime-state/execution.json"
+	return landingEnvAt(t, t.TempDir(), "", enter, exit, steps...)
+}
+
+func landingEnvAt(t *testing.T, dir, execPath, enter, exit string, steps ...StepSpec) (*Driver, *fakeSpawner, *eventLog, *fakeLander) {
+	t.Helper()
+	if execPath == "" {
+		execPath = dir + "/runtime-state/execution.json"
+	}
 	sp := &fakeSpawner{}
 	log := &eventLog{}
 	fl := &fakeLander{}
@@ -203,15 +222,190 @@ func TestLandingAskReleasesAndReenters(t *testing.T) {
 	}
 }
 
-// TestLandingOutsideIntervalTakesNone: a lane with no declared interval
-// takes none (the pre-#245 behaviour).
+// TestLandingOutsideIntervalTakesNone: a lane without a declared interval
+// never asks the lander, and a step before the declared enter dispatches
+// with no lease held.
 func TestLandingOutsideIntervalTakesNone(t *testing.T) {
-	d, sp, _ := runEnv(t, spec("a"), spec("b"))
+	dir := t.TempDir()
+	sp := &fakeSpawner{}
+	fl := &fakeLander{}
+	d, err := New(Config{
+		WI: WIInfo{ID: "wi_nolease", CapsuleDir: dir, BundleName: "b"}, ExecPath: dir + "/runtime-state/execution.json",
+		Workflow: testLane(4, spec("a"), spec("b")), Spawner: sp, Log: &eventLog{}, IntervalLeases: fl,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	sp.script = []fakeEntry{done(""), done("")}
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if _, releases := (&fakeLander{}).counts(); releases != 0 {
-		t.Fatal("a lane without lease_interval released a lease")
+	if holds, _ := fl.counts(); holds != 0 {
+		t.Fatalf("a lane without an interval took %d lease(s)", holds)
+	}
+
+	d2, sp2, _, fl2 := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), spec("merge"))
+	sp2.script = []fakeEntry{done(""), done(""), done("")}
+	if err := d2.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if holds, _ := fl2.counts(); holds != 1 {
+		t.Fatalf("holds %d, want one taken at sync only", holds)
+	}
+}
+
+// TestLandingExitReleasesBeforeNextStep: the exit step's lease is given
+// back before the next (outside) step dispatches.
+func TestLandingExitReleasesBeforeNextStep(t *testing.T) {
+	d, sp, _, fl := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), spec("merge"), spec("after"))
+	after := done("")
+	after.act = func() {
+		fl.mu.Lock()
+		held := fl.held
+		fl.mu.Unlock()
+		if held {
+			t.Errorf("the after step dispatched while the interval lease was still held")
+		}
+	}
+	sp.script = []fakeEntry{done(""), done(""), done(""), after}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, releases := fl.counts(); releases != 1 {
+		t.Fatalf("releases %d, want exactly one", releases)
+	}
+}
+
+// TestLandingGateFailReleases: a verification-style gate FAIL rewinds to its
+// on_fail target (outside the interval): the lease is released before that
+// step dispatches, and the rewind is charged normally.
+func TestLandingGateFailReleases(t *testing.T) {
+	merge := spec("merge")
+	merge.Gate = true
+	merge.OnFail = &OnFail{Target: "build"}
+	d, sp, _, fl := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), merge)
+	buildAfter := done("")
+	buildAfter.act = func() {
+		fl.mu.Lock()
+		held := fl.held
+		fl.mu.Unlock()
+		if held {
+			t.Errorf("the on_fail target dispatched under the released interval's lease")
+		}
+	}
+	sp.script = []fakeEntry{done(""), done(""), gateFAIL(), buildAfter, done(""), done("")}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	exec := readExec(t, d.execPath)
+	if AgentRewindCount(exec.RewindStats.Rewinds) != 1 {
+		t.Fatalf("rewind count %d, want the FAIL charged once", AgentRewindCount(exec.RewindStats.Rewinds))
+	}
+}
+
+// TestLandingLockFailRoutesToEnterUncharged: a gate FAIL naming the landing
+// lock is a lost cycle: it re-enters at enter and counts toward no budget.
+func TestLandingLockFailRoutesToEnterUncharged(t *testing.T) {
+	merge := spec("merge")
+	merge.Gate = true
+	merge.OnFail = &OnFail{Target: "build"}
+	d, sp, _, _ := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), merge)
+	lost := fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusFail, "the landing lock was lost (renewing app)")}}
+	sp.script = []fakeEntry{done(""), done(""), lost, done(""), done("")}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	exec := readExec(t, d.execPath)
+	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].ToStep != "sync" || exec.RewindStats.Rewinds[0].Class != capsule.RewindLockCycle {
+		t.Fatalf("rewinds %+v, want one landing-class rewind to sync", exec.RewindStats.Rewinds)
+	}
+	if AgentRewindCount(exec.RewindStats.Rewinds) != 0 {
+		t.Fatal("the lost landing lock was charged to the rewind budget")
+	}
+}
+
+// TestLandingBlockedResumeReentersEnter: a blocked workflow persists the
+// re-entry intent; the resume lands it as a rewind to enter, uncharged.
+func TestLandingBlockedResumeReentersEnter(t *testing.T) {
+	sync := spec("sync")
+	merge := spec("merge")
+	d, sp, _, _ := landingEnv(t, "sync", "merge", spec("build"), sync, merge)
+	sp.script = []fakeEntry{done(""), done(""), incomplete()}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	exec := readExec(t, d.execPath)
+	if exec.WorkflowStatus != StatusBlocked || exec.LeaseReentry != "sync" {
+		t.Fatalf("blocked=%q marker=%q, want blocked at merge with marker sync", exec.WorkflowStatus, exec.LeaseReentry)
+	}
+	d2, sp2, _, _ := landingEnvAt(t, d.wi.CapsuleDir, d.execPath, "sync", "merge", spec("build"), sync, merge)
+	sp2.script = []fakeEntry{done(""), done("")}
+	if err := d2.ResumeCurrent(); err != nil {
+		t.Fatalf("ResumeCurrent: %v", err)
+	}
+	if err := d2.Run(context.Background()); err != nil {
+		t.Fatalf("Run after resume: %v", err)
+	}
+	exec = readExec(t, d.execPath)
+	var landing []capsule.RewindRecord
+	for _, r := range exec.RewindStats.Rewinds {
+		if r.Class == capsule.RewindLockCycle {
+			landing = append(landing, r)
+		}
+	}
+	if len(landing) != 1 || landing[0].ToStep != "sync" {
+		t.Fatalf("landing rewind %+v, want one to sync", landing)
+	}
+	if exec.WorkflowStatus != StatusCompleted {
+		t.Fatalf("status %q, want completed after the resume", exec.WorkflowStatus)
+	}
+}
+
+// TestLandingRenewLossStopsDispatch: a lease lost while a dispatch runs
+// stops that dispatch and re-enters at enter, uncharged.
+func TestLandingRenewLossStopsDispatch(t *testing.T) {
+	merge := spec("merge")
+	d, sp, _, fl := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), merge)
+	build := done("")
+	build.act = func() { fl.loseSticky(errors.New("the landing lock was lost (renewing app)")) }
+	held := done("")
+	held.hold = true
+	sp.script = []fakeEntry{build, held, done(""), done("")}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	exec := readExec(t, d.execPath)
+	var landing []capsule.RewindRecord
+	for _, r := range exec.RewindStats.Rewinds {
+		if r.Class == capsule.RewindLockCycle {
+			landing = append(landing, r)
+		}
+	}
+	if len(landing) != 1 || landing[0].ToStep != "sync" {
+		t.Fatalf("landing rewind %+v, want one to sync", landing)
+	}
+	if AgentRewindCount(exec.RewindStats.Rewinds) != 0 {
+		t.Fatal("the lost lease was charged to the rewind budget")
+	}
+}
+
+// TestLandingGateAskResumesInPlace: owner ruling 2026-11-24 (1A) — a gate's
+// ask resumes that gate; no re-entry marker is written.
+func TestLandingGateAskResumesInPlace(t *testing.T) {
+	merge := spec("merge")
+	merge.Gate = true
+	d, _, _, fl := landingEnv(t, "sync", "merge", spec("sync"), merge)
+	if err := d.transition(TransitionRequest{Kind: TransInit, SpawnN: d.currentSpawnN()}); err != nil {
+		t.Fatal(err)
+	}
+	d.leaseHold = fl
+	fl.held = true
+	d.releaseLeaseForAsk("merge")
+	exec := readExec(t, d.execPath)
+	if exec.LeaseReentry != "" {
+		t.Fatalf("a gate ask wrote the re-entry marker %q", exec.LeaseReentry)
+	}
+	if _, releases := fl.counts(); releases != 1 {
+		t.Fatalf("releases %d, want the gate ask to release once", releases)
 	}
 }

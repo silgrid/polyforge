@@ -101,8 +101,8 @@ func TestShippedDevelopLaneShape(t *testing.T) {
 	}
 	// merge registers the landing as the wrap's `integration` attr (contract
 	// 3's `handoff: landing`): wrap_attrs: [integration]
-	if m := lane.Step("merge"); m.Waivable || strings.Join(m.WrapAttrs, ",") != "integration" || m.Resources == nil || m.Resources.Heavy() || !m.Resources.Holds(workflow.LockMerge) || m.ToolMinutes != 10 {
-		t.Fatalf("develop/merge must hold the merge lock, a 10-minute tool window and register the landing as the wrap's integration attr (wrap_attrs: [integration]): %+v", m)
+	if m := lane.Step("merge"); m.Waivable || strings.Join(m.WrapAttrs, ",") != "integration" || m.Resources != nil || m.ToolMinutes != 10 {
+		t.Fatalf("develop/merge must take no single-step resource (the sync..merge interval holds the lease), a 10-minute tool window and register the landing as the wrap's integration attr (wrap_attrs: [integration]): %+v", m)
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
@@ -125,6 +126,10 @@ const (
 	// a lost lease or a step failure re-enters there, charged to no
 	// rewind budget.
 	TransLeaseReentry TransitionKind = "lease_reentry"
+	// TransLeaseMark writes or clears the persisted landing-lock re-entry
+	// intent (execution.LeaseReentry): a release that must re-queue for a
+	// restart/blocked resume, and its clearance once consumed.
+	TransLeaseMark TransitionKind = "lease_mark"
 )
 
 // TransitionRequest is one submitted execution.json mutation. SpawnN is
@@ -169,7 +174,9 @@ type TransitionRequest struct {
 	// starts, read before the transition takes the driver's lock: recorded
 	// as the step's round start commits when this dispatch opens its round.
 	StartHeads map[string]string
-	SpawnN     int64
+	// LeaseReentry (lease_mark) is the persisted re-entry step: "" clears.
+	LeaseReentry string
+	SpawnN       int64
 }
 
 // GateVerdict is one business gate FAIL judgment (01 §6.2): the policy
@@ -291,6 +298,9 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		return d.applyEpicResumeLocked(req, info)
 	case TransLeaseReentry:
 		return d.applyLeaseReentryLocked(req, info)
+	case TransLeaseMark:
+		d.exec.LeaseReentry = req.LeaseReentry
+		return nil
 	case TransBlocked:
 		if isTerminalStatus(d.exec.WorkflowStatus) {
 			return fmt.Errorf("driver: workflow is terminal (%s)", d.exec.WorkflowStatus)
@@ -606,16 +616,27 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 		d.exec.WorkflowStatus = StatusFailedGate
 		return nil
 	}
+	class := capsule.RewindCharged
+	// A FAIL whose one-line reason names the landing lock is Q7's lost
+	// cycle, not the work's defect: it re-enters at the lane's declared
+	// enter step and counts toward no rewind budget.
+	if enter, _, ok := d.leaseInterval(); ok && strings.Contains(v.FailReason, "landing lock") {
+		target = d.workflow.Steps[enter].ID
+		class = capsule.RewindLockCycle
+	} else {
+		switch {
+		case v.PerOwner:
+			class = capsule.RewindOwner
+		case uncountedFail(d.workflow, v.FailReason):
+			class = capsule.RewindUncounted
+		}
+	}
 	tIdx, _ := d.workflow.indexOf(target)
 	gIdx, _ := d.workflow.indexOf(gate)
-	class := capsule.RewindCharged
-	switch {
-	case v.PerOwner:
-		class = capsule.RewindOwner
-	case uncountedFail(d.workflow, v.FailReason):
-		class = capsule.RewindUncounted
-	}
 	d.applyRewindRangeLocked(tIdx, gIdx, target, gate, CauseGateFailRewind, class, info)
+	if class == capsule.RewindLockCycle {
+		d.exec.LeaseReentry = ""
+	}
 	d.closeGateRoundLocked(gate, out, "FAIL verdict rewound the workflow to "+target)
 	return nil
 }
@@ -764,6 +785,7 @@ func (d *Driver) applyLeaseReentryLocked(req TransitionRequest, info *appliedInf
 		return fmt.Errorf("driver: step %q is outside the landing-lock interval", req.StepID)
 	}
 	d.applyRewindRangeLocked(enter, cur+1, d.workflow.Steps[enter].ID, "lock_interval", CauseGateFailRewind, capsule.RewindLockCycle, info)
+	d.exec.LeaseReentry = ""
 	return nil
 }
 

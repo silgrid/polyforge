@@ -108,7 +108,6 @@ steps:
     on_fail: { target: sync }
     skill: merge
     model_tier: cheap
-    resources: { locks: [merge] }
     budget: { tool_minutes: 10 }
     wrap_attrs: [integration]
     vars: { verifying_gate: verification }

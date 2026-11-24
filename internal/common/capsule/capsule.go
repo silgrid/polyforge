@@ -172,6 +172,12 @@ type Execution struct {
 	// naming the request: `pf cancel` finishes it, and the owner's resume
 	// drops this intent.
 	CancelRequested *CancelIntent `json:"cancel_requested,omitempty"`
+	// LeaseReentry names the landing-lock interval's enter step a released
+	// lease must re-enter at (polyforge#245 Q8): written before a release
+	// that re-queues (an ask of a non-gate step, a lost lease, a blocked
+	// workflow), consumed by the next dispatch planning, never counting as
+	// a rewind. Empty = none.
+	LeaseReentry string `json:"lease_reentry,omitempty"`
 }
 
 // CancelIntent is one owner's cancel the daemon carries out: an `intent:

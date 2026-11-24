@@ -87,7 +87,7 @@ func landingCapsule(t *testing.T) string {
 	return dir
 }
 
-func TestIntervalLeaseRenewsAndReleases(t *testing.T) {
+func TestLandingHoldRenewsAndReleases(t *testing.T) {
 	hub := newFakeLeaseHub()
 	journalPath := filepath.Join(t.TempDir(), leaseJournalFile)
 	l := newLeaseManager(hub, journalPath)
@@ -206,15 +206,17 @@ func TestLandingRecoveryBlocksOnUnknownState(t *testing.T) {
 	}
 }
 
-func TestIntervalLeaseRepoReleasesOne(t *testing.T) {
+func TestLandingHoldRepoReleasesOne(t *testing.T) {
 	hub := newFakeLeaseHub()
 	l := newLeaseManager(hub, filepath.Join(t.TempDir(), leaseJournalFile))
 	l.poll = time.Millisecond
-	release, err := l.HoldRepo(context.Background(), "wi_1", landingCapsule(t), "https://github.com/o/app")
+	// the production path holds and checks by the CLAIM NAME (pf step
+	// lock-check --repo <name>), never by the driver's normalized origin key
+	release, err := l.HoldRepo(context.Background(), "wi_1", landingCapsule(t), "app")
 	if err != nil {
 		t.Fatalf("HoldRepo: %v", err)
 	}
-	if err := l.Check(context.Background(), "wi_1", "https://github.com/o/app"); err != nil {
+	if err := l.Check(context.Background(), "wi_1", "app"); err != nil {
 		t.Fatalf("Check: %v", err)
 	}
 	release()

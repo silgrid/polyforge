@@ -53,7 +53,17 @@ func TestRepoIdentityNormalize(t *testing.T) {
 	if err != nil || id.Key() != "gitlab.example.com/group/sub/repo" {
 		t.Fatalf("nested group = %+v, %v", id, err)
 	}
-	for _, raw := range []string{"", "   ", "https://github.com/onlyowner", "not a url", "file:///tmp/x/y", "git@github.com:"} {
+	// A local origin (a development workspace) is its own stable identity.
+	for raw, key := range map[string]string{
+		"file:///tmp/x/y": "local/path/tmp/x/y",
+		"/srv/repos/app":  "local/path/srv/repos/app",
+	} {
+		id, err := NormalizeRepoURL(raw)
+		if err != nil || id.Key() != key {
+			t.Fatalf("normalize %q = %+v, %v, want %q", raw, id, err, key)
+		}
+	}
+	for _, raw := range []string{"", "   ", "https://github.com/onlyowner", "not a url", "git@github.com:"} {
 		if _, err := NormalizeRepoURL(raw); err == nil {
 			t.Fatalf("normalize %q succeeded, want a CORE-400 refusal", raw)
 		}

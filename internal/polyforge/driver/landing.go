@@ -92,15 +92,79 @@ func (d *Driver) releaseLeaseForAsk(stepID string) {
 		return
 	}
 	if d.leaseHold != nil {
-		// A gate's ask is its own judgment (verification's waiver, the
-		// human merge's person): release and let the reply resume that
-		// gate, so the owner's decision is not preceded by another
-		// sync/verification round. An ask of a non-gate step re-enters at
-		// the declared enter step after the reply.
+		// Owner ruling 2026-11-24 (1A): a gate's ask (verification's
+		// waiver, the human merge's person) resumes that gate in place; an
+		// ask of a non-gate step re-enters at the declared enter step after
+		// the reply, and that intent is persisted so a restart lands it too.
 		if spec := d.workflow.step(stepID); spec == nil || !spec.Gate {
+			d.markLeaseReentry()
 			d.leaseReentry = true
 		}
 		d.releaseLease("ask")
+	}
+}
+
+// markLeaseReentry persists the interval's enter step as the re-entry
+// point of a release that re-queues (an ask of a non-gate step, a lost
+// lease, a blocked workflow): a restart or resume lands it in
+// consumeLeaseReentry, charged to no rewind budget (Q8).
+func (d *Driver) markLeaseReentry() {
+	enter, exit, ok := d.leaseInterval()
+	if !ok {
+		return
+	}
+	cur := d.Snapshot().CurrentStep
+	i, ok := d.workflow.indexOf(cur)
+	if !ok || i < enter || i > exit || i == enter {
+		return
+	}
+	_ = d.transition(TransitionRequest{
+		Kind:         TransLeaseMark,
+		LeaseReentry: d.workflow.Steps[enter].ID,
+		SpawnN:       d.currentSpawnN(),
+	})
+}
+
+// consumeLeaseReentry lands a persisted re-entry once no ask is open: the
+// steps from the declared enter step through the current one re-run. It
+// answers true when it wrote something, so the caller plans again.
+func (d *Driver) consumeLeaseReentry() (bool, error) {
+	if d.Snapshot().LeaseReentry == "" {
+		return false, nil
+	}
+	if d.parkedAsk() != nil {
+		return false, nil
+	}
+	enter, exit, ok := d.leaseInterval()
+	cur := d.Snapshot().CurrentStep
+	i, in := d.workflow.indexOf(cur)
+	if !ok || !in || i < enter || i > exit || i == enter {
+		_ = d.transition(TransitionRequest{Kind: TransLeaseMark, SpawnN: d.currentSpawnN()})
+		return true, nil
+	}
+	if err := d.transition(TransitionRequest{Kind: TransLeaseReentry, StepID: cur, SpawnN: d.currentSpawnN()}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// watchLease stops the running dispatch when the interval's lease is lost
+// (Q7: a renewal failure voids the cycle and the current dispatch must
+// stop, not run to completion under a lease someone else holds). Bounded:
+// one poll a second, and the caller closes stop when the dispatch ends.
+func (d *Driver) watchLease(run StepRun, hold IntervalLease, stop <-chan struct{}) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			if hold != nil && hold.Err() != nil {
+				_ = run.Terminate(5 * time.Second)
+				return
+			}
+		}
 	}
 }
 
@@ -124,6 +188,7 @@ func (d *Driver) ensureLease(ctx context.Context, stepID string) (bool, error) {
 			return false, nil
 		} else {
 			d.emit(EvLeaseLost, map[string]any{"step": stepID, "error": err.Error()})
+			d.markLeaseReentry()
 			d.releaseLease("lost")
 			d.leaseReentry = true
 		}

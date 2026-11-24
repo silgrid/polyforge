@@ -173,9 +173,14 @@ The interval is closed: the driver takes the server landing lease of the
 ticket's repositories at its target branch before the `enter` step first
 dispatches, holds it across the interval's dispatches (the daemon renews
 it on the server clock) and releases it when the `exit` step is done or
-the workflow leaves the interval. A lease loss or an ask releases the
-group and re-enters at `enter`, charged to no rewind budget; a wait for
-the lease is a `merge_lock_queued` fact, never a stall. The server lease
+the workflow leaves the interval. A lease loss and an ask of a non-gate step release the group and re-enter
+at `enter`, charged to no rewind budget; a gate's ask (verification's
+waiver, the human merge's person) resumes that gate in place, so the
+owner's decision is not preceded by another sync/verification round
+(owner ruling 2026-11-24, 1A — the narrowing applies to gates only). A
+step inside the interval takes no single-step `resources: {locks: [merge]}`
+of its own: the interval's lease is the one lock. A wait for the lease is a
+`merge_lock_queued` fact, never a stall. The server lease
 is generic (`kind: landing`): its key, FIFO order, 300 s lease, 30 s
 renewal, 5 s poll and server-side identity normalization live in
 [uds-routes.md](uds-routes.md)'s lease routes; the lane only declares the

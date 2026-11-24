@@ -520,6 +520,9 @@ func (d *Driver) Run(ctx context.Context) error {
 			// paused period are not counted (the D6 lifecycle ruling).
 			d.bookCollectedWall(res)
 			if stop, err := d.settle(ctx, res.StepID, collectedN, res, nil); stop {
+				if d.Snapshot().WorkflowStatus == StatusBlocked {
+					d.markLeaseReentry()
+				}
 				return err
 			}
 			continue
@@ -529,6 +532,9 @@ func (d *Driver) Run(ctx context.Context) error {
 			return err
 		}
 		if stop {
+			if d.Snapshot().WorkflowStatus == StatusBlocked {
+				d.markLeaseReentry()
+			}
 			return nil
 		}
 
@@ -643,8 +649,23 @@ func (d *Driver) Run(ctx context.Context) error {
 			continue
 		}
 		announced := d.announceStart(spawn, run, dispatchedAt)
+		stopWatch := make(chan struct{})
+		heldLease := d.leaseHold
+		if heldLease != nil {
+			go d.watchLease(run, heldLease, stopWatch)
+		}
 		res, werr, verdict := d.awaitDispatch(ctx, run, stepID, n)
+		close(stopWatch)
 		releaseResources() // the dispatch's process is gone: what it held is free
+		if heldLease != nil && heldLease.Err() != nil {
+			// Q7: the lease was lost while this dispatch ran. Drop its
+			// result, release and re-queue at the declared enter step.
+			d.markLeaseReentry()
+			d.releaseLease("lost")
+			d.leaseReentry = true
+			d.announceEnd(stepID, n, supervise.OutcomeExitedWithoutResult, -1, "landing lease lost")
+			continue
+		}
 		// The dispatch's wall ends when its process is known gone. The
 		// step-end hooks below are cleanup: charging their cost to T would
 		// turn a step-end /proc scan into the next dispatch's timeout.
@@ -738,6 +759,9 @@ func (d *Driver) Run(ctx context.Context) error {
 		d.addUnbookedUntil(stepID, bookedFrom, endedAt)
 		crashpoint.At("driver.collected:" + stepID)
 		if stop, err := d.settle(ctx, stepID, n, res, run); stop {
+			if d.Snapshot().WorkflowStatus == StatusBlocked {
+				d.markLeaseReentry()
+			}
 			return err
 		}
 	}
@@ -981,6 +1005,14 @@ func (d *Driver) plan(ctx context.Context) (stop bool, stepID string, err error)
 				return false, "", fmt.Errorf("driver: the epic resume marker could not be consumed: %w", err)
 			}
 			continue // re-plan: the reset moved the position
+		}
+		// A persisted landing-lock re-entry (an ask of a non-gate step, a
+		// lost lease, a blocked workflow) lands now that no ask is open:
+		// the interval's steps from enter re-run, charged to no budget.
+		if handled, err := d.consumeLeaseReentry(); err != nil {
+			return false, "", fmt.Errorf("driver: landing-lock re-entry failed: %w", err)
+		} else if handled {
+			continue
 		}
 		// The overlay's skip switch may change between steps (polyforge#25,
 		// the daemon's override route): every plan pass re-reads the

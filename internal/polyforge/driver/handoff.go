@@ -332,6 +332,9 @@ func (d *Driver) blockHandoff(stepID string, n int64, reason string) (bool, erro
 	if err := d.transition(TransitionRequest{Kind: TransBlocked, StepID: stepID, Reason: reason, SpawnN: n}); err != nil {
 		return true, fmt.Errorf("driver: step %s hand-off park failed: %w", stepID, err)
 	}
+	// a blocked workflow re-enters the landing interval at its enter step
+	// when the owner's resume unblocks it (Q8)
+	d.markLeaseReentry()
 	return true, nil
 }
 

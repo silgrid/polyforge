@@ -100,12 +100,8 @@ type leaseManager struct {
 	// is replaced by context.Background in Hold).
 	runCtx context.Context
 
-	mu     sync.Mutex
-	cycles map[string]*leaseCycle
-	// local marks a ticket whose repositories have no server identity (a
-	// local-path origin): its lock-check answers held, since no lease can
-	// exist for it.
-	local     map[string]bool
+	mu        sync.Mutex
+	cycles    map[string]*leaseCycle
 	recovered bool
 }
 
@@ -125,7 +121,7 @@ func newLeaseManager(hub leaseHub, journalPath string) *leaseManager {
 	return &leaseManager{
 		hub: hub, journal: aihubclient.NewLeaseJournal(journalPath),
 		now: time.Now, poll: leasePollEvery, renewEvery: leaseRenewEvery, ttl: leaseTTL,
-		cycles: map[string]*leaseCycle{}, local: map[string]bool{},
+		cycles: map[string]*leaseCycle{},
 	}
 }
 
@@ -144,14 +140,7 @@ func (l *leaseManager) Hold(ctx context.Context, wi, capsuleDir string, repos []
 	if err != nil {
 		return nil, err
 	}
-	sorted := l.leaseable(capsuleDir, repos)
-	if len(sorted) == 0 {
-		l.markLocal(wi)
-		// A local-path clone has no server identity: there is no key the
-		// server could normalize. Such a workspace (a development
-		// machine's local origin) runs without a lease.
-		return leaseNoop{}, nil
-	}
+	sorted := leaseRepos(repos)
 	c, err := l.cycle(ctx, wi)
 	if err != nil {
 		return nil, err
@@ -170,69 +159,16 @@ func (l *leaseManager) Hold(ctx context.Context, wi, capsuleDir string, repos []
 	return &leaseHoldGroup{manager: l, cycle: c, repos: sorted}, nil
 }
 
-// leaseNoop is the hold of a workspace with no leaseable repository.
-type leaseNoop struct{}
-
-func (leaseNoop) Err() error                  { return nil }
-func (leaseNoop) Check(context.Context) error { return nil }
-func (leaseNoop) Release()                    {}
-
-// leaseableRepos answers the repositories the lease server can name: a
-// remote URL or an SCP-style remote. A local-path clone (a development
-// origin) has no forge identity and is kept out — the interval and the
-// single-dispatch lock then run without a lease for it.
-func (l *leaseManager) leaseable(capsuleDir string, repos []string) []string {
+// leaseRepos sorts and dedups the claim repositories one cycle holds.
+func leaseRepos(repos []string) []string {
 	out := make([]string, 0, len(repos))
 	for _, r := range repos {
-		if !localPathRepo(repoOrigin(capsuleDir, r)) && !slices.Contains(out, r) {
+		if r != "" && !slices.Contains(out, r) {
 			out = append(out, r)
 		}
 	}
 	sort.Strings(out)
 	return out
-}
-
-// repoOrigin answers the remote a claim repo's clone carries (the repo
-// name's own clone under the capsule, or the absolute path when it is
-// one); an unreadable origin answers the name itself (fail closed: the
-// repository stays leaseable and the server judges it).
-func repoOrigin(capsuleDir, name string) string {
-	dir := name
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(capsuleDir, "repos", name)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	c := taskrepo.Command(ctx, nil, dir, "remote", "get-url", "origin")
-	var out bytes.Buffer
-	c.Stdout = &out
-	if err := c.Run(); err != nil {
-		return name
-	}
-	origin := strings.TrimSpace(out.String())
-	if origin == "" {
-		return name
-	}
-	return origin
-}
-
-func (l *leaseManager) markLocal(wi string) {
-	l.mu.Lock()
-	l.local[wi] = true
-	l.mu.Unlock()
-}
-
-func (l *leaseManager) isLocal(wi string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.local[wi]
-}
-
-// localPathRepo reports a repository spelling that is a filesystem path,
-// not a remote the server can normalize.
-func localPathRepo(repo string) bool {
-	r := strings.TrimSpace(repo)
-	return r == "" || strings.HasPrefix(r, "/") || strings.HasPrefix(r, ".") || strings.HasPrefix(r, "~")
 }
 
 // HoldRepo acquires one repository's landing lease for one dispatch (the
@@ -245,15 +181,6 @@ func (l *leaseManager) HoldRepo(ctx context.Context, wi, capsuleDir, repo string
 	}
 	if err := l.recoverOnce(ctx); err != nil {
 		return nil, err
-	}
-	if len(l.leaseable(capsuleDir, []string{repo})) == 0 {
-		l.markLocal(wi)
-		// A local-path clone has no server identity: there is no key the
-		// server could normalize, and the server would refuse it. Such a
-		// workspace (a development machine's local origin) runs the
-		// single-dispatch lock without a lease; every forge-named repo
-		// takes one.
-		return func() {}, nil
 	}
 	branch, err := targetBranchOf(capsuleDir)
 	if err != nil {
@@ -278,16 +205,10 @@ func (l *leaseManager) Check(ctx context.Context, wi, repo string) error {
 	if l == nil || l.hub == nil {
 		return fmt.Errorf("this daemon has no aihub client for the landing lock")
 	}
-	if localPathRepo(repo) {
-		return nil // no server identity: there is no lease to check
-	}
 	l.mu.Lock()
 	c := l.cycles[wi]
 	l.mu.Unlock()
 	if c == nil {
-		if l.isLocal(wi) {
-			return nil // a local-path workspace has no lease to check
-		}
 		return fmt.Errorf("the landing lock of %s is not held by this daemon: no merge may run", wi)
 	}
 	if err := c.lost(); err != nil {
