@@ -76,7 +76,7 @@ func TestW403DevelopGrillAndE2EContract(t *testing.T) {
 		}, stale: []string{"a fixed delay or timeout", "`build-grill`", "`## Clarity`", "text-only sweep"}},
 		"workflows/_shared/build_subagents.md": {wants: []string{
 			"one sub-agent reproduces and locates a reported defect and writes `artifacts/plan.md` — not you.",
-			"It does not grill the ticket: no clarity checklist, no batched round of questions — the ticket was settled before it was filed.",
+			"It works from the ticket as settled before it was filed: the clarity checklist and the batched question round belong to the session that filed it.",
 			"You ask the owner — a sub-agent cannot stop the step — only in the cases 3a names, right after the plan; folding the answer into the plan is the sub-agent's, when you dispatch it again with the owner's words.",
 		}, stale: []string{"grills the work item", "`## Clarity`", "`artifacts/grill-qa.md`", "recorded #<n>", "`needs_input`"}},
 		"docs/concepts.md": {wants: []string{
