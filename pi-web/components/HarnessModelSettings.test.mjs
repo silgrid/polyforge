@@ -37,7 +37,7 @@ test("the Provider subpage is flat: no second split view, only its own form foot
   assert.match(page, /data-provider-footer=""/);
 });
 
-test("unified table renders both harnesses, exact provider identity and unsupported Claude chat", () => {
+test("unified table renders both harnesses, exact provider identity and always-available Claude chat", () => {
   const rows = [
     { provider: "anthropic", id: "opus", name: "Opus", harnesses: ["pi", "claude"], chatAvailable: true, reasoning: ["high"], isDefault: true },
     { provider: "gateway", id: "opus", name: "Gateway Opus", harnesses: ["pi"], chatAvailable: false, reasoning: ["minimal"], isDefault: false },
@@ -47,7 +47,8 @@ test("unified table renders both harnesses, exact provider identity and unsuppor
   assert.match(html, /anthropic/);
   assert.match(html, /Gateway Opus/);
   assert.match(html, /Sonnet/);
-  assert.match(html, /Not supported/);
+  assert.match(html, /Always available/);
+  assert.ok(!html.includes("Not supported"), "the old 「不支持」 wording is gone");
   assert.match(html, /high/);
   assert.match(html, /minimal/);
   assert.match(html, /adaptive/);
@@ -55,6 +56,32 @@ test("unified table renders both harnesses, exact provider identity and unsuppor
   assert.match(html, /Chat availability/);
 });
 
+
+// polyforge#258 (T3) AC1/AC2: claude's chat cell says 「始终可用」 with the
+// reason in its tooltip (owner plan review item 4: never 「不支持」), and pi's
+// reasoning select names the global level it follows instead of printing a
+// second value beside the select. Expected text comes from the owner's ruling
+// and the Global level passed in (`high`), never from the component's output.
+test("claude chat is always available with its reason, and pi reasoning follows the global level", () => {
+  const rows = [
+    { provider: "gateway", id: "one", name: "Gateway One", harnesses: ["pi"], chatAvailable: true, reasoning: ["high"], isDefault: false },
+    { provider: "anthropic", id: "opus", name: "Opus", harnesses: ["claude"], chatAvailable: false, reasoning: ["xhigh"], isDefault: false },
+  ];
+  const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelTable, {
+    rows,
+    levels: { "gateway:one": ["low", "medium", "high"] },
+    piSettings: { reasoningEffort: { raw: "high" }, perModelReasoningEffort: {} },
+    onEffort: () => {},
+  })));
+  assert.match(html, /data-claude-chat="always"/, "the claude cell marks its always-on state");
+  assert.match(html, /Always available/);
+  assert.match(html, /Claude sessions do not disable a model/, "the reason is readable in the tooltip");
+  assert.ok(!html.includes("Not supported"), "the unexplained 「不支持」 is gone");
+  assert.match(html, /Follow global \(high\)/, "the reasoning select's default names the global level it follows");
+  assert.match(html, /data-reasoning="readonly">xhigh/, "claude's reasoning is a read-only value, not a select");
+  const claudeRow = html.slice(html.indexOf("anthropic"));
+  assert.ok(!/data-reasoning="[^"]*"[^>]*><select/.test(claudeRow), "no reasoning select on a claude row");
+});
 
 // polyforge#256 (T1, B7/B1): the model list's step-tier column is read-only.
 // Expected labels come from the owner's ruling — a single shared tier shows
@@ -122,7 +149,7 @@ test("an incapable catalog read leaves the tier column read-only, the other colu
   assert.match(html, /data-step-tier-state="readonly"/, "the cell is a read-only dash");
   assert.ok(!html.includes("data-step-tier-select"), "no tier select without a capable catalog");
   assert.match(html, /Chat availability/, "the other columns are untouched");
-  assert.match(html, /Not supported/, "the claude chat note stays");
+  assert.match(html, /Always available/, "the claude chat note stays");
 });
 
 test("old pf reason follows locale: version, not-installed and unreadable stay distinct and localized", () => {
