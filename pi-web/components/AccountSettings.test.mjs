@@ -233,6 +233,9 @@ test("account pending, success, empty, failure and refresh are distinct", async 
   const shim = createJiti(import.meta.url, {
     jsx: { runtime: "automatic" },
     moduleCache: false,
+    // polyforge#259 T4 AC2: the panel imports the display-name mapping through
+    // the package's own `@/` alias, which the shim resolves like tsconfig does.
+    tsconfigPaths: true,
     alias: {
       react: new URL("../hooks/__fixtures__/react-hook-shim.mjs", import.meta.url).pathname,
       "react/jsx-runtime": new URL("../hooks/__fixtures__/react-jsx-runtime.mjs", import.meta.url).pathname,

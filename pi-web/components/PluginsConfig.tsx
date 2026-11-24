@@ -12,6 +12,7 @@ import type {
 } from "@/lib/api-types";
 import { useI18n } from "@/hooks/useI18n";
 import { shortenPath } from "@/lib/display-path";
+import { pluginRowName } from "@/lib/settings-display-names";
 import {
   getLastSettingsSelection,
   setLastSettingsSelection,
@@ -975,8 +976,10 @@ export function PluginsConfig({
                               }}
                             >
                               <ConfigStatusDot active={!pkg.disabled} color={statusColor(pkg.status)} />
+                              {/* The package name leads; the install source stays in the
+                                  row's title and the detail's own path row (AC2). */}
                               <ConfigSidebarText className={`is-grow${pkg.disabled ? " is-muted" : ""}`}>
-                                {pkg.source}
+                                {pluginRowName(pkg)}
                               </ConfigSidebarText>
                               {updateStatuses[packageKey(pkg)]?.state === "update-available" && (
                                 <span title={t("i18n.updateAvailable")} className="skill-update-indicator">

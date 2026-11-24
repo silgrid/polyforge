@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { AccountCellRow, AccountHarnessRow } from "@/lib/harness/account-rows";
+import { accountTargetName } from "@/lib/settings-display-names";
 import type { HarnessLoginCommand } from "@/lib/harness/concepts";
 import {
   ConfigButton,
@@ -241,16 +242,24 @@ export function ClaudeCredentialForm({ cells, onSave }: {
         <fieldset>
           <legend>{t("settings.accountTargets")}</legend>
           <p className="settings-general-description">{t("settings.accountSharedDefaultNote")}</p>
-          {allTargets.map((target) => (
-            <label key={target} className="settings-account-checkbox">
-              <input type="checkbox" data-account-target={target} checked={effective.includes(target)} onChange={(event) => {
-                setTargets(event.target.checked
-                  ? [...effective, target]
-                  : effective.filter((entry) => entry !== target));
-              }} />
-              <span>{target}</span>
-            </label>
-          ))}
+          {allTargets.map((target) => {
+            // Display name first (`交互会话` / `Cell default`); the raw target id
+            // stays as the second line (polyforge#259 T4 AC2).
+            const name = accountTargetName(target);
+            return (
+              <label key={target} className="settings-account-checkbox">
+                <input type="checkbox" data-account-target={target} checked={effective.includes(target)} onChange={(event) => {
+                  setTargets(event.target.checked
+                    ? [...effective, target]
+                    : effective.filter((entry) => entry !== target));
+                }} />
+                <span className="settings-name-stack">
+                  <span>{name.labelKey ? t(name.labelKey, name.params) : name.id}</span>
+                  {name.labelKey && <code className="settings-secondary-id">{name.id}</code>}
+                </span>
+              </label>
+            );
+          })}
         </fieldset>
         <ConfigDetailActions>
           <ConfigButton data-account-action="save" onClick={save}>{t("settings.accountSaveCredential")}</ConfigButton>

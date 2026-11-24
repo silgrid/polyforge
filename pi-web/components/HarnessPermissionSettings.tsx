@@ -25,6 +25,7 @@ import {
   ConfigSwitch,
 } from "./SettingsUi";
 import { CLAUDE_APPROVAL_MODES, type PermissionPayload } from "@/lib/harness/concepts";
+import { DENY_INSTEAD_OF_PROMPTING, claudeApprovalModeName } from "@/lib/settings-display-names";
 import {
   UNIFIED_APPROVAL_LABEL_KEYS,
   UNIFIED_APPROVAL_MODES,
@@ -230,7 +231,9 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
                   <h3 className="settings-general-heading">Claude</h3>
                   <p className="settings-general-description">{t("settings.permissionClaudeExtraModesDescription")}</p>
                   <div role="radiogroup" aria-label={t("settings.permissionClaudeExtraModes")} className="settings-agent-language-options">
-                    {CLAUDE_APPROVAL_MODES.map((mode) => (
+                    {CLAUDE_APPROVAL_MODES.map((mode) => {
+                      const modeName = claudeApprovalModeName(mode);
+                      return (
                       <button
                         key={mode}
                         type="button"
@@ -243,16 +246,26 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
                         <span className="settings-language-radio">
                           {claudePayload?.approvalMode.raw === mode && <span className="settings-language-radio-dot" />}
                         </span>
-                        <span className="settings-language-label"><code>{mode}</code></span>
+                        {/* Display name first; the raw mode stays as the second line (AC2). */}
+                        <span className="settings-language-label">
+                          <span className="settings-name-stack">
+                            <span>{modeName.labelKey ? t(modeName.labelKey) : modeName.id}</span>
+                            <code className="settings-secondary-id">{modeName.id}</code>
+                          </span>
+                        </span>
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                   <div className="settings-shell-option">
-                    <span><code>denyInsteadOfPrompting</code></span>
+                    <span className="settings-name-stack">
+                      <span>{t(DENY_INSTEAD_OF_PROMPTING.labelKey!)}</span>
+                      <code className="settings-secondary-id">{DENY_INSTEAD_OF_PROMPTING.id}</code>
+                    </span>
                     <ConfigSwitch
                       checked={claudePayload?.denyInsteadOfPrompting === true}
                       loading={saving}
-                      label="denyInsteadOfPrompting"
+                      label={t(DENY_INSTEAD_OF_PROMPTING.labelKey!)}
                       disabled={sourceIsReadOnly(claudePayload?.sources.denyInsteadOfPrompting ?? null)}
                       onChange={(enabled) => void saveClaude({ denyInsteadOfPrompting: enabled })}
                     />
