@@ -64,6 +64,16 @@ func TestLandingLockDeclaration(t *testing.T) {
 	}
 }
 
+// TestLandingLockReversedRefused: a reversed interval is refused at load
+// (the closed range names one order).
+func TestLandingLockReversedRefused(t *testing.T) {
+	_, errs := workflow.Load(workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo",
+		landingFront("landing_lock: { enter: merge, exit: sync }\n")))
+	if len(errs) == 0 {
+		t.Fatal("a reversed landing_lock interval loaded with no defect")
+	}
+}
+
 // TestLandingLockCarriedEverywhere: the registry dump, the generated lane
 // Schema and the two lanes the ticket names carry the one optional key.
 func TestLandingLockCarriedEverywhere(t *testing.T) {
