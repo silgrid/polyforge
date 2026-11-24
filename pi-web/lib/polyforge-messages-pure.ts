@@ -559,12 +559,15 @@ export function firstSentence(text: string): string {
 /** The dialog's prefill: the goal from the summary's first sentence, the
  *  project defaulting to the analysis's own (else the first mapped one),
  *  and the content = the source message reference (id + bounded quote)
- *  followed by the summary. Every field stays editable. */
+ *  followed by the summary. Every field stays editable. Without a source
+ *  message (the onboarding wizard's first-ticket step, polyforge#167 Q5)
+ *  the fields start blank with the first mapped project. */
 export function fileTicketDialogDefaults(
-  analysis: Pick<PolyforgeAnalysis, "summary" | "project">,
-  message: Pick<PolyforgeMessage, "id" | "text">,
+  analysis: Pick<PolyforgeAnalysis, "summary" | "project"> | null | undefined,
+  message: Pick<PolyforgeMessage, "id" | "text"> | null | undefined,
   mappedProjects: string[],
 ): { goal: string; project: string; content: string } {
+  if (!analysis || !message) return { goal: "", project: mappedProjects[0] ?? "", content: "" };
   const quotePoints = Array.from(message.text.replace(/\s+/g, " ").trim());
   const quote = quotePoints.length > TICKET_QUOTE_MAX_CODE_POINTS
     ? `${quotePoints.slice(0, TICKET_QUOTE_MAX_CODE_POINTS - 1).join("")}…`
@@ -574,4 +577,16 @@ export function fileTicketDialogDefaults(
     project: mappedProjects.includes(analysis.project) ? analysis.project : (mappedProjects[0] ?? ""),
     content: `消息 ${message.id}: "${quote}"\n\n${analysis.summary}`,
   };
+}
+
+/** A ticket's lane (bundle name) in a request: a plain token, never an
+ *  option-looking or blank value (polyforge#167 Q5 — the wizard's first
+ *  ticket defaults to `develop`; the Messages path carries none). */
+const LANE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
+export function validatePolyforgeLane(value: unknown): { ok: true; lane: string } | { ok: false; error: string } {
+  const lane = typeof value === "string" ? value.trim() : "";
+  if (lane === "") return { ok: false, error: "lane must be a non-empty lane name" };
+  if (!LANE_PATTERN.test(lane)) return { ok: false, error: "lane must match [A-Za-z0-9][A-Za-z0-9_.-]{0,127}" };
+  return { ok: true, lane };
 }

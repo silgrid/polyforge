@@ -1,4 +1,9 @@
-// carries: components/PiSubagentPanel*, components/SubagentPanelFrame*, components/PiRunningList*, components/AppShell*, components/AgentSessionPanel*, components/AppShell.split-pane-subagent.test.mjs, hooks/usePiSubagentPanel*, lib/pi-subagent-panel.ts
+// carries: components/PiSubagentPanel*, components/SubagentPanelFrame*, components/PiRunningList*, components/AgentSessionPanel*, components/AppShell.split-pane-subagent.test.mjs, hooks/usePiSubagentPanel*, lib/pi-subagent-panel.ts
+// The shell itself is not declared here (polyforge#91 fix build, review r1#B1):
+// this suite's pane assertions read SplitPaneLayout, and main's three suites
+// already declare components/AppShell.tsx — the fourth declaration put the
+// shell over the cap. AppShell changes still select this suite through its own
+// split-pane test file above.
 // polyforge#255 round 2 (review #1/#2): a pi subagent's in-chat progress
 // panel in a real browser. A local OpenAI-compatible fake model answers the
 // session's first request with an `Agent` tool call, so the built-in runtime
@@ -38,9 +43,19 @@ writeFileSync(join(agentDir, "agents/settings.json"), JSON.stringify({ builtInEn
 
 // ---- fake model ------------------------------------------------------------
 let scripted = [];
-// P1P2 holds the child's answer until the test has steered the running run.
-let releaseChild = null;
-const childGate = new Promise((resolve) => { releaseChild = resolve; });
+// The parent's running list holds only running and queued runs (polyforge#173),
+// so a scenario can read its child there only while the child still runs: every
+// child answer is held until the scenario releases it. `childReleased` keeps a
+// release made before the child's request reached this server effective, and
+// `pendingRelease` wakes the requests that are already waiting.
+let childReleased = false;
+let pendingRelease = [];
+const releaseChild = () => {
+  childReleased = true;
+  const waiting = pendingRelease;
+  pendingRelease = [];
+  for (const resolve of waiting) resolve();
+};
 const OK = { kind: "text", text: "OK-ANSWER" };
 const model = createHttpServer(async (request, response) => {
   await new Promise((resolve) => {
@@ -50,7 +65,7 @@ const model = createHttpServer(async (request, response) => {
   });
   const reply = scripted.length > 0 ? scripted.shift() : OK;
   if (reply.delay) await new Promise((resolve) => setTimeout(resolve, reply.delay));
-  if (reply.gate) await childGate;
+  if (reply.gate && !childReleased) await new Promise((resolve) => pendingRelease.push(resolve));
   response.writeHead(200, { "Content-Type": "text/event-stream" });
   const chunk = (delta, finish = null, extra = {}) => `data: ${JSON.stringify({
     id: "fake", object: "chat.completion.chunk", created: 0, model: "fake-model",
@@ -120,11 +135,20 @@ async function postJson(pathname, body) {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
-/** Starts one session whose first turn dispatches a subagent; returns its id and the child's. */
-async function newSessionWithSubagent(delayMs) {
+/**
+ * Starts one session whose first turn dispatches a subagent; returns its id
+ * and the child's. The child's answer is held until released: the running
+ * list holds only running and queued runs (#173), so its row exists only while
+ * the child runs and is the only place the child id is readable before the run
+ * settles. A scenario that needs the child running afterwards (P1P2 steers it
+ * first) passes holdChild; every other one releases it on return.
+ */
+async function newSessionWithSubagent({ holdChild = false } = {}) {
+  childReleased = false;
+  pendingRelease = [];
   scripted = [
     { kind: "agent" },
-    { kind: "text", text: "CHILD-ANSWER", ...(delayMs > 1000 ? { gate: true } : { delay: delayMs }) },
+    { kind: "text", text: "CHILD-ANSWER", gate: true },
     { kind: "text", text: "PARENT-DONE" },
   ];
   const created = await postJson("/api/agent/new", { cwd: project, type: "prompt", message: "delegate to a subagent", provider: "fake", modelId: "fake-model" });
@@ -135,6 +159,7 @@ async function newSessionWithSubagent(delayMs) {
     const body = await getJson(`/api/agent/${encodeURIComponent(sessionId)}/subagent-runs`);
     return (body.runs ?? [])[0] ?? null;
   }, 45_000, "the subagent run never appeared in the parent's list");
+  if (!holdChild) releaseChild();
   return { sessionId, childId: run.sessionId };
 }
 
@@ -178,7 +203,7 @@ try {
 
   // P1 + P2 — the three entries, the live transcript and a real steer.
   await scenario("P1P2", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(20_000);
+    const { sessionId, childId } = await newSessionWithSubagent({ holdChild: true });
     const page = await openSession(sessionId);
     // The running list's row appears while the child runs.
     await waitFor(async () => (await runningItem(page, childId).count()) === 1, 30_000, "the running subagent never appeared in the list");
@@ -214,7 +239,7 @@ try {
 
   // P3 — the Agent card opens it; Jump closes it and keeps the launch card.
   await scenario("P3", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const { sessionId, childId } = await newSessionWithSubagent();
     const page = await openSession(sessionId);
     await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
     await waitFor(async () => (await page.locator(`[data-pi-subagent-panel="${childId}"]`).count()) === 0, 5_000, "the panel opened by itself");
@@ -233,9 +258,9 @@ try {
 
   // P1 split — two panes, each card opens its own pane's panel.
   await scenario("P1-split", async () => {
-    const a = await newSessionWithSubagent(50);
+    const a = await newSessionWithSubagent();
     await waitFor(async () => (await pageText(a.sessionId)).includes("PARENT-DONE"), 45_000, "the first split session never settled");
-    const b = await newSessionWithSubagent(50);
+    const b = await newSessionWithSubagent();
     await waitFor(async () => (await pageText(b.sessionId)).includes("PARENT-DONE"), 45_000, "the second split session never settled");
     const page = await openSession(a.sessionId, {
       storage: {
@@ -272,7 +297,7 @@ try {
 
   // P1 mobile — the panel stays inside a 375px viewport, its close button on screen.
   await scenario("P1-mobile", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const { sessionId, childId } = await newSessionWithSubagent();
     const page = await openSession(sessionId, { viewport: { width: 375, height: 667 } });
     await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
     await revealToolCards(page);
@@ -289,7 +314,7 @@ try {
 
   // P3 drag — the top edge clamps to [160, bounds-14] and double-click resets.
   await scenario("P3-drag", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const { sessionId, childId } = await newSessionWithSubagent();
     const page = await openSession(sessionId);
     await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
     await revealToolCards(page);
@@ -297,9 +322,18 @@ try {
     const p = page.locator(`[data-pi-subagent-panel="${childId}"]`);
     const handle = p.locator("[data-claude-subagent-panel-resize]");
     await handle.waitFor({ state: "visible", timeout: 20_000 });
+    // The panel's box takes its height from its content (SubagentPanelFrame
+    // caps it: no fixed height until the user drags), and the transcript, the
+    // run's result and the settled footer arrive after the first paint. Read
+    // the default layout only once that content is final: the child's answer,
+    // the completed status, the settled reason and no loading placeholder.
+    await waitFor(async () => (await panelText(page)).includes("CHILD-ANSWER"), 45_000, "the child transcript never reached the panel");
+    await waitFor(async () => /Completed/.test(await panelText(page)), 45_000, "the panel never showed the run completed");
+    await waitFor(async () => (await panelText(page)).includes("This run has ended"), 20_000, "the settled reason is not shown");
+    await waitFor(async () => (await p.locator("[data-pi-subagent-empty]").count()) === 0, 20_000, "the panel never finished loading its entries");
     const boundsHeight = await page.locator("[data-claude-subagent-panel-bounds]").evaluate((el) => el.clientHeight);
-    // The transcript lands after the first paint: settle the default height
-    // (two consecutive equal reads) before measuring it.
+    // Content is final; still settle the rendered height (a ResizeObserver and
+    // the last layout pass can move it once) before measuring the default.
     let previousHeight = null;
     const defaultHeight = await waitFor(async () => {
       const box = await p.boundingBox();
@@ -339,7 +373,7 @@ try {
   // P3 history — a launch card outside the loaded 50-entry window is paged
   // into view, and Jump brings it on screen.
   await scenario("P3-history", async () => {
-    const { sessionId } = await newSessionWithSubagent(50);
+    const { sessionId } = await newSessionWithSubagent();
     scripted.push(...Array.from({ length: 50 }, (_, i) => ({ kind: "text", text: `FILL-${i}` })));
     await waitFor(async () => (await pageText(sessionId)).includes("PARENT-DONE"), 45_000, "the first parent turn never finished");
     for (let i = 0; i < 50; i += 1) {
@@ -369,7 +403,7 @@ try {
 
   // P1 top bar — the subagent row opens the panel; no right-panel agent tab.
   await scenario("P1-topbar", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const { sessionId, childId } = await newSessionWithSubagent();
     const page = await openSession(sessionId);
     await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
     await page.getByRole("button", { name: /^Agents/ }).click();
@@ -386,9 +420,8 @@ try {
   await h.close().catch(() => {});
   model.close();
   rmSync(scratch, { recursive: true, force: true });
-  for (const [title, list] of failures) {
-    console.log(list.length ? `FAIL ${title}: ${list[0]}` : `PASS ${title}`);
-    if (list.length) process.exitCode = 1;
-  }
+  // Each scenario already printed its own PASS/FAIL line; this only sets the
+  // run's exit code (and the suite's own PASS line when nothing failed).
+  if (failures.length) process.exitCode = 1;
   if (!process.exitCode) console.log(`PASS ${SUITE}`);
 }

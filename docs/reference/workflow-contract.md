@@ -279,7 +279,9 @@ granted.
 Every placeholder is checked at load: one no var, no param and no fragment
 resolves, a var no placeholder uses, a name both a var and a param hold
 and a var or param that shadows a fragment are `WFC-195` (a param no
-placeholder uses is allowed). Vars and fragments are fixed text of the
+placeholder uses is allowed). A fragment may carry advisory text that a step
+applies in its own judgment: develop's build renders `readability_checklist.md`,
+and no gate, status or result reads it. Vars and fragments are fixed text of the
 lane; a param is the one placeholder whose value is taken at dispatch
 time — the load renders it with its lane default, each dispatch with its
 final value (lane default < project < work item, [Step keys](#step-keys)).
@@ -594,10 +596,12 @@ Every dispatch's prompt is six parts, in this order, and nothing else:
    handoff` and when to use each status; where the claim's recalled
    memories are (`recalled-memories.json`) and the memory policy to write
    by (`runtime-state/memory-policy.json`); take values for scripts from
-   result files; never read `runtime-state/execution.json`; the tool-name
+   result files; leave `runtime-state/execution.json` to the daemon; batch
+   independent reads and searches in one reply; the tool-name
    rule — no MCP server exists, the available tools are the built-in list
    (named per harness), and a `Tool … not found` reply means a wrong name
-   to retry with the exact one, not an environment fault.
+   to retry with the exact one and keep working until the hand-off, not
+   an environment fault.
 4. **The step definition** (vars and fragments rendered at load, params at the dispatch's final values).
 5. **The skill**.
 6. **On a resumed dispatch only**: the owner's undelivered messages, or

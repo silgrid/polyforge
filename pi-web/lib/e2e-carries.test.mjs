@@ -219,6 +219,23 @@ test("the locale tables are declared by one or two suites and the shell componen
   assert.deepEqual(bad, [], `declaring-suite counts out of range:\n${bad.join("\n")}`);
 });
 
+// polyforge#91 fix build (review r1#B1): the shell stays within the cap after
+// the onboarding suite joins the three suites main already had on it, and the
+// onboarding suite stays one of the suites an AppShell change selects — its
+// assertions read AppShell's own `data-onboarding-read`. A narrowing that drops
+// the onboarding suite from the shell's cover trades one red for another.
+test("an AppShell change selects at most three browser suites, the onboarding suite among them", () => {
+  const selected = lightSelection(suiteDeclarations(), ["components/AppShell.tsx"]);
+  assert.ok(
+    selected.includes("e2e/onboarding-91.mjs"),
+    `components/AppShell.tsx's change selects the suite that asserts its data-onboarding-read: ${selected.join(", ")}`,
+  );
+  assert.ok(
+    selected.length <= 3,
+    `components/AppShell.tsx's change selects at most three browser suites (${selected.length}): ${selected.join(", ")}`,
+  );
+});
+
 test("the light tier selects at most 8 browser suites for the #484, #485 and locale-only changes", () => {
   const decls = suiteDeclarations();
   const tracked = new Set(trackedPaths());

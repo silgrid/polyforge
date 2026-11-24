@@ -20,6 +20,15 @@ repair brief of its own, change nothing, commit nothing and hand off
 2. An earlier `repair` section of `artifacts/handoff.md` and the
    review's latest findings when the lane came back to you.
 
+## 完成判据 — done criteria
+
+`done` only when every item below holds on its own branch; the full gate's green is never this step's to declare — only its re-run says so.
+
+1. **Every unit of an accepted brief** — each `units[]` entry of `artifacts/integrate/repair.json` — has one unit in `artifacts/integrate/repair-plan.json`, whose `brief_round` equals the brief's `round`.
+2. **Every unit's rerun** either exited 0 on the host with its log path in the plan, or the host could not run it and the plan records why — the gate's re-run judges it.
+3. **Every blocking finding of the latest review** has its numbered answer in 回应上一轮 — the commit that fixed it, or why it stands.
+4. **A round with no brief of its own, a brief the owner refused or ruled reverted, or a hand-back** changes nothing, leaves no plan file, and says so in the body — that is `done` for that round.
+
 ## 交接要写什么 — what your hand-off carries
 
 Your skill's own list: the status, each blocking finding answered, the

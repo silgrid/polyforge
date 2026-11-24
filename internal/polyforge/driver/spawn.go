@@ -871,8 +871,8 @@ const toolNameCorrection = "This environment runs no MCP server: no `mcp__…`-s
 	"on a pi dispatch `bash`, `read`, `edit`, `write` (plus `subagent`, when the daemon-owned " +
 	"worker extension is installed); on a claude dispatch `Bash`, `Read`, `Edit`, `Write`, `Glob`, " +
 	"`Grep`, `TodoWrite`, `Agent`. A `Tool … not found` reply means you wrote a wrong name: retry with " +
-	"the exact name from that list. It is not an environment fault, and never a reason to stop working " +
-	"or to end your turn without `pf step handoff`."
+	"the exact name from that list and keep working until `pf step handoff`. It is not an " +
+	"environment fault."
 
 // ewrResumeReminder is the whole instruction of the first retry after a
 // turn that ended without `pf step handoff`, when it resumes the same

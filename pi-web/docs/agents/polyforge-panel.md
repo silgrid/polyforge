@@ -1378,6 +1378,12 @@ helpers, `directRows`, the flat direct area's row sequence,
   blank or multi-line goal or one over 500 characters (pf's goal bound), a
   project that is not exactly one mapped name, a blank content or one over
   64 KiB, a content pf would read as a file or stdin (`@path`, `-`) are 400.
+  The body carries no lane: a request with a `lane` field or an
+  `x-polyforge-lane` header (the onboarding wizard's first ticket,
+  polyforge#167) has the lane validated (a plain token; a blank,
+  option-shaped or oversized value is 400 before any spawn) and creates
+  through `pf --json file create --stdin`, one JSON body with
+  `bundle_name` — the Messages path keeps the flag create below.
   Then exactly one `pf --json file create --project <p> --goal <g> --content <c>`
   — never `--bundle`, so the result is a **registration ticket**: not
   claimable, no lane chosen, the filing discipline untouched. Success is
@@ -1523,7 +1529,12 @@ card unchanged. Confirm makes exactly one `POST /api/polyforge/messages/file-tic
 (one bundle-free `pf file create`: a registration ticket); on success the
 dialog closes and the card names the created slug (已建票 `<slug>`); on a
 refusal the dialog stays open with pf's text, nothing is created and nothing
-is retried. 【回复】 sets that message as the composer's reply target and,
+is retried. The same dialog carries the first-open onboarding's first-ticket
+step without a source message (polyforge#167 Q5): the goal and content start
+blank, the project select defaults to the first mapped project, and
+`lane="develop"` rides the request's `x-polyforge-lane` header, so the
+Messages path's `{goal, project, content}` body and its bundle-free flag
+create are unchanged. 【回复】 sets that message as the composer's reply target and,
 when the analysis carries `reply_draft`, fills the composer with it (still
 editable); without a draft the composer keeps its text. It never sends and the
 card stays. The composer's fields are named by their own labels (`htmlFor`),
