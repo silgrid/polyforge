@@ -1314,6 +1314,17 @@ try {
     await page.route("**/api/claude-models-migration", (route) => route.fulfill({ json: { status: "none" } }));
     await page.route("**/api/provider-usage/query", (route) => route.fulfill({ json: { providers: [] } }));
 
+    // One dialog listener with an answer queue: a `once` listener left over
+    // from a switch that turned out clean would otherwise answer a later
+    // dialog too (the "already handled" race this suite hit).
+    let dismissed = 0;
+    const dialogAnswers = [];
+    page.on("dialog", (dialog) => {
+      const answer = dialogAnswers.shift() ?? "accept";
+      if (answer === "dismiss") { dismissed += 1; void dialog.dismiss(); }
+      else void dialog.accept();
+    });
+    const answerNextDialog = (answer) => { dialogAnswers.push(answer); };
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const host = sectionHost(page, "models");
@@ -1323,7 +1334,7 @@ try {
     await defaultSelect.selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
     assert.equal(defaultPuts.length, 0, "a default model change writes nothing before Save");
 
-    page.once("dialog", (dialog) => dialog.accept());
+    answerNextDialog("accept");
     await openModelSubpage(page, "list");
     const reasoning = host.getByLabel("Reasoning / thinking — gateway/m1", { exact: true });
     await reasoning.waitFor({ state: "visible", timeout: ACTION_MS });
@@ -1337,7 +1348,7 @@ try {
     const save = host.locator("[data-model-save]");
     await save.click({ timeout: ACTION_MS });
     await waitFor(() => defaultPuts.length === 1, ACTION_MS, "the default write never started");
-    await waitFor(async () => (await reasoning.isDisabled()) && (await defaultSelect.isDisabled()),
+    await waitFor(async () => (await reasoning.isDisabled()) && (await save.isDisabled()),
       ACTION_MS, "the draft controls stayed editable while the save was in flight");
     holdDefault = null;
     release();
@@ -1345,19 +1356,27 @@ try {
     assert.deepEqual(defaultPuts[0], { provider: "gateway", modelId: "m2" });
     assert.deepEqual(effortPuts[0], { modelThinkingLevel: { key: "gateway/m1", level: "low" } });
     await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the save action never cleared its draft");
-    assert.equal(await defaultSelect.inputValue(), JSON.stringify({ harness: "pi", provider: "gateway", id: "m2" }), "the saved default shows");
+    await openModelSubpage(page, "default");
+    assert.equal(await host.locator(".settings-model-default-select").inputValue(),
+      JSON.stringify({ harness: "pi", provider: "gateway", id: "m2" }), "the saved default shows");
 
     // #3: two writes, the second fails — the landed default shows its saved
     // value, the failed reasoning stays in the draft and retries.
     failEffort = true;
-    await defaultSelect.selectOption({ label: "pi · gateway/m1" }, { timeout: ACTION_MS });
+    await host.locator(".settings-model-default-select").selectOption({ label: "pi · gateway/m1" }, { timeout: ACTION_MS });
+    answerNextDialog("accept");
+    await openModelSubpage(page, "list");
     await reasoning.selectOption("high", { timeout: ACTION_MS });
     await save.click({ timeout: ACTION_MS });
     await waitFor(() => defaultPuts.length === 2 && effortPuts.length === 2, ACTION_MS, "the partial save never reached both writers");
     await host.getByText("fixture effort save failed", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     assert.equal((await save.innerText()).trim(), "Save (1)", "only the failed reasoning stays in the draft");
-    assert.equal(await defaultSelect.inputValue(), JSON.stringify({ harness: "pi", provider: "gateway", id: "m1" }),
-      "the landed default shows the saved value");
+    answerNextDialog("accept");
+    await openModelSubpage(page, "default");
+    assert.equal(await host.locator(".settings-model-default-select").inputValue(),
+      JSON.stringify({ harness: "pi", provider: "gateway", id: "m1" }), "the landed default shows the saved value");
+    answerNextDialog("accept");
+    await openModelSubpage(page, "list");
     assert.equal(await reasoning.inputValue(), "high", "the failed reasoning keeps its draft");
     failEffort = false;
     await save.click({ timeout: ACTION_MS });
@@ -1365,13 +1384,13 @@ try {
     assert.equal(efforts["gateway/m1"], "high");
 
     // the unsaved draft guards a tab switch: cancel stays, accept leaves
-    await defaultSelect.selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
-    let cancelled = 0;
-    page.once("dialog", (dialog) => { cancelled += 1; dialog.dismiss(); });
+    await openModelSubpage(page, "default");
+    await host.locator(".settings-model-default-select").selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
+    answerNextDialog("dismiss");
     await tab(page, /^General$/).click({ timeout: ACTION_MS });
-    await waitFor(() => cancelled === 1, ACTION_MS, "leaving the model page with a draft asked nothing");
+    await waitFor(() => dismissed === 1, ACTION_MS, "leaving the model page with a draft asked nothing");
     assert.ok(await host.isVisible(), "a cancelled leave keeps the model page");
-    page.once("dialog", (dialog) => dialog.accept());
+    answerNextDialog("accept");
     await tab(page, /^General$/).click({ timeout: ACTION_MS });
     await waitFor(async () => !(await host.isVisible()), ACTION_MS, "an accepted leave never switched the section");
     await page.context().close();
@@ -1383,7 +1402,8 @@ try {
   await part("S36", "drawer CAS conflict and retry", async () => {
     await startTierServer();
     const page = await newPage();
-    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["claude:opus"] });
+    // One tier per harness: the round has no multi-tier confirmation to answer.
+    seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
@@ -1401,6 +1421,7 @@ try {
     await drawer.locator("[data-step-tier-select]").selectOption("fast-chat", { timeout: ACTION_MS });
     refuseNextTierWrite();
     await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(() => tierWrites().length > before, ACTION_MS, "the refused write never reached pf");
     await waitFor(async () => (await drawer.innerText()).includes("Not attempted"),
       ACTION_MS, "the harness after the refused one was never marked not attempted");
     assert.equal(tierWrites().length, before + 1, "a refused first harness attempted the next one");
