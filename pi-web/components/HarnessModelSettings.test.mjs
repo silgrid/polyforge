@@ -33,7 +33,7 @@ test("the Provider subpage is flat: no second split view, only its own form foot
   assert.match(page, /data-model-page-pane="providers"/);
   assert.match(page, /data-provider-page="flat"/);
   assert.equal((page.match(/config-split-view/g) ?? []).length, 1, "the Provider editor renders no nested split view");
-  assert.equal((page.match(/config-footer/g) ?? []).length, 1, "the Provider subpage has one form footer, not a nested one");
+  assert.equal((page.match(/class="config-footer"/g) ?? []).length, 1, "the Provider subpage has one form footer, not a nested one");
   assert.match(page, /data-provider-footer=""/);
 });
 
