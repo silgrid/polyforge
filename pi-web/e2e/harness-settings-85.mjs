@@ -25,7 +25,7 @@
 // `PASS harness-settings-85` only when every scenario passed. Every wait
 // polls its condition to a bounded deadline; no fixed sleep.
 import assert from "node:assert/strict";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { chromium } from "playwright";
@@ -42,13 +42,18 @@ mkdirSync(agentDir, { recursive: true });
 // prints its ready line and waits — a real claude prints the authorization
 // URL and waits for the pasted code. Anything else delegates to the
 // recorded unit stub (the initialize probe). Only S85-12's terminal runs
-// it; every other claude face is mocked at the browser.
+// it; every other claude face is mocked at the browser. After its one
+// print it appends the epoch ms to s12StubStamps (polyforge#272 U7a): when
+// it printed, and how many times it ran — read only by S12's failure
+// diagnostics, the output itself still printed once.
 const stubBin = join(work, "stub-bin");
 mkdirSync(stubBin, { recursive: true });
 const stubClaude = join(stubBin, "claude");
+const s12StubStamps = join(work, "s12-stub-stamps");
 writeFileSync(stubClaude, `#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
   printf '%s\r\n' "85 STUB LOGIN READY - open the URL and paste the code"
+  date +%s%3N >> '${s12StubStamps}'
   sleep 60
   exit 0
 fi
@@ -301,6 +306,132 @@ async function part(id, label, fn) {
     failures.get(title).push(`${label}: ${String(error?.message ?? error).split("\n")[0]}`);
     console.log(`FAIL ${id} ${label}: ${error?.message ?? error}`);
   }
+}
+
+// ---- polyforge#272 U7a: S12's failure timeline (diagnostics only) ----
+// S12 records, from just before its click (t0), the /api/terminal requests
+// the page makes and the terminal EventSource's life in the page; only
+// when its output poll fails does s12Diagnose collect the terminal DOM,
+// that record, the stub's print stamps, the server's own backlog and the
+// server log tails, and answer them as lines each opening "  s12-diag ",
+// appended under the original failure line — no assertion, timeout or
+// stub output changes, and a passing run prints none of it.
+const S12_DIAG_CUT = 400;
+const s12Cut = (value, n = S12_DIAG_CUT) => JSON.stringify(String(value ?? "").slice(0, n));
+const s12Bounded = (promise, ms = 2_000) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms))]);
+
+/** Starts S12's request timeline and wraps the page's terminal EventSource; call before the click. */
+async function s12Watch(page) {
+  const watch = { t0: 0, net: [], id: null };
+  const isTerminal = (url) => new URL(url).pathname.startsWith("/api/terminal");
+  const note = (ev, request, extra = {}) => {
+    const url = new URL(request.url());
+    watch.net.push({ at: Date.now(), ev, method: request.method(), path: url.pathname, ...extra });
+  };
+  page.on("request", (request) => {
+    if (!isTerminal(request.url())) return;
+    note("request", request);
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/terminal") {
+      try { watch.id = JSON.parse(request.postData() ?? "{}").id ?? watch.id; } catch { /* the response names it too */ }
+    }
+  });
+  page.on("response", (response) => {
+    const request = response.request();
+    if (!isTerminal(request.url())) return;
+    note("response", request, { status: response.status() });
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/terminal") {
+      response.json().then((body) => { if (body?.id) watch.id = body.id; note("response-body", request, { id: body?.id ?? null, error: body?.error ?? null }); }).catch(() => {});
+    }
+  });
+  page.on("requestfailed", (request) => {
+    if (isTerminal(request.url())) note("requestfailed", request, { failure: request.failure()?.errorText ?? null });
+  });
+  await page.evaluate(() => {
+    const record = { sources: [] };
+    window.__s12 = record;
+    const Original = window.EventSource;
+    window.EventSource = class extends Original {
+      constructor(url, init) {
+        super(url, init);
+        if (!String(url).includes("/api/terminal/")) return;
+        const source = { url: String(url), createdAt: Date.now(), openAt: null, errorAt: [], firstMessageAt: null, readyAt: null, resets: 0, types: [] };
+        record.sources.push(source);
+        this.addEventListener("open", () => { source.openAt ??= Date.now(); });
+        this.addEventListener("error", () => { if (source.errorAt.length < 20) source.errorAt.push(Date.now()); });
+        this.addEventListener("message", (message) => {
+          source.firstMessageAt ??= Date.now();
+          let event = null;
+          try { event = JSON.parse(message.data); } catch { /* not JSON */ }
+          if (source.types.length < 20) source.types.push(event?.type ?? "?");
+          if (event?.reset) source.resets += 1;
+          if (source.readyAt === null && typeof event?.data === "string" && event.data.includes("85 STUB LOGIN READY")) source.readyAt = Date.now();
+        });
+      }
+    };
+  });
+  return watch;
+}
+
+/** S12's failure diagnostics: one "  s12-diag " line per fact, every time relative to t0 (ms). */
+async function s12Diagnose(page, terminal, watch) {
+  const lines = [];
+  const rel = (at) => (typeof at === "number" ? at - watch.t0 : at);
+  const fact = async (name, collect) => {
+    try { lines.push(`${name}: ${await s12Bounded(collect())}`); } catch (error) { lines.push(`${name}: (unavailable: ${String(error?.message ?? error).split("\n")[0]})`); }
+  };
+  await fact("terminal innerText", async () => s12Cut(await terminal.innerText({ timeout: 1_500 })));
+  await fact("xterm-rows textContent", async () => s12Cut(await terminal.locator(".xterm-rows").first().textContent({ timeout: 1_500 })));
+  await fact("xterm-accessibility textContent", async () => s12Cut(await terminal.locator(".xterm-accessibility").first().textContent({ timeout: 1_500 })));
+  await fact("status dot", async () => s12Cut(await terminal.locator(".terminal-status-dot").first().getAttribute("class", { timeout: 1_500 })));
+  await fact("panel error", async () => (await terminal.locator(".terminal-panel-error").count() ? s12Cut(await terminal.locator(".terminal-panel-error").first().innerText({ timeout: 1_500 })) : "(none)"));
+  await fact("panel exit", async () => (await terminal.locator(".terminal-panel-exit").count() ? s12Cut(await terminal.locator(".terminal-panel-exit").first().innerText({ timeout: 1_500 })) : "(none)"));
+  lines.push(`terminal id: ${JSON.stringify(watch.id)}`);
+  for (const n of watch.net.slice(0, 40)) lines.push(`net +${rel(n.at)}ms ${n.ev} ${n.method} ${n.path}${n.status !== undefined ? ` status=${n.status}` : ""}${n.id !== undefined ? ` id=${JSON.stringify(n.id)}` : ""}${n.error ? ` error=${s12Cut(n.error, 200)}` : ""}${n.failure ? ` failure=${s12Cut(n.failure, 200)}` : ""}`);
+  if (!watch.net.length) lines.push("net: (no /api/terminal request seen after t0)");
+  await fact("page EventSource", async () => {
+    const record = await page.evaluate(() => window.__s12 ?? null);
+    if (!record) return "(no record)";
+    if (!record.sources.length) return "(no terminal EventSource constructed)";
+    return record.sources.map((s) => JSON.stringify({ url: s.url, created: rel(s.createdAt), open: rel(s.openAt), errors: s.errorAt.map(rel), firstMessage: rel(s.firstMessageAt), ready: rel(s.readyAt), resets: s.resets, types: s.types })).join(" | ");
+  });
+  await fact("stub stamps", async () => {
+    if (!existsSync(s12StubStamps)) return "(no stamp file: the stub never printed)";
+    const stamps = readFileSync(s12StubStamps, "utf8").split("\n").filter(Boolean).map(Number);
+    return `${stamps.length} print(s) at ${JSON.stringify(stamps.map(rel))}`;
+  });
+  if (watch.id) {
+    await fact("server backlog", async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1_800);
+      let text = "";
+      let status = null;
+      try {
+        const response = await fetch(`${h.base}/api/terminal/${encodeURIComponent(watch.id)}/events?after=0`, { signal: controller.signal });
+        status = response.status;
+        const reader = response.body?.getReader();
+        while (reader && !text.includes("85 STUB LOGIN READY")) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          text += new TextDecoder().decode(value);
+        }
+        await reader?.cancel().catch(() => {});
+      } catch { /* the read is bounded by its abort */ } finally {
+        clearTimeout(timer);
+      }
+      return `status=${status} ready=${text.includes("85 STUB LOGIN READY")} bytes=${text.length} head=${s12Cut(text, 300)}`;
+    });
+  } else {
+    lines.push("server backlog: (no terminal id to read)");
+  }
+  try {
+    for (const name of readdirSync(work).filter((f) => /^server-.*\.log$/.test(f)).sort()) {
+      const tail = readFileSync(join(work, name), "utf8").split("\n").filter(Boolean).slice(-20);
+      for (const line of tail) lines.push(`${name}: ${s12Cut(line, 300)}`);
+    }
+  } catch (error) {
+    lines.push(`server logs: (unavailable: ${String(error?.message ?? error).split("\n")[0]})`);
+  }
+  return lines.map((line) => `  s12-diag ${line}`).join("\n");
 }
 
 /** The tier scenarios' own server, started once: the real config routes
@@ -642,15 +773,23 @@ try {
     await account.locator(".config-sidebar-item").filter({ hasText: "Claude" }).click({ timeout: ACTION_MS });
     const loginButton = account.locator('[data-login-command="auth-login"]');
     await loginButton.waitFor({ state: "visible", timeout: ACTION_MS });
+    const watch = await s12Watch(page);
+    watch.t0 = Date.now();
     await loginButton.click({ timeout: ACTION_MS });
     // the panel attaches and the command's output streams: poll the
     // terminal's own text, not a static heading
     const terminal = account.locator("[data-account-login-terminal]");
     await terminal.waitFor({ state: "visible", timeout: ACTION_MS });
-    const termText = await waitFor(async () => {
-      const text = await terminal.innerText();
-      return text.includes("85 STUB LOGIN READY") ? text : false;
-    }, ACTION_MS, "the login terminal never showed the command's output");
+    let termText;
+    try {
+      termText = await waitFor(async () => {
+        const text = await terminal.innerText();
+        return text.includes("85 STUB LOGIN READY") ? text : false;
+      }, ACTION_MS, "the login terminal never showed the command's output");
+    } catch (error) {
+      // the original failure line first, unchanged; the timeline under it
+      throw new Error(`${error?.message ?? error}\n${await s12Diagnose(page, terminal, watch)}`);
+    }
     assert.ok(!termText.includes("SENTINEL"), "a value leaked into the terminal");
     // closing tears it down: the panel goes and the terminal with it
     await account.getByRole("button", { name: "Close terminal" }).click({ timeout: ACTION_MS });
