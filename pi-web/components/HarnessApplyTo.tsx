@@ -69,13 +69,15 @@ export function applyToCanSubmit(value: HarnessApplyToSelection, targets: readon
 
 /**
  * The 「应用到」 chip. The summary reads the current target (「应用到：全部」);
- * the menu holds the all/specific radios, the harness checkboxes and the last
- * round's per-target results. It renders no button: the page's own save model
+ * the menu holds the all/specific radios and the harness checkboxes; the last
+ * round's per-target results sit under the chip, visible while it is closed. It
+ * renders no button: the page's own save model
  * submits, and only on the user's click there.
  */
 export function HarnessApplyTo({ texts, targets, value, onChange, open = false, results = null }: HarnessApplyToProps) {
   const name = `harness-apply-to-${texts.title.replace(/\W+/g, "-")}`;
   return (
+    <>
     <details className="harness-apply-to" data-mode={value.mode} open={open}>
       <summary className="harness-apply-to-chip">
         <span className="harness-apply-to-chip-label">{texts.title}</span>
@@ -130,22 +132,25 @@ export function HarnessApplyTo({ texts, targets, value, onChange, open = false, 
             ))}
           </ul>
         )}
-        {results !== null && results.length > 0 && (
-          <ul className="harness-apply-to-results">
-            {results.map((result) => (
-              <li key={result.harness} data-harness={result.harness} data-ok={result.ok}>
-                {result.text}
-                {result.details ? (
-                  <details className="harness-apply-to-result-details">
-                    <summary>{texts.detailsLabel}</summary>
-                    <span className="harness-apply-to-result-original">{result.details}</span>
-                  </details>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
     </details>
+    {results !== null && results.length > 0 && (
+        // Outside the <details> itself: a refusal must be readable without
+        // opening the chip (polyforge#259 T4, review #6).
+        <ul className="harness-apply-to-results">
+          {results.map((result) => (
+            <li key={result.harness} data-harness={result.harness} data-ok={result.ok}>
+              {result.text}
+              {result.details ? (
+                <details className="harness-apply-to-result-details">
+                  <summary>{texts.detailsLabel}</summary>
+                  <span className="harness-apply-to-result-original">{result.details}</span>
+                </details>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }

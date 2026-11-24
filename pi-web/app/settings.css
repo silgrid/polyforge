@@ -3688,7 +3688,7 @@ select.mcp-add-input {
 .harness-apply-to-target input,
 .harness-apply-to-mode input { margin: 0; accent-color: var(--accent); }
 .harness-apply-to-target-reason { color: var(--text-dim); font-size: 11px; }
-.harness-apply-to-results { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: 11px; }
+.harness-apply-to-results { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 0; padding: 0; list-style: none; font-size: 11px; }
 .harness-apply-to-results li[data-ok="true"] { color: #16a34a; }
 .harness-apply-to-results li[data-ok="false"] { color: #ef4444; }
 
