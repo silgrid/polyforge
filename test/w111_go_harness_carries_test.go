@@ -445,3 +445,79 @@ func TestW111GoHarnessAskPathsSelectConsumers(t *testing.T) {
 	dropped := w111AskFiles(t, sixC, sixD, "internal/common/capsule/asks")
 	mustNotSelect(w111ChangeOne(t, dropped, "internal/common/capsule/asks.go", true), "light internal/common/capsule/asks.go without 6d's asks declaration", sixD)
 }
+
+// ---------------------------------------------------------------------------
+// polyforge#272 U2: common/capsule's other persisted formats select the
+// harness suites that accept them.
+// ---------------------------------------------------------------------------
+
+// The harness suites whose acceptance reads one of common/capsule's
+// persisted formats (selection-audit.md B, the owner's 3A ruling), spelled
+// repository-relative for the literal-reference rule as above.
+const (
+	w111PF25File   = "test/pf25_step_overrides_test.go"
+	w111V1S27File  = "test/v1_s27_gate_fail_verdict_completed_test.go"
+	w111W159File   = "test/w159_harness_acceptance_test.go"
+	w111CapsuleDir = "internal/common/capsule/"
+)
+
+// TestW111GoHarnessCapsuleFormatsSelectConsumers (polyforge#272 AC1): a
+// change to the step-overrides record, the capsule record or the spawn
+// journal selects, on the light tier, every test of the harness suite that
+// accepts that format (pf25, v1_s27, w159); a new file of the overrides or
+// spawn-journal family does the same; the capsule package's files no
+// harness suite reads (epicchildren, subagents) select none of them. The
+// expected names are parsed from the real suites; their real opening blocks
+// are the declarations under test.
+func TestW111GoHarnessCapsuleFormatsSelectConsumers(t *testing.T) {
+	consumers := map[string][]string{}
+	for _, rel := range []string{w111PF25File, w111V1S27File, w111W159File} {
+		names := w111RealTestNames(t, rel)
+		if len(names) == 0 {
+			t.Fatalf("%s declares no Test function", rel)
+		}
+		consumers[rel] = names
+	}
+	files := map[string]string{
+		"go.mod":     "module fixture.test/w111fmt\n\ngo 1.21\n",
+		w111Harness:  "#!/bin/sh\nexit 0\n",
+		w111ConfFile: w111RealConf(t),
+	}
+	for rel, names := range consumers {
+		files[rel] = w111FixtureSuite(w111RealHead(t, rel), names)
+	}
+	for _, f := range []string{"overrides.go", "capsule.go", "spawnjournal.go", "epicchildren.go", "subagents.go"} {
+		files[w111CapsuleDir+f] = w111Placeholder(w111CapsuleDir + f)
+	}
+
+	for _, c := range []struct{ change, consumer string }{
+		{"overrides.go", w111PF25File},
+		{"capsule.go", w111V1S27File},
+		{"spawnjournal.go", w111W159File},
+		{"overrides_more.go", w111PF25File},
+		{"spawnjournal_more.go", w111W159File},
+	} {
+		rel := w111CapsuleDir + c.change
+		r := w111ChangeOne(t, files, rel, true)
+		if r.Mode != "scoped" {
+			t.Fatalf("light %s: the change must stay scoped, got %q (diagnostics %v)", rel, r.Mode, r.Diagnostics)
+		}
+		sel := w111HarnessSelection(t, r)
+		for _, n := range consumers[c.consumer] {
+			if !sel[n] {
+				t.Fatalf("light %s: the harness selection must select %s (%s accepts that format):\n%v", rel, n, c.consumer, r.phase("scoped"))
+			}
+		}
+	}
+	for _, f := range []string{"epicchildren.go", "subagents.go"} {
+		rel := w111CapsuleDir + f
+		sel := w111HarnessSelection(t, w111ChangeOne(t, files, rel, true))
+		for consumer, names := range consumers {
+			for _, n := range names {
+				if sel[n] {
+					t.Fatalf("light %s: no harness suite reads that file, yet %s (%s) is selected", rel, n, consumer)
+				}
+			}
+		}
+	}
+}
