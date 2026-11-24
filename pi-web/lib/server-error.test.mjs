@@ -58,3 +58,60 @@ test("a server text names its code, and an unknown one names none", async () => 
   const text = serverErrorText({ code: codeFromError("pf: config-cas-409: nope") });
   assert.equal(text.summaryKey, "serverError.conflict");
 });
+
+// polyforge#259 T4 AC2 (owner 2A, review r3#1 / N19): a failed response becomes
+// an error that still carries the route's `code`/`params`, so the Chinese line is
+// chosen by code and the server's words (and a CAS diff) stay for the details fold.
+// Expected keys are the ones owner 2A named (config-cas-409 → the conflict line)
+// and the i18n table's hand-written keys; the statuses are the HTTP ones.
+test("a refusal response keeps its code and words: a CAS refusal reads as the conflict line", async () => {
+  const { responseError, ServerError } = await import("./server-error.ts");
+  const error = responseError(
+    { error: "config changed since it was read", code: "config-cas-409", params: { path: "/root/.polyforge/config.yaml", tries: 2, nested: { no: 1 } } },
+    409,
+  );
+  assert.equal(serverErrorText(error).summaryKey, "serverError.conflict", "a CAS refusal lost its code on the way to the page");
+  assert.ok(error instanceof ServerError && error instanceof Error);
+  assert.equal(error.code, "config-cas-409");
+  assert.deepEqual(error.params, { path: "/root/.polyforge/config.yaml", tries: 2 }, "params keep only strings and numbers");
+  assert.equal(serverErrorText(error).details, "config changed since it was read");
+  assert.deepEqual(serverErrorText(error).summaryParams, { path: "/root/.polyforge/config.yaml", tries: 2 });
+});
+
+test("a refusal response without a code answers its HTTP status, and its diff stays in the words", async () => {
+  const { responseError } = await import("./server-error.ts");
+  const bare = responseError(null, 403);
+  assert.equal(bare.code, "http-403");
+  assert.equal(bare.message, "HTTP 403");
+  assert.equal(serverErrorText(bare).summaryKey, "serverError.forbidden");
+  assert.equal(serverErrorText(bare).details, "HTTP 403");
+  const teapot = responseError({}, 418);
+  assert.equal(teapot.code, null, "a status with no message claims a code");
+  assert.equal(serverErrorText(teapot).summaryKey, "serverError.unknown");
+  const withDiff = responseError({ error: "stale write", diff: { added: ["a"] } }, 409);
+  assert.equal(withDiff.code, "http-409");
+  assert.ok(withDiff.message.includes("stale write") && withDiff.message.includes('{"added":["a"]}'), "the diff was dropped from the details");
+});
+
+test("a refusal read from a plain Error is not guessed from its text", () => {
+  const plain = serverErrorText(new Error("forbidden: read-only file"));
+  assert.equal(plain.summaryKey, "serverError.unknown");
+  assert.equal(plain.details, "forbidden: read-only file");
+});
+
+test("a refusal text with 'case', 'lowercase' or a missing field claims no code it has not got", async () => {
+  const { codeFromError } = await import("./server-error.ts");
+  for (const text of ["names must be lowercase", "the case is closed", "cascade failed", "broadcast refused", "missing required field: name"]) {
+    assert.equal(codeFromError(text), null, `"${text}" claimed a code`);
+  }
+  assert.equal(codeFromError("CAS mismatch on write"), "config-cas-409");
+  assert.equal(codeFromError("The File Changed Since The File Was Read"), "config-cas-409");
+  assert.equal(codeFromError("skill not found"), "http-404");
+  assert.equal(codeFromError("no such file"), "http-404");
+});
+
+test("a refusal code the settings routes already send speaks the forbidden line", () => {
+  for (const code of ["skills-write-refused", "account-write-refused", "mcp-refused"]) {
+    assert.equal(serverErrorText({ code, message: "refused" }).summaryKey, "serverError.forbidden", code);
+  }
+});
