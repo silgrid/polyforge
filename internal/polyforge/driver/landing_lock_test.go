@@ -409,3 +409,31 @@ func TestLandingGateAskResumesInPlace(t *testing.T) {
 		t.Fatalf("releases %d, want the gate ask to release once", releases)
 	}
 }
+
+// TestLandingEnterBeforeFirstDispatch: the lease is taken before the enter
+// step's first dispatch, never for a step before it.
+func TestLandingEnterBeforeFirstDispatch(t *testing.T) {
+	d, sp, _, fl := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), spec("merge"))
+	at := map[string]int{}
+	mark := func(step string) func() {
+		return func() {
+			fl.mu.Lock()
+			held := fl.held
+			fl.mu.Unlock()
+			if held {
+				at[step]++
+			}
+		}
+	}
+	b, y, m := done(""), done(""), done("")
+	b.act = mark("build")
+	y.act = mark("sync")
+	m.act = mark("merge")
+	sp.script = []fakeEntry{b, y, m}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if at["build"] != 0 || at["sync"] != 1 || at["merge"] != 1 {
+		t.Fatalf("held at dispatch: %v, want build 0, sync 1, merge 1", at)
+	}
+}
