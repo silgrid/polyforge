@@ -23,23 +23,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { createCheck, createHarness, createWaitUntil, e2eOnlySelection, errorText, launchBrowser, root } from "./harness.mjs";
+import { createCheck, createHarness, createWaitUntil, errorText, launchBrowser, root } from "./harness.mjs";
 
 const SUITE = "pi-subagent-panel";
-// E2E_ONLY=<id>[,<id>…] (e2e/README.md) runs only the named scenarios; unset
-// keeps every one. Each id is its scenario title, so a targeted re-run names
-// the same title the suite prints. An unknown id throws here, before the
-// scratch tree exists — never a silent zero-scenario run.
-const TITLES = {
-  P1P2: "P1P2",
-  P3: "P3",
-  "P1-split": "P1-split",
-  "P1-mobile": "P1-mobile",
-  "P3-drag": "P3-drag",
-  "P3-history": "P3-history",
-  "P1-topbar": "P1-topbar",
-};
-const ONLY = e2eOnlySelection(TITLES);
 const distDir = process.env.PI_WEB_DIST_DIR || `.next/e2e/${SUITE}`;
 const scratch = mkdtempSync(join(tmpdir(), `${SUITE}-`));
 const home = join(scratch, "home");
@@ -109,7 +95,7 @@ writeFileSync(join(agentDir, "models.json"), JSON.stringify({
 
 const h = createHarness();
 const failures = [];
-const scenario = createCheck({ failures, message: errorText, record: ([id], text) => `${id}: ${text}`, fail: ([id], text) => console.log(`FAIL ${id}: ${text}`), skip: ([id]) => ONLY.skip(TITLES[id]) });
+const scenario = createCheck({ failures, message: errorText, record: ([id], text) => `${id}: ${text}`, fail: ([id], text) => console.log(`FAIL ${id}: ${text}`) });
 const waitFor = createWaitUntil({ every: 200, withLast: true });
 
 const serverEnv = () => ({
@@ -331,9 +317,18 @@ try {
     const p = page.locator(`[data-pi-subagent-panel="${childId}"]`);
     const handle = p.locator("[data-claude-subagent-panel-resize]");
     await handle.waitFor({ state: "visible", timeout: 20_000 });
+    // The panel's box takes its height from its content (SubagentPanelFrame
+    // caps it: no fixed height until the user drags), and the transcript, the
+    // run's result and the settled footer arrive after the first paint. Read
+    // the default layout only once that content is final: the child's answer,
+    // the completed status, the settled reason and no loading placeholder.
+    await waitFor(async () => (await panelText(page)).includes("CHILD-ANSWER"), 45_000, "the child transcript never reached the panel");
+    await waitFor(async () => /Completed/.test(await panelText(page)), 45_000, "the panel never showed the run completed");
+    await waitFor(async () => (await panelText(page)).includes("This run has ended"), 20_000, "the settled reason is not shown");
+    await waitFor(async () => (await p.locator("[data-pi-subagent-empty]").count()) === 0, 20_000, "the panel never finished loading its entries");
     const boundsHeight = await page.locator("[data-claude-subagent-panel-bounds]").evaluate((el) => el.clientHeight);
-    // The transcript lands after the first paint: settle the default height
-    // (two consecutive equal reads) before measuring it.
+    // Content is final; still settle the rendered height (a ResizeObserver and
+    // the last layout pass can move it once) before measuring the default.
     let previousHeight = null;
     const defaultHeight = await waitFor(async () => {
       const box = await p.boundingBox();
