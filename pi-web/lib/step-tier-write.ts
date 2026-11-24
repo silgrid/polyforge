@@ -40,5 +40,10 @@ export async function runStepTierWritePlan(
     const answer = await write(plan[0], current.hash);
     if (!answer.ok) return { ok: false, reason: "write", error: answer.error };
   }
-  return { ok: false, reason: "limit" };
+  // The limit bounds writes, not the confirmation: the last allowed write may
+  // have emptied the plan, so read once more (never write) before failing.
+  const final = await read();
+  if (!final.ok) return { ok: false, reason: "read", error: final.error };
+  const remaining = stepTierWritePlan(stepTierItems(final.items), identity, target);
+  return remaining.length === 0 ? { ok: true } : { ok: false, reason: "limit" };
 }
