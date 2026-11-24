@@ -14,3 +14,12 @@ writes (`artifacts/sync/result.json`) is what the `{{verifying_gate}}` step chec
 the fast-check result (`artifacts/sync/fast-checks/<repo>.json`) is what the daemon's hand-off
 gate checks before `done`. A real conflict never sends the work back to
 `{{change_step}}` by itself: only the owner's word does, after the skill's abort line.
+
+## 完成判据 — done criteria
+
+`done` only when every item below holds, each over the set it names:
+
+1. **Every repo** of `artifacts/sync/result.json`'s `details.repos[]` stands at its `after` commit with an empty `conflicts[]`, and the start line (or, after a conflict, the continue line) exited 0.
+2. **Every file the script resolved mechanically** — `details.repos[].mechanical[]` — and **every conflict file you resolved** (`resolved[]`) are named verbatim in the hand-off body.
+3. **Every repo the merge moved** has a passing fast-check result at HEAD — the daemon's hand-off gate reads `artifacts/sync/fast-checks/<repo>.json`; a fast-forwarded repo needs none, a red the check triages `pre_existing` is none of this merge's, and a released red is handed off citing the owner's message.
+4. The `{{verifying_gate}}` step is told **every file you resolved** (`resolved[]`), so it tests the tree this step leaves.
