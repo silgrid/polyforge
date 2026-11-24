@@ -146,7 +146,7 @@ func TestPF234StepTextProhibitionsCounterexample(t *testing.T) {
 	if got := pf234Violations([]string{"不要使用 parallel。"}, nil); len(got) != 1 {
 		t.Fatalf("the scanner misses a bare Chinese prohibition: %v", got)
 	}
-	guard := []pf234Guard{{sentence: "Never push to the default branch.", goal: "keep the branch protected"}}
+	guard := []pf234Guard{{sentence: "Never push to the default branch.", goal: "branch protected"}}
 	if got := pf234Violations([]string{"Never push to the default branch. Keep the branch protected."}, guard); len(got) != 0 {
 		t.Fatalf("an allowlisted guard with its positive goal must pass: %v", got)
 	}
