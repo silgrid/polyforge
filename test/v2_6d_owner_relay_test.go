@@ -1,3 +1,4 @@
+// carries: test/v2_6d_owner_relay_test.go, test/v2_6c_ask_awaiting_owner_test.go, internal/polyforge/driver/relay.go
 package test
 
 // v2_6d_owner_relay_test.go: the owner-message relay (workflow contract
@@ -16,16 +17,21 @@ package test
 // once after the restart. A step's v1 question as its result (`pf step
 // handoff --status needs_input`) is refused at the call (workflow
 // contract 4): the session resumed after its turn ended without a
-// hand-off hands off done.
+// hand-off hands off done. The capsule record keeps one chain: the ask,
+// the `awaiting` wait polyforge#239 records beside it, the owner line, and
+// the delivered line naming it — never a second wait of a replay or a
+// delivery the daemon did not make.
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/common/spawn"
 	"github.com/silgrid/polyforge/internal/polyforge/crashpoint"
@@ -150,10 +156,22 @@ func v26dWaitDelivered(t *testing.T, dataDir, wi string) {
 	})
 }
 
-// v26dCheckRecord asserts the record of one relayed message: the owner
-// line (kind, step, spawn, ask_at, words, writer), exactly one delivered
-// line naming it under spawn, the owner_message event before the
-// delivered event with the bodies the faces read.
+// v26dKindsOf answers the record's kind sequence, in file order.
+func v26dKindsOf(t *testing.T, capDir string) []string {
+	t.Helper()
+	var out []string
+	for _, l := range v26dAsks(t, capDir) {
+		out = append(out, l.Kind)
+	}
+	return out
+}
+
+// v26dCheckRecord asserts the record of one relayed message: the full chain
+// (the ask, the one `awaiting` wait of polyforge#239 bound to it, the owner
+// line and its one delivered line — an interjection has no ask and so no
+// wait line), the owner line's own fields (kind, step, spawn, ask_at, words,
+// writer), the delivered line naming it under spawn, and the owner_message
+// event before the delivered event with the bodies the faces read.
 func v26dCheckRecord(t *testing.T, dataDir, wi, capDir, kind, askAt string, spawn int64, delivered int64, disposition, confirmedBy string) askRec {
 	t.Helper()
 	owner := v26dLines(t, capDir, kind)
@@ -161,6 +179,18 @@ func v26dCheckRecord(t *testing.T, dataDir, wi, capDir, kind, askAt string, spaw
 		t.Fatalf("the %s line: %+v", kind, owner)
 	}
 	line := owner[0]
+	want := []string{capsule.AskKindAsk, capsule.AskKindAwaiting, kind, capsule.AskKindDelivered}
+	if kind == capsule.AskKindMessage {
+		want = []string{kind, capsule.AskKindDelivered} // no ask, so no wait
+	}
+	if got := v26dKindsOf(t, capDir); !reflect.DeepEqual(got, want) {
+		t.Fatalf("asks.jsonl chain: %v, want %v", got, want)
+	}
+	if kind == capsule.AskKindReply {
+		v26cAwaitingLine(t, capDir, "fix", spawn, askAt)
+	} else if aw := v26dLines(t, capDir, capsule.AskKindAwaiting); len(aw) != 0 {
+		t.Fatalf("an interjection recorded an awaiting line: %+v", aw)
+	}
 	dl := v26dLines(t, capDir, "delivered")
 	if len(dl) != 1 || dl[0].MsgAt != line.At || dl[0].Spawn != delivered || dl[0].Step != "fix" {
 		t.Fatalf("the delivered line: %+v", dl)
@@ -556,6 +586,13 @@ func TestV26dPiCrashBetweenReplyAndDeliveryReplaysOnce(t *testing.T) {
 	if dl := v26dLines(t, capDir, "delivered"); len(dl) != 0 {
 		t.Fatalf("delivered before any delivery: %+v", dl)
 	}
+	// the crash left three lines — the ask, its one wait and the owner's
+	// reply, nothing delivered yet
+	before := v26dAsks(t, capDir)
+	if kinds := v26dKindsOf(t, capDir); !reflect.DeepEqual(kinds, []string{capsule.AskKindAsk, capsule.AskKindAwaiting, capsule.AskKindReply}) {
+		t.Fatalf("asks.jsonl before the restart: %v (%+v)", kinds, before)
+	}
+	v26cAwaitingLine(t, capDir, "fix", 1, ask.At)
 	if n := len(v26dKind(v26cEvents(t, d.dataDir, wi), "owner_message")); n != 1 {
 		t.Fatalf("owner_message events before the restart: %d", n)
 	}
@@ -577,6 +614,11 @@ func TestV26dPiCrashBetweenReplyAndDeliveryReplaysOnce(t *testing.T) {
 	inst.waitWIStatus(t, wi, "wrapped", 120*time.Second)
 	v26dResumedHandoff(t, capDir)
 	time.Sleep(time.Second)
+	// the restart appended the one delivery and rewrote nothing: the three
+	// lines it found are the three lines it left (the wait's T0 included)
+	if after := v26dAsks(t, capDir); len(after) != 4 || !reflect.DeepEqual(after[:3], before) {
+		t.Fatalf("the restart rewrote the record (a moved T0, a second reply or an extra line): %+v, was %+v", after, before)
+	}
 	if dl := v26dLines(t, capDir, "delivered"); len(dl) != 1 {
 		t.Fatalf("delivered lines after the restart: %+v", dl)
 	}
