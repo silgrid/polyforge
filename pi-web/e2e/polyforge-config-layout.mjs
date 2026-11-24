@@ -909,7 +909,10 @@ try {
       "a Host row still has its own Save button");
     assert.equal(writes.length, 0, "typing into a Host field wrote before the footer's save");
     await footer.getByRole("button", { name: "Save (2)", exact: true }).click();
-    await waitFor(() => writes.length >= 2 || false, NAV_MS, "the footer's save never wrote");
+    // A bounded poll of the request log (this suite has no waitFor helper).
+    const deadline = Date.now() + NAV_MS;
+    while (writes.length < 2 && Date.now() < deadline) await page.waitForTimeout(100);
+    assert.ok(writes.length >= 2, "the footer's save never wrote");
     assert.deepEqual(writes.map((body) => body.key).sort(), ["daemon_socket", "max_concurrent_jobs"], "the footer wrote a key nothing changed");
     assert.deepEqual(writes.find((body) => body.key === "max_concurrent_jobs").value, 7);
     assert.ok(writes.every((body) => body.host === true && body.action === "set"), "a Host write lost its shape");
