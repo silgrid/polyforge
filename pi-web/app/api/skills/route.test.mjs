@@ -347,3 +347,17 @@ test("only the pi side accepts a preference, however the file is named (legacy g
   assert.equal(await readFile(authPath, "utf8"), auth);
   assert.deepEqual(await readPreference(agentDir), {});
 });
+
+// polyforge#259 T4 (owner 2A: 向后兼容、只追加): a refused single-item PATCH
+// keeps its 400 and its `error` words, and gains the same code a refused
+// batch item carries. Caught change: the single path answering
+// `{ error }` alone (the code missing) or a different status.
+test("a refused single PATCH keeps its 400 and its words, and adds code skills-write-refused (owner 2A)", async () => {
+  const agentDir = await freshAgentDir("single-refused-code");
+  const authPath = join(agentDir, "auth.json");
+  await writeFile(authPath, JSON.stringify({}));
+  const single = await patchSkills({ skill: authPath, harness: "pi", state: "disabled" });
+  assert.equal(single.status, 400);
+  assert.deepEqual(await single.json(), { error: "Not a skill file", code: "skills-write-refused" });
+  assert.deepEqual(await readPreference(agentDir), {});
+});

@@ -20,6 +20,9 @@ const {
   rowSwitchItems,
   applyRowSwitchResults,
   rowsToSwitch,
+  refusalResult,
+  switchResultRow,
+  SkillDetail,
 } = await jiti.import("./SkillsConfig.tsx");
 
 const TEXTS = { notListed: "not listed by this harness", pi: "pi", claude: "claude" };
@@ -145,7 +148,6 @@ test("the undo's previous values are the row's own, per harness", () => {
 // keeps the server's own words for its details fold. The expected line is the
 // generic Chinese message — the server's text must never be the main line.
 test("a refused harness reads in Chinese and keeps its own words folded", async () => {
-  const { refusalResult } = await import("./SkillsConfig.tsx");
   const t = (key, params) => {
     const table = { "serverError.unknown": "操作没有成功，服务端返回的原文在「详情」里。" };
     return (table[key] ?? key).replace("{}", params?.x ?? "");
@@ -157,4 +159,52 @@ test("a refused harness reads in Chinese and keeps its own words folded", async 
   assert.match(row.details ?? "", /EACCES/, "the refusal's own words are not kept for the fold");
   const coded = refusalResult(t, "claude", { code: "config-cas-409", message: "changed since it was read" });
   assert.equal(coded.text, "serverError.conflict", "a code does not answer its own message key");
+});
+
+// polyforge#259 T4 AC2 (review r3#1, owner 2A: 前端按 code i18n): a refused
+// switch item the route marks `code: "skills-write-refused"` reads as the
+// forbidden line, not the generic one. Expected text hand-copied from
+// lib/i18n/messages/zh-CN.ts `serverError.forbidden`. Caught change: the
+// result row passing only `result.error` (the code dropped).
+const ZH_FORBIDDEN = "服务端拒绝了这次改动，原文在「详情」里。";
+const zhT = (key) => ({ "serverError.forbidden": ZH_FORBIDDEN, "skills.piWritten": "已写入 pi" }[key] ?? key);
+
+test("a refused switch result reads in Chinese by the route's code (T4 AC2, owner 2A)", () => {
+  const direct = refusalResult(zhT, "pi", { message: "Access denied", code: "skills-write-refused" });
+  assert.equal(direct.text, ZH_FORBIDDEN, "refusalResult ignores the route's code");
+  const row = switchResultRow(zhT, { skill: "/a/SKILL.md", harness: "pi", error: "Access denied", code: "skills-write-refused" });
+  assert.equal(row.ok, false);
+  assert.equal(row.text, ZH_FORBIDDEN, "the result row drops the route's code");
+  assert.equal(row.details, "Access denied", "the refusal's own words are not kept for the fold");
+  assert.deepEqual(switchResultRow(zhT, { skill: "/a/SKILL.md", harness: "pi" }), { harness: "pi", ok: true, text: "已写入 pi" });
+});
+
+// The detail view's two save-error slots (pi's row and claude's partition):
+// the Chinese line is the visible text, the server's English only inside the
+// details fold (docs/agents/settings-ui.md, owner 2A). Caught change: a
+// view printing the server's words beside the line again.
+const React = await jiti.import("react");
+const { renderToStaticMarkup } = await jiti.import("react-dom/server");
+const { I18nProvider } = await jiti.import("@/hooks/useI18n");
+const outsideFolds = (html) => html.replace(/<details[\s\S]*?<\/details>/g, "");
+const foldsOf = (html) => (html.match(/<details[\s\S]*?<\/details>/g) ?? []).join("");
+
+test("a save error reads in Chinese, the server's words only in the fold (T4 AC2, review r3#1)", () => {
+  const noop = () => {};
+  const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(SkillDetail, {
+    row: bothRow, piSkill: null, cwd: null, applyResults: null, applyBusy: false,
+    saveError: { summary: ZH_FORBIDDEN, details: "skill file is outside the allowed roots" },
+    claudeSaveError: { summary: "目标在此期间被别的写入改过，请重新读取后再试。", details: "settings.json changed since it was read" },
+    checkingUpdate: false, updating: false, updateError: null,
+    onCheckUpdate: noop, onUpdate: noop, onCleanupLegacy: noop, cleaningLegacy: false,
+    onApplySwitch: noop, onWriteClaudeState: noop,
+  })));
+  const outside = outsideFolds(html);
+  assert.ok(outside.includes(ZH_FORBIDDEN), "the pi save error's Chinese line is not the visible text");
+  assert.ok(outside.includes("目标在此期间被别的写入改过，请重新读取后再试。"), "the claude save error's Chinese line is not the visible text");
+  assert.ok(!outside.includes("skill file is outside the allowed roots"), "the pi save error's server words show outside the fold");
+  assert.ok(!outside.includes("settings.json changed since it was read"), "the claude save error's server words show outside the fold");
+  const folds = foldsOf(html);
+  assert.ok(folds.includes("skill file is outside the allowed roots"), "the pi save error's server words are not in its fold");
+  assert.ok(folds.includes("settings.json changed since it was read"), "the claude save error's server words are not in its fold");
 });
