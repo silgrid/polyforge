@@ -938,14 +938,22 @@ try {
     assert.equal(writes.length, 0, "typing into a Host field wrote before the footer's save");
     // build finding u11#5: the footer's word is the ticket's 「保存（n 项改动）」.
     await footer.getByRole("button", { name: "Save (2 change(s))", exact: true }).click();
-    // A bounded poll of the request log (this suite has no waitFor helper).
+    // The writes are one request per key, so the assertion waits for the footer
+    // to settle (its Save button gone) and then for the write set to stop
+    // growing — never a single read of a set a later write still joins
+    // (polyforge#259 T4, review #4).
+    await footer.getByRole("button", { name: /Save \(/, exact: false }).waitFor({ state: "detached", timeout: NAV_MS });
     const deadline = Date.now() + NAV_MS;
-    while (writes.length < 2 && Date.now() < deadline) await page.waitForTimeout(100);
+    let settled = writes.length;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(100);
+      if (writes.length === settled) break;
+      settled = writes.length;
+    }
     assert.ok(writes.length >= 2, "the footer's save never wrote");
     assert.deepEqual(writes.map((body) => body.key).sort(), ["harness_root", "max_concurrent_jobs"], "the footer wrote a key nothing changed");
     assert.deepEqual(writes.find((body) => body.key === "max_concurrent_jobs").value, 7);
     assert.ok(writes.every((body) => body.host === true && body.action === "set"), "a Host write lost its shape");
-    await footer.getByRole("button", { name: /Save \(/, exact: false }).waitFor({ state: "detached", timeout: NAV_MS });
     await context.close();
   });
 
