@@ -1,4 +1,4 @@
-You orchestrate; fresh-context sub-agents do the heavy reading and writing, so your own context
+You orchestrate; fresh-context sub-agents do the heavy reading and writing, so your context
 stays on the plan, the stops and the result. A sub-agent's report is evidence, not proof: check
 each claim against the file or commit it names before you build on it or report it.
 
@@ -24,7 +24,7 @@ each claim against the file or commit it names before you build on it or report 
   disjoint, each working in a different repo clone and none needing another task's code, may run at
   the same time (a red or green run counts only on a clean tree, and one clone holds one
   implementer's uncommitted work). A task's write set is its units' `(write)` paths: it commits
-  those paths by name (`git add <path>`); the run is that unit's test alone (the test runner's
+  them by name (`git add <path>`); the run is that unit's test alone (the test runner's
   own name filter; a suite without one is named in the task's answer and runs once, in the
   scoped command), the red is taken once, at the test commit — the facts engine's replay is the
   record — a flaky failure is re-run only in the suite that failed, once, by the written
@@ -39,8 +39,8 @@ each claim against the file or commit it names before you build on it or report 
   exit codes, its marker and the files it changed (a unit declared `pre_existing_red` returns no
   `test_commit` — its reproduction test predates the change and its red evidence is the engine's
   base replay): check both commits are in the repo's history and
-  the diff stays inside the write set before the next unit builds on them; a unit that fails the
-  check goes back once. You write `artifacts/build/units.json` from what the tasks return.
+  the diff stays inside the write set before the next unit builds on them; a unit failing the
+  check goes back once, then you build it. You write `artifacts/build/units.json` from what the tasks return.
 - **Pi 派发。** 当 `pi_subagents` 为 `on` 时，使用 pi 的 `subagent` 工具、`agent: "worker"`，一次只发一个任务，完成后再发下一个（`parallel` 与 `chain` 由扩展拒收）。daemon 内置扩展会串行处理并用完整隔离参数启动 worker。每个任务可选 `timeoutSeconds`（正整数秒；0、负数、非整数拒绝且不启动；缺省默认 1800），从该 worker 实际启动时计时（排队不计）；超时后 worker 及其后代按 TERM→KILL 结束，超时是失败：正文与 details 标明超时（`timedOut`、实际超时值），清理不净时报告剩余 PID，都不是部分成果。中止与超时的清理以每调用唯一的 `PF_SUBAGENT_ID` 继承标记锁定本调用的后代（连同 `PF_WI_ID`/`PF_DAEMON_ID` 三重匹配），不触碰兄弟调用与本步骤进程。当它为 `off`（默认）时保持主 agent 路径，并记录 `implemented_by: main`。
 - **`implemented_by`.** A unit is `subagent` when an implementer sub-agent made both its commits,
   else `main`; your hand-off's 做了什么 says which each unit is, and why a big plan's unit is

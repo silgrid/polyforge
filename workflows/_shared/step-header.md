@@ -113,9 +113,9 @@ status below, citing that message.
 pf step handoff --status <status> --body @<file> [--evidence <path>]... [--to <step>] [--per-owner <at>] [--reason "<one line>"]
 ```
 
-- **Once, last.** The daemon accepts one hand-off per dispatch and ends the dispatch on
-  it; a refused call (non-zero exit, the reason printed) records nothing — fix what it
-  names and call it again.
+- **Once, last.** The daemon accepts one hand-off per dispatch; a refused call
+  (non-zero exit, the reason printed) records nothing — fix what it names and call it
+  again.
 - **`--body @<file>`**: the body, written to a file (`mktemp`) by the body template that
   follows this header (`workflows/_shared/handoff.md` in the capsule).
 - **`--evidence <path>`**: each capsule file a later step or the owner checks your
@@ -134,7 +134,7 @@ pf step handoff --status <status> --body @<file> [--evidence <path>]... [--to <s
 `--per-owner <at>` is the `at` stamp, in `runtime-state/asks.jsonl`, of the owner's
 message to this step in this round whose words you carry out. Use `cancel`, `waive` and
 `rewind` only on such a message, and state the words and your reading of them in
-Decisions and why / 关键决定和理由. The daemon checks that the message exists.
+Decisions and why / 关键决定和理由. The daemon checks that the message exists, not what it says.
 
 ## Memory
 
