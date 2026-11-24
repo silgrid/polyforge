@@ -14,6 +14,8 @@ package test
 // artifacts/plan.md's ## Units names the change that would turn it red.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -92,6 +94,103 @@ func TestSubagentBriefSTE80Contract(t *testing.T) {
 	for _, want := range readabilitySTE80Rules {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("the rendered develop/build lacks the brief writing rule %q (build_subagents must render it)", want)
+		}
+	}
+}
+
+// readabilityChecklistRules are the advisory checklist's mechanical items and
+// its advisory-only statement (AC3): the length hints, the semicolon and the
+// evidence-line hints, the threshold rule, and the fact that no gate reads it.
+var readabilityChecklistRules = []string{
+	"只提示，不阻断",
+	"中文单句 40 字以内",
+	"英文单句 20 词以内",
+	"单条 120 字以内",
+	"`;` 或 `；`",
+	"长度等于阈值时不提示，超过阈值才提示",
+	"没有脚本读取它",
+	"没有步骤因它失败",
+}
+
+// TestReadabilityChecklistRenderedAsAdvisory: workflows/_shared now carries
+// the advisory checklist, develop/build renders it exactly once, and no other
+// step file, lane, verification conf or shared script reads it — nothing can
+// fail because of it.
+func TestReadabilityChecklistRenderedAsAdvisory(t *testing.T) {
+	root := v1Root(t)
+	raw, err := os.ReadFile(filepath.Join(root, "workflows", "_shared", "readability_checklist.md"))
+	if err != nil {
+		t.Fatalf("workflows/_shared/readability_checklist.md: %v — the advisory fragment must exist", err)
+	}
+	body := strings.TrimSpace(string(raw))
+	flat := strings.Join(strings.Fields(body), " ")
+	for _, want := range readabilityChecklistRules {
+		if !strings.Contains(flat, want) {
+			t.Errorf("workflows/_shared/readability_checklist.md lacks %q", want)
+		}
+	}
+
+	rendered := grillStepDef(t, "develop", "build")
+	if n := strings.Count(rendered, body); n != 1 {
+		t.Errorf("the rendered develop/build carries the advisory checklist %d times, want exactly 1", n)
+	}
+
+	// The fragment is included once, from develop/build only: every other
+	// workflow file (step definitions, lane fragments) leaves it out.
+	var includers []string
+	if err := filepath.Walk(filepath.Join(root, "workflows"), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if strings.Contains(string(b), "{{readability_checklist}}") {
+			rel, _ := filepath.Rel(root, path)
+			includers = append(includers, filepath.ToSlash(rel))
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk workflows/: %v", err)
+	}
+	if len(includers) != 1 || includers[0] != "workflows/develop/steps/build.md" {
+		t.Errorf("{{readability_checklist}} is included by %v, want only workflows/develop/steps/build.md", includers)
+	}
+
+	// No gate surface reads the checklist: not a verification conf, a lane,
+	// or a shared script.
+	var surfaces []string
+	for _, pat := range []string{
+		filepath.Join(root, ".polyforge", "*.conf"),
+		filepath.Join(root, "*", ".polyforge", "verify-scope.conf"),
+		filepath.Join(root, "workflows", "*", "workflow.yaml"),
+	} {
+		m, _ := filepath.Glob(pat)
+		surfaces = append(surfaces, m...)
+	}
+	if err := filepath.Walk(filepath.Join(root, "workflows", "_shared", "scripts"), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() && strings.HasSuffix(path, ".py") {
+			surfaces = append(surfaces, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk workflows/_shared/scripts: %v", err)
+	}
+	for _, path := range surfaces {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("%v: %v", path, err)
+		}
+		if strings.Contains(string(b), "readability_checklist") || strings.Contains(string(b), "readability") {
+			rel, _ := filepath.Rel(root, path)
+			t.Errorf("%s reads the advisory readability checklist: the checklist is a hint, never a gate", filepath.ToSlash(rel))
 		}
 	}
 }
