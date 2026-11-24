@@ -11,12 +11,45 @@ import {
   stepTierState,
   type StepTierItem,
 } from "@/lib/step-tiers";
-import { useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
+import { EnabledModelsBanner, useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
 import { ModelsConfig } from "./ModelsConfig";
 import { ClaudeCustomModels } from "./ClaudeCustomModels";
-import { ConfigSidebar, ConfigSidebarGroupLabel, ConfigSidebarList, ConfigSidebarItem, ConfigDetail } from "./SettingsUi";
+import { ConfigSidebar, ConfigSidebarItem, ConfigSidebarList, ConfigDetail, ConfigSplitView } from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
+
+/** The model page's four subpages (T3's settled information architecture):
+ *  the sidebar navigates pages, never a copy of the model table. */
+export type ModelSubpage = "default" | "list" | "providers" | "claude";
+
+const MODEL_SUBPAGES: ReadonlyArray<{ id: ModelSubpage; labelKey: string }> = [
+  { id: "default", labelKey: "models.defaultHeading" },
+  { id: "list", labelKey: "models.listHeading" },
+  { id: "providers", labelKey: "models.providersHeading" },
+  { id: "claude", labelKey: "models.claudeCustomHeading" },
+];
+
+/** The model page's left column: the four subpages, each with its translated
+ *  label. Presentational, so a component test can render it alone. */
+export function ModelPageNav({ page, onSelect }: { page: ModelSubpage; onSelect: (page: ModelSubpage) => void }) {
+  const { t } = useI18n();
+  return (
+    <ConfigSidebar>
+      <ConfigSidebarList>
+        {MODEL_SUBPAGES.map((subpage) => (
+          <ConfigSidebarItem
+            key={subpage.id}
+            data-model-subpage={subpage.id}
+            active={page === subpage.id}
+            onClick={() => onSelect(subpage.id)}
+          >
+            {t(subpage.labelKey)}
+          </ConfigSidebarItem>
+        ))}
+      </ConfigSidebarList>
+    </ConfigSidebar>
+  );
+}
 
 /** The tier column's own view of the Host's [step_tiers] catalog (85b2):
  *  the parsed tier items and why the column is read-only when it is. */
@@ -59,10 +92,7 @@ function stepTierIdentity(row: Pick<ModelViewRow, "provider" | "id">, harness: s
 /** One row's step-tier cell, read-only (polyforge#256 B7): the current state
  *  as short badges — a single shared tier shows its name, differing harnesses
  *  show `pi: default` / `claude: fast`, an unset or incapable row shows 「—」.
- *  The editing entry point is gone (T3 owns the next editor): no select, no
- *  apply-to control, no write callback, so opening the page can never write a
- *  default tier. `pf config set step_tiers… --host` and the write route keep
- *  their gates (lib/polyforge-config-write.ts). */
+ *  The editing entry point is the row's drawer (T3, ModelStepTierDrawer). */
 export function StepTierBadges({ row, tier }: { row: ModelViewRow; tier: StepTierColumnView }) {
   if (!tier.capable) {
     return <span data-step-tier-cell="readonly" data-step-tier-state="readonly" style={{ color: "var(--text-dim)" }}>—</span>;
@@ -129,46 +159,16 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEf
   </table>;
 }
 
-/**
- * The model page's left column: the 「默认模型」 item, then one shared group
- * heading per provider with its models (polyforge#257 T2: the heading is
- * `ConfigSidebarGroupLabel`, the same group label every other settings tab
- * draws — a bare `<strong>` read as a second title).
- */
-export function HarnessModelSidebar({ rows, selectedProvider, onSelect }: {
-  rows: ModelViewRow[];
-  selectedProvider: string | null;
-  onSelect: (provider: string | null) => void;
+export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage = "default" }: {
+  cwd: string | null;
+  onClose?: () => void;
+  onOpenAccount?: () => void;
+  /** A component test's entry point; the page opens on the default subpage. */
+  initialSubpage?: ModelSubpage;
 }) {
   const { t } = useI18n();
-  return (
-    <ConfigSidebar>
-      <ConfigSidebarList>
-        <ConfigSidebarItem active={selectedProvider === null} onClick={() => onSelect(null)}>{t("models.defaultHeading")}</ConfigSidebarItem>
-        {[...new Set(rows.map((row) => row.provider))].map((provider) => (
-          <div key={provider} className="config-sidebar-group">
-            <ConfigSidebarGroupLabel>{provider}</ConfigSidebarGroupLabel>
-            {rows.filter((row) => row.provider === provider).map((row) => (
-              <ConfigSidebarItem key={row.id} active={selectedProvider === provider} onClick={() => onSelect(provider)}>
-                {row.name} · {row.harnesses.join(", ")}
-              </ConfigSidebarItem>
-            ))}
-          </div>
-        ))}
-      </ConfigSidebarList>
-    </ConfigSidebar>
-  );
-}
-
-/** Stub (polyforge#258 u2): the four-subpage navigation, filled in by the
- *  implementation commit. */
-export function ModelPageNav(_props: { page: string; onSelect: (page: string) => void }) {
-  return null;
-}
-
-export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage: _initialSubpage }: { cwd: string | null; onClose?: () => void; onOpenAccount?: () => void; initialSubpage?: string }) {
-  const { t } = useI18n();
   const enabled = useEnabledModels(cwd);
+  const [page, setPage] = useState<ModelSubpage>(initialSubpage);
   const [models, setModels] = useState<ModelViewInput[]>([]);
   const [defaultModel, setDefaultModel] = useState<ModelIdentity | null>(null);
   const [piSettings, setPiSettings] = useState<ModelPayload | null>(null);
@@ -176,7 +176,6 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [hostTierConfig, setHostTierConfig] = useState<HostTierConfig | null>(null);
   const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
 
@@ -260,7 +259,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   }, []);
 
   // The tier column is read-only (polyforge#256 B7): one Host read at page
-  // load, localized in render, and no write path at all.
+  // load, localized in render.
   const tierColumn = useMemo<StepTierColumnView | null>(() => hostTierConfig === null ? null : {
     capable: hostTierConfig.capable && !hostTierConfig.stepTiersReason,
     reason: hostTierConfig.capable && !hostTierConfig.stepTiersReason ? null : stepTierReasonText(hostTierConfig, t),
@@ -268,61 +267,67 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   }, [hostTierConfig, t]);
 
   const selected = defaultModel ? JSON.stringify(defaultModel) : "";
+  const defined = {
+    pi: rows.filter((row) => row.harnesses.includes("pi")).map((row) => `${row.provider}/${row.id}`),
+    claude: rows.filter((row) => row.harnesses.includes("claude")).map((row) => row.id),
+  };
+  const invalidTiers = tierColumn?.capable ? stepTierInvalidReferences(tierColumn.tiers, defined) : [];
   return (
     <div className="settings-section settings-models" data-model-page="unified">
       {(error || enabled.failure) && <div role="alert">{error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}</div>}
-      <div className="config-split-view">
-      <HarnessModelSidebar rows={rows} selectedProvider={selectedProvider} onSelect={setSelectedProvider} />
-      <ConfigDetail>
-      <section className="settings-model-section" aria-label={t("models.defaultHeading")}>
-        <h3>{t("models.defaultHeading")}</h3>
-        <select className="settings-model-default-select" aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
-          onChange={(event) => {
-            const choice = JSON.parse(event.target.value) as ModelIdentity;
-            void write(`/api/models/default${query}`, choice.harness === "claude"
-              ? { harness: "claude", model: choice.id, ...(cwd ? { cwd } : {}) }
-              : { provider: choice.provider, modelId: choice.id, ...(cwd ? { cwd } : {}) });
-          }}>
-          <option value="" disabled>{t("models.notProvided")}</option>
-          {defaultModel && !models.some((model) => model.harness === defaultModel.harness && model.provider === defaultModel.provider && model.id === defaultModel.id)
-            && <option value={selected}>{defaultModel.harness} · {defaultModel.provider}/{defaultModel.id}</option>}
-          {models.map((model) => <option key={`${model.harness}/${model.provider}/${model.id}`}
-            value={JSON.stringify({ harness: model.harness, provider: model.provider, id: model.id })}>
-            {model.harness} · {model.provider}/{model.id}
-          </option>)}
-        </select>
-      </section>
-      <section className="settings-model-section" aria-label={t("models.listHeading")}>
-        <h3>{t("models.listHeading")}</h3>
-        {tierColumn && !tierColumn.capable && tierColumn.reason && (
-          <p role="note" data-step-tier-reason="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>{tierColumn.reason}</p>
-        )}
-        {tierColumn?.capable && (() => {
-          // the catalog's references no listed row answers (a deleted model, a
-          // migrated claude name) — noted once, never silently dropped
-          const defined = { pi: rows.filter((row) => row.harnesses.includes("pi")).map((row) => `${row.provider}/${row.id}`),
-            claude: rows.filter((row) => row.harnesses.includes("claude")).map((row) => row.id) };
-          const invalid = stepTierInvalidReferences(tierColumn.tiers, defined);
-          return invalid.length > 0 ? (
-            <p role="note" data-step-tier-invalid="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>
-              {t("models.stepTierInvalidNote", { candidates: invalid.join("、") })}
-            </p>
-          ) : null;
-        })()}
-        <HarnessModelTable rows={selectedProvider ? rows.filter((row) => row.provider === selectedProvider) : rows} enabled={enabled} levels={levels} piSettings={piSettings}
-          tier={tierColumn ?? undefined}
-          onEffort={(provider, id, level) => { void write(`/api/harness/pi/model${query}`, { modelThinkingLevel: { key: `${provider}/${id}`, level: level || null } }); }} />
-      </section>
-      <section className="settings-model-section" aria-label="pi">
-        <h3>pi</h3>
-        <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
-      </section>
-      <section className="settings-model-section" aria-label="claude">
-        <h3>claude</h3>
-        <ClaudeCustomModels onRefresh={() => setRevision((previous) => previous + 1)} />
-      </section>
-      </ConfigDetail>
-      </div>
+      <ConfigSplitView>
+        <ModelPageNav page={page} onSelect={setPage} />
+        <ConfigDetail>
+          {page === "default" && (
+            <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
+              <h3>{t("models.defaultHeading")}</h3>
+              <select className="settings-model-default-select" aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
+                onChange={(event) => {
+                  const choice = JSON.parse(event.target.value) as ModelIdentity;
+                  void write(`/api/models/default${query}`, choice.harness === "claude"
+                    ? { harness: "claude", model: choice.id, ...(cwd ? { cwd } : {}) }
+                    : { provider: choice.provider, modelId: choice.id, ...(cwd ? { cwd } : {}) });
+                }}>
+                <option value="" disabled>{t("models.notProvided")}</option>
+                {defaultModel && !models.some((model) => model.harness === defaultModel.harness && model.provider === defaultModel.provider && model.id === defaultModel.id)
+                  && <option value={selected}>{defaultModel.harness} · {defaultModel.provider}/{defaultModel.id}</option>}
+                {models.map((model) => <option key={`${model.harness}/${model.provider}/${model.id}`}
+                  value={JSON.stringify({ harness: model.harness, provider: model.provider, id: model.id })}>
+                  {model.harness} · {model.provider}/{model.id}
+                </option>)}
+              </select>
+            </section>
+          )}
+          {page === "list" && (
+            <section className="settings-model-section" data-model-page-pane="list" aria-label={t("models.listHeading")}>
+              <EnabledModelsBanner controller={enabled} />
+              <h3>{t("models.listHeading")}</h3>
+              {tierColumn && !tierColumn.capable && tierColumn.reason && (
+                <p role="note" data-step-tier-reason="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>{tierColumn.reason}</p>
+              )}
+              {invalidTiers.length > 0 && (
+                <p role="note" data-step-tier-invalid="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>
+                  {t("models.stepTierInvalidNote", { candidates: invalidTiers.join("、") })}
+                </p>
+              )}
+              <HarnessModelTable rows={rows} enabled={enabled} levels={levels} piSettings={piSettings}
+                tier={tierColumn ?? undefined}
+                onEffort={(provider, id, level) => { void write(`/api/harness/pi/model${query}`, { modelThinkingLevel: { key: `${provider}/${id}`, level: level || null } }); }} />
+            </section>
+          )}
+          {page === "providers" && (
+            <section className="settings-model-section is-provider-page" data-model-page-pane="providers" aria-label={t("models.providersHeading")}>
+              <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
+            </section>
+          )}
+          {page === "claude" && (
+            <section className="settings-model-section" data-model-page-pane="claude" aria-label={t("models.claudeCustomHeading")}>
+              <h3>{t("models.claudeCustomHeading")}</h3>
+              <ClaudeCustomModels onRefresh={() => setRevision((previous) => previous + 1)} />
+            </section>
+          )}
+        </ConfigDetail>
+      </ConfigSplitView>
     </div>
   );
 }

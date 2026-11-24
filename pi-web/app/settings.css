@@ -3709,3 +3709,37 @@ select.mcp-add-input {
 .polyforge-config-region-row textarea { flex-basis: 100%; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; resize: vertical; }
 .polyforge-config-region-row input:focus-visible,
 .polyforge-config-region-row textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* ---- 模型页的 Provider 子页（polyforge#258 T3）----
+   页内选择器代替旧版第二层侧栏；子页只有自己的表单 footer。 */
+.models-provider-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+.models-provider-picker-field {
+  display: flex;
+  flex: 1 1 200px;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.models-provider-picker-field > span { color: var(--text-muted); font-size: 11px; }
+.models-provider-picker select {
+  min-width: 0;
+  max-width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+.models-provider-picker select:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.is-provider-page .config-panel-root.is-embedded { flex-direction: column; }
+.is-provider-page .config-panel-root.is-embedded > .config-panel-surface { padding: 0 2px; }

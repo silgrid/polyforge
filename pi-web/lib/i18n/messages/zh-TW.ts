@@ -1909,6 +1909,8 @@ export const zhTWLocale: LocalePlugin = {
     "models.catalogUndo": "復原",
     "models.capabilities": "能力",
     "models.defaultHeading": "預設模型",
+    "models.providersHeading": "pi Providers",
+    "models.providerLabel": "Provider",
     "models.claudeCustomHeading": "Claude 自訂模型",
     "models.claudeCustomLoading": "正在載入…",
     "models.claudeCustomEmpty": "暫無自訂模型。可新增任何 --model 可接受的名稱。",

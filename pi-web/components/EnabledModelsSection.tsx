@@ -363,10 +363,14 @@ export function EnabledModelsSection({
   providerId,
   controller,
   contextSettings,
+  contextOnly = false,
 }: {
   providerId: string;
   controller: EnabledModelsController;
   contextSettings?: ModelContextSettings;
+  /** The Provider subpage edits context windows only: chat availability has
+   *  one home, the model table (polyforge#258 T3). */
+  contextOnly?: boolean;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -404,6 +408,43 @@ export function EnabledModelsSection({
     if (filtered) controller.setModels(bulkKey, refs, enabled);
     else controller.setProvider(provider.id, enabled);
   };
+
+  // Context-window-only mode (T3): no chat switches, no bulk actions — the
+  // model table is the one place chat availability is edited.
+  if (contextOnly) {
+    if (!contextSettings) return null;
+    return (
+      <div className="enabled-models-section" data-enabled-context-only="">
+        <div className="enabled-models-header">
+          <span className="enabled-models-title">{t("models.contextWindow")}</span>
+        </div>
+        <div id={contextNoteId} className="enabled-models-note">{t("models.contextOverrideHelp")}</div>
+        <div className="enabled-models-list">
+          {provider.models.map((model) => {
+            const override = contextSettings.overrides?.[model.id];
+            const contextValue = override && typeof override === "object" && !Array.isArray(override)
+              ? (override as Record<string, unknown>).contextWindow : undefined;
+            return (
+              <div key={model.ref} className="enabled-models-row">
+                <span className="enabled-models-row-text">
+                  <span className="enabled-models-row-name">{model.name}</span>
+                  <code className="enabled-models-row-id">{model.id}</code>
+                </span>
+                <ModelContextWindow
+                  modelName={model.name}
+                  effective={model.contextWindow}
+                  value={contextValue}
+                  disabled={contextSettings.disabled}
+                  describedBy={contextNoteId}
+                  onChange={(value) => contextSettings.onChange(model.id, value)}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="enabled-models-section">

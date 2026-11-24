@@ -315,7 +315,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── Provider detail ───────────────────────────────────────────────────────────
 
-function ProviderDetail({ name, editingName, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels }: {
+function ProviderDetail({ name, editingName, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels, contextOnly = false }: {
   name: string; editingName: string; provider: ProviderEntry;
   onChange: (p: ProviderEntry) => void; onEditingNameChange: (n: string) => void;
   onRename: (n: string) => void; onDelete: () => void;
@@ -552,6 +552,7 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
       <EnabledModelsSection
         providerId={name}
         controller={enabledModels}
+        contextOnly={contextOnly}
         contextSettings={{
           overrides: provider.modelOverrides,
           disabled: false,
@@ -1370,6 +1371,8 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
  * hold two views of pi's enabledModels, or a Save's resync would re-enable
  * what the table just switched off (review r1#1). */
   enabledModels: EnabledModelsController;
+  /** The Provider subpage edits context windows only: the chat switches live in the model table (T3). */
+  contextOnly?: boolean;
 }) {
   const { t } = useI18n();
   const { closeDetail, openDetail } = useConfigDetailNavigation();
@@ -1512,6 +1515,15 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
     });
   }, []);
 
+  const addProvider = useCallback(() => {
+    let name = "custom";
+    let suffix = 1;
+    while (Object.hasOwn(config.providers ?? {}, name)) name = `custom-${suffix++}`;
+    setConfig((previous) => ({ ...previous, providers: { ...previous.providers, [name]: { api: "openai-completions" } } }));
+    setSelection({ type: "provider", name });
+    openDetail();
+  }, [config.providers, openDetail]);
+
   const addDiscoveredModels = useCallback((providerName: string, discovered: DiscoveredModel[]) => {
     setConfig((prev) => {
       const known = new Set((prev.providers?.[providerName]?.models ?? []).map((model) => model.id));
@@ -1629,6 +1641,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
         key={selection.providerId}
         providerId={selection.providerId}
         controller={enabledModels}
+        contextOnly={embedded}
         contextSettings={{
           overrides: config.providers?.[selection.providerId]?.modelOverrides,
           disabled: loadError !== null,
@@ -1653,6 +1666,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
           onDelete={() => deleteProvider(selection.name)}
           onAddModels={(models) => addDiscoveredModels(selection.name, models)}
           enabledModels={enabledModels}
+          contextOnly={embedded}
         />
       );
     }
@@ -1671,11 +1685,88 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
     );
   })();
 
+  // The Provider subpage (polyforge#258 T3): one flat editor, no second
+  // sidebar and no nested panel shell. Its provider and model choices are
+  // page selectors; the footer below is this subpage's own form footer.
+  if (embedded) {
+    const options: Array<{ value: string; label: string; selection: Selection }> = [];
+    for (const provider of activeOAuth) options.push({ value: `oauth:${provider.id}`, label: `${provider.name} · OAuth`, selection: { type: "oauth", providerId: provider.id } });
+    for (const provider of activeApiKey) options.push({ value: `apikey:${provider.id}`, label: `${provider.displayName} · API key`, selection: { type: "apikey", providerId: provider.id } });
+    for (const [providerName] of providers) options.push({ value: `provider:${providerName}`, label: providerName, selection: { type: "provider", name: providerName } });
+    const selectionKey = (current: Selection | null) => !current ? ""
+      : current.type === "oauth" || current.type === "apikey" ? `${current.type}:${current.providerId}`
+        : current.type === "provider" ? `provider:${current.name}` : `model:${current.providerName}:${current.index}`;
+    const customProvider = (selection?.type === "provider" || selection?.type === "model")
+      ? (selection.type === "provider" ? selection.name : selection.providerName) : null;
+    const customEntry = customProvider ? config.providers?.[customProvider] : undefined;
+    return (
+      <div className="config-panel-root is-embedded" data-models-page="providers" data-provider-page="flat">
+        <div className="config-panel-surface">
+          <div className="models-provider-picker">
+            <label className="models-provider-picker-field">
+              <span>{t("models.providerLabel")}</span>
+              <select aria-label={t("models.providerLabel")} disabled={loading} value={selectionKey(selection)}
+                onChange={(event) => {
+                  const next = options.find((option) => option.value === event.target.value)?.selection ?? null;
+                  setSelection(next);
+                  if (next) openDetail();
+                }}>
+                <option value="" disabled>{t("i18n.selectProviderModel")}</option>
+                {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <ConfigButton disabled={loading || loadError !== null} onClick={addProvider}>{t("i18n.addProvider")}</ConfigButton>
+            {onOpenAccount && <ConfigButton onClick={onOpenAccount}>{t("settings.tabAccount")}</ConfigButton>}
+            {customEntry && (
+              <label className="models-provider-picker-field">
+                <span>{t("i18n.model")}</span>
+                <select aria-label={t("i18n.model")} value={selection?.type === "model" ? String(selection.index) : ""}
+                  onChange={(event) => {
+                    if (event.target.value === "__new__") { addModel(customProvider); openDetail(); return; }
+                    setSelection({ type: "model", providerName: customProvider, index: Number(event.target.value) });
+                    openDetail();
+                  }}>
+                  <option value="" disabled>{t("i18n.selectProviderModel")}</option>
+                  {(customEntry.models ?? []).map((model, index) =>
+                    <option key={index} value={index}>{modelSidebarLabel(model) || t("i18n.newModel")}</option>)}
+                  <option value="__new__">+ {t("i18n.model")}</option>
+                </select>
+              </label>
+            )}
+          </div>
+          <ConfigDetail>
+            <ConfigDetailStack className="is-fill">
+              {loading ? null : detailContent ?? (
+                <ConfigEmptyState>{t("i18n.selectProviderModel")}</ConfigEmptyState>
+              )}
+            </ConfigDetailStack>
+          </ConfigDetail>
+          <div data-provider-footer="">
+            <ConfigFooter status={(loadError || saveError) ? (
+              <span style={{ color: "#f87171" }}>
+                {loadError ? t("models.configUnreadable", { error: loadError }) : saveError}
+              </span>
+            ) : t("models.applyHelp")}>
+              <ConfigButton
+                variant="primary"
+                onClick={handleSave}
+                disabled={saving || savedOk || loadError !== null}
+                className={savedOk ? "is-success" : undefined}
+              >
+                 <span>{savedOk ? t("i18n.saved") : saving ? t("i18n.saving") : t("i18n.save")}</span>
+              </ConfigButton>
+            </ConfigFooter>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
     <ConfigPanelShell embedded={embedded} title={t("common.models")} subtitle="~/.pi/agent/models.json" closeLabel={t("i18n.close")} onClose={onClose}>
 
-        <EnabledModelsBanner controller={enabledModels} />
+        {!embedded && <EnabledModelsBanner controller={enabledModels} />}
 
         {/* Body */}
         <ConfigSplitView>
@@ -1683,14 +1774,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
           {/* Left: tree */}
           <ConfigSidebar>
             <ConfigSidebarList>
-              <ConfigButton disabled={loading || loadError !== null} onClick={() => {
-                let name = "custom";
-                let suffix = 1;
-                while (Object.hasOwn(config.providers ?? {}, name)) name = `custom-${suffix++}`;
-                setConfig((previous) => ({ ...previous, providers: { ...previous.providers, [name]: { api: "openai-completions" } } }));
-                setSelection({ type: "provider", name });
-                openDetail();
-              }}>{t("i18n.addProvider")}</ConfigButton>
+              <ConfigButton disabled={loading || loadError !== null} onClick={addProvider}>{t("i18n.addProvider")}</ConfigButton>
               {onOpenAccount && <ConfigButton onClick={onOpenAccount}>{t("settings.tabAccount")}</ConfigButton>}
               {/* Active OAuth subscriptions */}
               {activeOAuth.map((p) => {
