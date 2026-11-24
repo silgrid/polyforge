@@ -157,10 +157,23 @@ func w224AwaitSummary(t *testing.T, inst *v1Install, d *v1Daemon, wi string, bou
 // w224AwaitNextSummary waits for the summarize call a marked request
 // started after an earlier call FAILED: the projection answers the
 // pre-call state while the call is in flight (lane.go Projection), so the
-// earlier call's error is still held then.
+// earlier call's error is still held then and is no fact of the new call.
+// It polls plain fetches until the new call's success lands — a summary —
+// and answers that snapshot for the caller's exact assertions; bound caps
+// the wait, it is no fixed delay.
 func w224AwaitNextSummary(t *testing.T, inst *v1Install, d *v1Daemon, wi string, bound time.Duration) w224Snap {
 	t.Helper()
-	return w224AwaitSummary(t, inst, d, wi, bound)
+	deadline := time.Now().Add(bound)
+	var last w224Snap
+	for time.Now().Before(deadline) {
+		last = w224SnapOf(t, inst, d, wi)
+		if last.Summary != nil {
+			return last
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Fatalf("the next summarize call landed no summary in the snapshot of %s within %v (held error %q; daemon log tail: %s)", wi, bound, w224Str(last.SummaryError), d.logTail())
+	return w224Snap{}
 }
 
 // w224AssertSummaryLine pins the held line's content contract and the
@@ -279,6 +292,14 @@ func w224NewWI(t *testing.T, inst *v1Install, goal string, plan func(wi string) 
 // a turn a real agent appends mid-step.
 func w224GrowCmd(sleepS int) string {
 	return fmt.Sprintf(`sleep %d; for f in "$PI_CODING_AGENT_SESSION_DIR"/*.jsonl; do printf '%%s\n' '{"t":"turn","at":"w224","text":"scripted transcript growth"}' >> "$f"; done`, sleepS)
+}
+
+// w224GrowOnBarrierCmd is w224GrowCmd's growth gated on an event instead
+// of a fixed sleep: it waits for the barrier file the test creates (polled
+// every 0.1 s, bounded: past boundS seconds it exits 1 without growing),
+// then appends the same scripted turn to the transcript.
+func w224GrowOnBarrierCmd(barrier string, boundS int) string {
+	return fmt.Sprintf(`i=0; while [ ! -e '%s' ]; do i=$((i+1)); if [ "$i" -gt %d ]; then exit 1; fi; sleep 0.1; done; for f in "$PI_CODING_AGENT_SESSION_DIR"/*.jsonl; do printf '%%s\n' '{"t":"turn","at":"w224","text":"scripted transcript growth"}' >> "$f"; done`, barrier, boundS*10)
 }
 
 // w224AwaitRun polls the fake agent's journal until the Run command whose
@@ -450,9 +471,13 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	w224Summarize(t, d, "pi:e2e-w224-fail", "claude:e2e-w224-claude-slow")
 	d.start()
 
+	// The transcript grows when the test creates growBarrier — once the
+	// 60 s interval since the first call has passed — not after a fixed
+	// sleep that a loaded host can outrun.
+	growBarrier := filepath.Join(t.TempDir(), "w224-grow")
 	wi := w224NewWI(t, inst, "w224: a failed call walks to the next candidate", func(wi string) []map[string]any {
 		return []map[string]any{
-			{"do": "envelope", "id": "fix", "run": []string{w224GrowCmd(75)}, "ms": 30000},
+			{"do": "envelope", "id": "fix", "run": []string{w224GrowOnBarrierCmd(growBarrier, 150)}, "ms": 30000},
 			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
@@ -465,6 +490,10 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	// (the harness's own stderr wording, never faked), no summary, and
 	// the failure breaks nothing (the snapshot stays whole).
 	w224Demand(t, inst, d, wi)
+	// The first call started inside that request (Marked sets the
+	// interval clock before the route answers), so the interval is
+	// measured from no later than here.
+	firstDemandAt := time.Now()
 	s := w224AwaitSummary(t, inst, d, wi, 15*time.Second)
 	if s.Summary != nil {
 		t.Fatalf("a summary is held for a failed call: %q", *s.Summary)
@@ -491,10 +520,18 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	// The walk: the interval passes, the transcript grows, and the next
 	// call dispatches the NEXT candidate — the claude one, context flag
 	// --bare (token auth mode per the ruling), its success clearing the
-	// error.
+	// error. The growth is released only once 61 s have passed since the
+	// first request (the spec's 60 s spacing plus a second), and the
+	// marked request follows the growth's completion. The slow candidate
+	// (12 s in the fake) keeps the call in flight past the first polls,
+	// while the projection still answers the first call's error.
+	time.Sleep(time.Until(firstDemandAt.Add(61 * time.Second)))
+	if err := os.WriteFile(growBarrier, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	w224AwaitRun(t, capDir, "PI_CODING_AGENT_SESSION_DIR", 85*time.Second)
 	w224Demand(t, inst, d, wi)
-	w224AssertSummaryLine(t, w224AwaitNextSummary(t, inst, d, wi, 15*time.Second), "e2e-w224-claude-slow", "--bare")
+	w224AssertSummaryLine(t, w224AwaitNextSummary(t, inst, d, wi, 40*time.Second), "e2e-w224-claude-slow", "--bare")
 
 	// No credential value appears in the dispatch argv, the daemon log or
 	// any artifact: the sentinel lives only in the settings.json the test
