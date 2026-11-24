@@ -923,7 +923,9 @@ test("the Cell lifecycle reads /api/polyforge/cells, gates on the capability, ke
   assert.match(add, /setDraft\(\(current\) => \(\{ \.\.\.current, apiKey: "" \}\)\)/, "the key is cleared on every submit");
   assert.match(source, /<AddCellPane\s*\n\s*read=\{cellsRead !== null\}\s*\n\s*supported=\{cellsSupported\}/, "the pane gets the capability gate");
   assert.match(source, /\{cell && cellsSupported && \(\s*\n\s*<ConfigDetailActions>/, "repair/remove only with the capabilities");
-  assert.match(source, /profile !== POLYFORGE_DEFAULT_PROFILE && \(confirmRemove === profile \?/, "remove needs a confirmation and never offers default");
+  // polyforge#259 T4 AC1: the Cell's removal is the shared ⋯ menu, which asks
+  // once before it writes, and the default Cell is never offered.
+  assert.match(source, /profile !== POLYFORGE_DEFAULT_PROFILE && \(\s*\n\s*<ConfigDangerMenu/, "remove needs a confirmation and never offers default");
   assert.doesNotMatch(source, /cells\/[^"`]*cleanup|"cleanup"/, "no permanent-cleanup control on the page");
 });
 
@@ -1082,6 +1084,9 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
   const jiti = createJiti(import.meta.url, {
     jsx: { runtime: "automatic" },
     alias: {
+      // build finding u12#3: the page's new dirty model import (tsconfig's `@/`
+      // alias, which would otherwise pull the real i18n provider in here).
+      "@/lib/settings-dirty": modulePath("lib/settings-dirty.ts"),
       react: fixture("react-hook-shim.mjs"),
       "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
       "@/hooks/useI18n": fixture("polyforge-tasks-stubs.mjs"),

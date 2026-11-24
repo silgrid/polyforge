@@ -794,8 +794,11 @@ function detailControls(html) {
   const actions = markup.match(/<div class="config-detail-actions">([\s\S]*?)<\/div><\/div>(?:<div id="([^"]+)" class="config-detail-heading-note">([^<]*)<\/div>)?/);
   assert.ok(actions, "the detail header holds Remove and the switch");
   const [, buttons, noteId, note] = actions;
+  const remove = buttons.match(/<button[^>]*class="config-danger-menu-trigger"[^>]*>/)?.[0];
   return {
-    remove: buttons.match(/<button[^>]*class="config-button config-button-danger[^"]*"[^>]*>([^<]*)<\/button>/),
+    // polyforge#259 T4 AC1: the removal button is the ⋯ menu's trigger now; its
+    // note id and disabled state ride on that trigger.
+    remove: remove ? [remove, "Remove"] : null,
     toggle: buttons.match(/<button type="button" role="switch"[^>]*>/)?.[0],
     noteId,
     note,
@@ -837,7 +840,8 @@ test("why a server cannot be changed is the visible note its controls point at",
   }));
   assert.equal(untrustedProject.note, "This project is not trusted, so Pi Web does not change its .pi/mcp.json.");
   assert.match(untrustedProject.toggle, /disabled=""/);
-  assert.match(untrustedProject.remove[0], new RegExp(`disabled="" aria-describedby="${untrustedProject.noteId}"`));
+  // build finding u12#1: the trigger lists the note before its disabled state.
+  assert.match(untrustedProject.remove[0], new RegExp(`aria-describedby="${untrustedProject.noteId}"[^>]*disabled=""`));
   // ...while the global servers beside it can still be changed.
   assert.doesNotMatch(detailControls(writeView({ data: { project: { cwd: "/Users/me/repo", trust: untrusted } } })).toggle, /disabled/);
   // An unreadable trust store blocks the project the same way, with its own reason.
@@ -871,7 +875,9 @@ test("why a server cannot be changed is the visible note its controls point at",
 test("while a change is on its way every control waits, and the one in use says so", () => {
   const removing = writeView({ view: { busy: "remove:global\0docs" } });
   const controls = detailControls(removing);
-  assert.equal(controls.remove[1], "Removing…");
+  // build finding u12#2: the ⋯ trigger's word does not change while a removal
+  // runs — the in-flight state is the disabled trigger itself.
+  assert.equal(controls.remove[1], "Remove");
   assert.match(controls.remove[0], /disabled=""/);
   assert.match(controls.toggle, /disabled=""/);
   assert.match(decode(removing), /<button type="button" disabled="" class="config-button config-button-secondary config-button-default">Refresh<\/button>/);
@@ -1051,7 +1057,8 @@ test("an untested server offers Test in its header, beside Remove", () => {
   const { text: shown, button } = statusRow(html);
   assert.equal(button.label, "Test connection");
   assert.doesNotMatch(button.attributes, /disabled|aria-describedby/);
-  assert.match(decode(html), /<div class="config-detail-actions"><button type="button" class="config-button config-button-secondary config-button-small">Test connection<\/button><button[^>]*class="config-button config-button-danger/);
+  // polyforge#259 T4 AC1: Remove sits behind the detail header's ⋯ menu.
+  assert.match(decode(html), /<div class="config-detail-actions"><button type="button" class="config-button config-button-secondary config-button-small">Test connection<\/button><button[^>]*class="config-danger-menu-trigger"/);
   assert.equal(shown, "Not tested yet.");
   assert.equal(statusRow(html).label, "On");
   // A server that runs a shell command on every connection is labelled: its tests run one at a time.
