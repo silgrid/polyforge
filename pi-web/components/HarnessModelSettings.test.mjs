@@ -8,18 +8,37 @@ const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconf
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
-const { HarnessModelSettings, HarnessModelTable } = await jiti.import("./HarnessModelSettings.tsx");
+const { HarnessModelSettings, HarnessModelTable, ModelPageNav } = await jiti.import("./HarnessModelSettings.tsx");
+const { ModelStepTierDrawer } = await jiti.import("./ModelStepTierDrawer.tsx");
 
-test("模型页包含默认模型、三列清单和 pi 编辑区", () => {
-  const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
-  assert.match(html, /data-model-page="unified"/);
-  assert.match(html, /Default model/);
-  assert.match(html, /Model list/);
-  assert.match(html, /Chat availability/);
-  assert.match(html, /pi/);
+test("four model subpages: the sidebar nav carries only the pages, and only the chosen pane renders", () => {
+  const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
+  assert.match(page, /data-model-page="unified"/);
+  assert.ok(!/<h2[\s>]/.test(page), "the page-level 「模型」 h2 is gone (the tab already names the page)");
+  assert.equal((page.match(/data-model-subpage=/g) ?? []).length, 4, "the sidebar holds the four subpages and nothing else");
+  for (const key of ["default", "list", "providers", "claude"]) assert.match(page, new RegExp(`data-model-subpage="${key}"`), `${key} is one of the four subpages`);
+  assert.match(page, /data-model-page-pane="default"/, "the default subpage is the one mounted on open");
+  assert.ok(!page.includes('data-model-page-pane="list"'), "the other panes are not mounted beside it");
+
+  const nav = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ModelPageNav, { page: "list", onSelect: () => {} })));
+  assert.match(nav, /data-model-subpage="list"[^>]*aria-current="page"|aria-current="page"[^>]*data-model-subpage="list"/, "the chosen subpage is marked active");
+  assert.ok(!nav.includes("Opus"), "the sidebar never copies a model row");
+
+  const list = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null, initialSubpage: "list" })));
+  assert.match(list, /data-model-page-pane="list"/);
+  assert.match(list, /Chat availability/, "the model table lives on the list subpage");
 });
 
-test("unified table renders both harnesses, exact provider identity and unsupported Claude chat", () => {
+test("the Provider subpage is flat: no second split view, only its own form footer", () => {
+  const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null, initialSubpage: "providers" })));
+  assert.match(page, /data-model-page-pane="providers"/);
+  assert.match(page, /data-provider-page="flat"/);
+  assert.equal((page.match(/config-split-view/g) ?? []).length, 1, "the Provider editor renders no nested split view");
+  assert.equal((page.match(/class="config-footer"/g) ?? []).length, 1, "the Provider subpage has one form footer, not a nested one");
+  assert.match(page, /data-provider-footer=""/);
+});
+
+test("unified table renders both harnesses, exact provider identity and always-available Claude chat", () => {
   const rows = [
     { provider: "anthropic", id: "opus", name: "Opus", harnesses: ["pi", "claude"], chatAvailable: true, reasoning: ["high"], isDefault: true },
     { provider: "gateway", id: "opus", name: "Gateway Opus", harnesses: ["pi"], chatAvailable: false, reasoning: ["minimal"], isDefault: false },
@@ -29,7 +48,8 @@ test("unified table renders both harnesses, exact provider identity and unsuppor
   assert.match(html, /anthropic/);
   assert.match(html, /Gateway Opus/);
   assert.match(html, /Sonnet/);
-  assert.match(html, /Not supported/);
+  assert.match(html, /Always available/);
+  assert.ok(!html.includes("Not supported"), "the old 「不支持」 wording is gone");
   assert.match(html, /high/);
   assert.match(html, /minimal/);
   assert.match(html, /adaptive/);
@@ -37,6 +57,43 @@ test("unified table renders both harnesses, exact provider identity and unsuppor
   assert.match(html, /Chat availability/);
 });
 
+
+// polyforge#258 (T3) AC2: the default model and reasoning are not written on
+// change; the subpage offers one explicit save action, disabled while the
+// draft is empty (owner plan review item 1 A: dirty + 「保存（N）」).
+test("the default model is saved explicitly, never on change", () => {
+  const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null, initialSubpage: "default" })));
+  const tag = html.match(/<button[^>]*data-model-save=""[^>]*>/)?.[0] ?? "";
+  assert.ok(tag, "the default subpage carries the explicit save action");
+  assert.match(tag, /disabled/, "nothing changed yet, so the save action is disabled");
+  assert.match(html, /Save/, "the action is named as a save");
+});
+
+// polyforge#258 (T3) AC1/AC2: claude's chat cell says 「始终可用」 with the
+// reason in its tooltip (owner plan review item 4: never 「不支持」), and pi's
+// reasoning select names the global level it follows instead of printing a
+// second value beside the select. Expected text comes from the owner's ruling
+// and the Global level passed in (`high`), never from the component's output.
+test("claude chat is always available with its reason, and pi reasoning follows the global level", () => {
+  const rows = [
+    { provider: "gateway", id: "one", name: "Gateway One", harnesses: ["pi"], chatAvailable: true, reasoning: ["high"], isDefault: false },
+    { provider: "anthropic", id: "opus", name: "Opus", harnesses: ["claude"], chatAvailable: false, reasoning: ["xhigh"], isDefault: false },
+  ];
+  const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelTable, {
+    rows,
+    levels: { "gateway:one": ["low", "medium", "high"] },
+    piSettings: { reasoningEffort: { raw: "high" }, perModelReasoningEffort: {} },
+    onEffort: () => {},
+  })));
+  assert.match(html, /data-claude-chat="always"/, "the claude cell marks its always-on state");
+  assert.match(html, /Always available/);
+  assert.match(html, /Claude sessions do not disable a model/, "the reason is readable in the tooltip");
+  assert.ok(!html.includes("Not supported"), "the unexplained 「不支持」 is gone");
+  assert.match(html, /Follow global \(high\)/, "the reasoning select's default names the global level it follows");
+  assert.match(html, /data-reasoning="readonly">xhigh/, "claude's reasoning is a read-only value, not a select");
+  const claudeRow = html.slice(html.indexOf("anthropic"));
+  assert.ok(!/data-reasoning="[^"]*"[^>]*><select/.test(claudeRow), "no reasoning select on a claude row");
+});
 
 // polyforge#256 (T1, B7/B1): the model list's step-tier column is read-only.
 // Expected labels come from the owner's ruling — a single shared tier shows
@@ -66,7 +123,7 @@ const TIER = {
 };
 const table = (rows, tier) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelTable, { rows, tier })));
 
-test("tier cells are read-only badges: a shared tier by name, differing harnesses by 归属, unset as —, and zero write controls", () => {
+test("tier cells are small labels: a shared tier by name, differing harnesses by 归属, unset as —, and no inline editor", () => {
   const html = table(TIER_ROWS, TIER);
   assert.match(html, /Step tier/, "the fifth column's header");
   assert.match(html, /data-step-tier-badge="all">default</, "a row whose every harness sits in the same single tier shows the tier name");
@@ -75,16 +132,17 @@ test("tier cells are read-only badges: a shared tier by name, differing harnesse
   assert.match(merged, /data-step-tier-badge="pi">pi: default</, "pi's own tier is named with its harness");
   assert.match(merged, /data-step-tier-badge="claude">claude: fast-chat</, "claude's own tier is named with its harness");
   assert.match(html, /data-step-tier-state="unset"/, "an unset row shows 「—」");
-  // no interactive control survives: no select, no apply-to, no button, no checkbox
-  assert.ok(!html.includes("data-step-tier-select"), "the tier select is gone");
-  assert.ok(!html.includes("Apply to"), "the apply-to control is gone");
+  // the cell is one small label that opens the drawer: no inline editor
+  assert.ok(!html.includes("data-step-tier-select"), "the inline tier select is gone");
+  assert.ok(!html.includes("Apply to"), "the inline apply-to control is gone");
   assert.ok(!html.includes("<select"), "no select renders in the tier column");
   assert.ok(!html.includes('type="checkbox"'), "no checkbox renders in the tier column");
   assert.ok(!html.includes('type="radio"'), "no radio renders in the tier column");
-  assert.ok(!html.includes("<button"), "no button renders in the tier column");
+  assert.equal((html.match(/<button/g) ?? []).length, TIER_ROWS.length, "each capable row's cell is exactly one button");
+  assert.match(html, /<button[^>]*data-step-tier-cell="editable"[^>]*aria-haspopup="dialog"/, "the label opens a dialog");
   // the other columns are untouched
   assert.match(html, /Chat availability/);
-  assert.match(html, /Not supported/);
+  assert.match(html, /Always available/);
 });
 
 test("a harness in several tiers keeps every real 归属, default first and the rest alphabetical", () => {
@@ -104,7 +162,7 @@ test("an incapable catalog read leaves the tier column read-only, the other colu
   assert.match(html, /data-step-tier-state="readonly"/, "the cell is a read-only dash");
   assert.ok(!html.includes("data-step-tier-select"), "no tier select without a capable catalog");
   assert.match(html, /Chat availability/, "the other columns are untouched");
-  assert.match(html, /Not supported/, "the claude chat note stays");
+  assert.match(html, /Always available/, "the claude chat note stays");
 });
 
 test("old pf reason follows locale: version, not-installed and unreadable stay distinct and localized", () => {
@@ -127,36 +185,37 @@ test("old pf reason follows locale: version, not-installed and unreadable stay d
   assert.match(en({ pfVersion: null }), /unparseable version/i, "an unknown version is named, never a fake number");
 });
 
-// polyforge#257 (T2 止血) AC2: the model page's two structural leftovers — a
-// page-level 「模型」 h2 that no other tab has, and sidebar provider groups
-// drawn as bare <strong>. The expected markup is the shared settings
-// component's own contract (ConfigSidebarGroupLabel renders a group heading
-// with a `.config-sidebar-group-label-text` name), so the assertion is derived
-// from SettingsUi.tsx, not from this component's output.
-const { HarnessModelSidebar } = await jiti.import("./HarnessModelSettings.tsx");
+// polyforge#257 (T2 止血) pinned the old provider sidebar's shared group
+// label; polyforge#258 (T3) replaces that sidebar with the four subpages, so
+// the old shape is gone (no compatibility path). The subpage assertions above
+// are the replacement.
 
-const SIDEBAR_ROWS = [
-  { provider: "anthropic", id: "opus", name: "Opus", harnesses: ["pi", "claude"], chatAvailable: true, reasoning: [], isDefault: true },
-  { provider: "gateway", id: "sonnet", name: "Sonnet", harnesses: ["pi"], chatAvailable: false, reasoning: [], isDefault: false },
-];
-
-test("the model page has no page-level h2 and its sidebar groups use the shared label", () => {
-  const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
-  assert.ok(!/<h2[\s>]/.test(page), "the page-level 「模型」 h2 is gone (the tab already names the page)");
-  assert.match(page, /data-model-page="unified"/, "the unified page root stays");
-
-  const sidebar = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSidebar, {
-    rows: SIDEBAR_ROWS,
-    selectedProvider: null,
-    onSelect: () => {},
+// polyforge#258 (T3) AC2: the step-tier cell is a label; the tier choice and
+// 「应用到」 live inside the right-side drawer (owner plan review item 3 A).
+test("the step-tier drawer edits the tier and keeps 应用到 inside it", () => {
+  const row = { provider: "gateway", id: "one", name: "Gateway One", harnesses: ["pi", "claude"], chatAvailable: false, reasoning: [], isDefault: false };
+  const tier = { capable: true, reason: null, tiers: [
+    { tier: "default", candidates: ["pi:gateway/one"] },
+    { tier: "fast-chat", candidates: ["claude:one"] },
+  ] };
+  const drawer = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ModelStepTierDrawer, {
+    row, tier,
+    tierRead: async () => ({ ok: true, items: [], hash: null }),
+    tierWrite: async () => ({ ok: true }),
+    onClose: () => {},
+    onSaved: () => {},
   })));
-  for (const provider of ["anthropic", "gateway"]) {
-    assert.match(
-      sidebar,
-      new RegExp(`<div class="config-sidebar-group"><div class="config-sidebar-group-label"><span class="config-sidebar-group-label-text">${provider}</span></div>`),
-      `${provider} is a shared sidebar group heading, not a bare <strong>`,
-    );
-  }
-  assert.ok(!/<strong>/.test(sidebar), "no bare <strong> group heading survives");
-  assert.match(sidebar, />Opus · pi, claude</, "each model row keeps its name and harnesses");
+  assert.match(drawer, /role="dialog"/);
+  assert.match(drawer, /data-step-tier-drawer=""/);
+  assert.match(drawer, /data-step-tier-select=""/, "the drawer carries the tier select");
+  assert.match(drawer, /Apply to/, "「应用到」 is inside the drawer");
+  assert.match(drawer, /data-step-tier-current="pi">pi: default/, "each harness's current tier shows");
+  assert.match(drawer, /data-step-tier-current="claude">claude: fast-chat/);
+
+  const table = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelTable, {
+    rows: [row], tier, onOpenTier: () => {},
+  })));
+  assert.match(table, /<button[^>]*data-step-tier-cell="editable"[^>]*data-step-tier-open=""/, "the cell opens the drawer");
+  assert.ok(!table.includes("<select"), "no tier select in the cell");
+  assert.ok(!table.includes("Apply to"), "no apply-to in the cell");
 });

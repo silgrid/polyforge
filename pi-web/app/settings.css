@@ -3709,3 +3709,128 @@ select.mcp-add-input {
 .polyforge-config-region-row textarea { flex-basis: 100%; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; resize: vertical; }
 .polyforge-config-region-row input:focus-visible,
 .polyforge-config-region-row textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* ---- 模型页的 Provider 子页（polyforge#258 T3）----
+   页内选择器代替旧版第二层侧栏；子页只有自己的表单 footer。 */
+.models-provider-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+.models-provider-picker-field {
+  display: flex;
+  flex: 1 1 200px;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.models-provider-picker-field > span { color: var(--text-muted); font-size: 11px; }
+.models-provider-picker select {
+  min-width: 0;
+  max-width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+.models-provider-picker select:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.is-provider-page .config-panel-root.is-embedded { flex-direction: column; }
+.is-provider-page .config-panel-root.is-embedded > .config-panel-surface { padding: 0 2px; }
+.settings-model-info { color: var(--text-dim); cursor: help; }
+.settings-model-table [data-reasoning="readonly"] {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.settings-model-savebar { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* ---- 步骤能力档小标签与右侧抽屉（polyforge#258 T3）---- */
+.settings-step-tier-button {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-step-tier-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.settings-step-tier-button:hover [data-step-tier-badge] { border-color: var(--accent); color: var(--accent); }
+.model-tier-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.3);
+}
+.model-tier-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 24px));
+  height: 100%;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.18);
+}
+.model-tier-drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+.model-tier-drawer-title { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.model-tier-drawer-title > strong { color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+.model-tier-drawer-title > code { color: var(--text-dim); font-family: var(--font-mono); font-size: 10px; overflow-wrap: anywhere; }
+.model-tier-drawer-body { display: flex; flex: 1; flex-direction: column; gap: 14px; min-height: 0; padding: 16px; overflow-y: auto; }
+.model-tier-drawer-current { display: flex; flex-direction: column; gap: 3px; color: var(--text-muted); font-size: 11px; }
+.model-tier-drawer-field { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); font-size: 11px; }
+.model-tier-drawer-field > select {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+.model-tier-drawer-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
+@media (max-width: 640px) {
+  .model-tier-drawer { width: 100%; }
+}
+.settings-model-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-model-bulk-field { display: flex; flex: 0 1 220px; flex-direction: column; gap: 3px; min-width: 0; }
+.settings-model-bulk-field > span { color: var(--text-muted); font-size: 11px; }
+.settings-model-bulk-field > select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
