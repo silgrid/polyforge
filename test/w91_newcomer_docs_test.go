@@ -180,6 +180,13 @@ func TestW91SupportedPlatforms(t *testing.T) {
 	if !regexp.MustCompile(`(?i)\blinux\b`).MatchString(norm) || !regexp.MustCompile(`(?i)\bverified\b`).MatchString(norm) {
 		t.Fatalf("the platform section must name Linux as the verified platform:\n%s", norm)
 	}
+	// The verified architecture is named, as docs/workstation.md's own
+	// platform section names it (epic #91 fix build, review r1#N1): the
+	// arm64 index is built but no acceptance pass has run on it, so
+	// "Linux" alone claims more than the smoke proved.
+	if !regexp.MustCompile(`(?i)\bamd64\b`).MatchString(norm) {
+		t.Fatalf("the platform section must name the verified architecture (Linux amd64, the same reading docs/workstation.md gives) — it names no amd64:\n%s", norm)
+	}
 	for _, name := range []string{"macOS", "Windows"} {
 		if !regexp.MustCompile(`(?i)\b` + name + `\b`).MatchString(norm) {
 			t.Fatalf("the platform section must name %s as unverified for the workstation image:\n%s", name, norm)
@@ -193,6 +200,41 @@ func TestW91SupportedPlatforms(t *testing.T) {
 	}
 	if !strings.Contains(norm, "quickstart-macos.md") {
 		t.Fatalf("the macOS host path stays supported and links its own Quickstart — the platform section never links quickstart-macos.md:\n%s", norm)
+	}
+}
+
+// TestW91FirstOpenOnboarding: the mainline page tells the newcomer what the
+// first open of Pi Web in the image actually does — the ticket's first-time
+// setup (#167): four steps in order (the AIHub connection, the account, the
+// workspace, the first ticket), each one skippable, a skipped step staying
+// "Not done", the wizard reopened from Settings › General, the first ticket
+// filed in the develop lane's dialog, and the wizard the image's own. The page
+// is where #166 and #167 meet (epic #91 fix build, review r1#B2): written
+// before the wizard landed, it said such a screen was a later unit, so the two
+// children's landings denied each other. It never says so again.
+func TestW91FirstOpenOnboarding(t *testing.T) {
+	body := w91Read(t, "docs/getting-started.md")
+	sec := w91Norm(w91Section(t, body, "first boot"))
+	for _, want := range []struct{ what, re string }{
+		{"the wizard the first open shows", `(?i)first-time setup`},
+		{"the four steps in order", `(?i)\bAIHub\b.*\baccount\b.*\bworkspace\b.*\bticket\b`},
+		{"a step may be skipped", `(?i)\bskipped?\b`},
+		{"a skipped step stays not done", `(?i)not done`},
+		{"the reopen entry sits in Settings › General", `(?i)settings.{0,40}\bgeneral\b`},
+		{"the wizard can be reopened", `(?i)\breopen`},
+		{"the first ticket goes through the develop lane", `(?i)\bdevelop\b`},
+		{"the wizard belongs to the image", `(?i)\bimage\b`},
+	} {
+		if !regexp.MustCompile(want.re).MatchString(sec) {
+			t.Fatalf("the first-boot section must carry %s — the newcomer reads what the first Pi Web open does there:\n%s", want.what, sec)
+		}
+	}
+	// The seam itself: the page never denies the wizard exists.
+	norm := w91Norm(body)
+	for _, stale := range []string{`(?i)\ba later unit\b`, `(?i)nothing here fabricates`} {
+		if m := regexp.MustCompile(stale).FindString(norm); m != "" {
+			t.Fatalf("the mainline page must not claim the first-open wizard is not there — #167 ships it in the image; the page still says %q:\n%s", m, norm)
+		}
 	}
 }
 
