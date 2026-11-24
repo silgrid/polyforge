@@ -19,6 +19,7 @@ export const zhCNLocale: LocalePlugin = {
     "settings.discard": "丢弃",
     "settings.saved": "已保存",
     "settings.undo": "撤销",
+    "settings.undoSuperseded": "这一项已被别处改过，撤销已放弃；请重新读取后再改。",
     "settings.title": "设置",
     "settings.general": "常规",
     "settings.generalDescription": "选择 Pi Web 的显示方式和界面语言。",

@@ -61,7 +61,7 @@ import {
 import { projectTrustReloadKey } from "./settings-ui-helpers";
 import { HarnessApplyTo, applyToCanSubmit, applyToTargets, type HarnessApplyToSelection, type HarnessApplyToResult, type HarnessApplyToTarget } from "./HarnessApplyTo";
 import { SettingsSavedToast } from "./SettingsSavedToast";
-import { recordWrite, undoWrite, type SettingsWrite } from "@/lib/settings-undo";
+import { recordWriteItems, undoPlan, type SettingsWriteItem, type SettingsWriteItems } from "@/lib/settings-undo";
 import { MarkdownBody } from "./MarkdownBody";
 
 type Translate = ReturnType<typeof useI18n>["t"];
@@ -91,6 +91,33 @@ export function rowSwitchTargets(
       ...(row.claude ? {} : { disabled: true, disabledReason: texts.notListed }),
     },
   ];
+}
+
+/**
+ * What each of these harnesses holds right now, as the undo record stores it:
+ * pi's effective state, claude's own native word (polyforge#259 T4, review #5 —
+ * the previous value is read, never derived from the state being written).
+ */
+export function rowSwitchValues(
+  row: Pick<UnifiedSkillRow, "pi" | "claude">,
+  harnesses: readonly ("pi" | "claude")[],
+): SettingsWriteItem[] {
+  const values: SettingsWriteItem[] = [];
+  for (const harness of harnesses) {
+    if (harness === "pi" && row.pi) values.push({ harness, state: row.pi.disableModelInvocation ? "disabled" : "enabled" });
+    else if (harness === "claude" && row.claude) values.push({ harness, state: row.claude.state ?? "enabled" });
+  }
+  return values;
+}
+
+/** One stored value back to the wire shape the skills route takes. */
+function rowWireItem(
+  row: Pick<UnifiedSkillRow, "pi" | "claude" | "scope">,
+  item: SettingsWriteItem,
+): SkillSwitchItemWire | null {
+  if (item.harness === "pi" && row.pi) return { skill: row.pi.filePath, harness: "pi", state: item.state === "enabled" ? "enabled" : "disabled" };
+  if (item.harness === "claude" && row.claude) return { skill: row.claude.name, harness: "claude", state: item.state, scope: row.scope };
+  return null;
 }
 
 /**
@@ -936,7 +963,7 @@ export function SkillsConfig({
   const [claudeSaveError, setClaudeSaveError] = useState<string | null>(null);
   const [applyResults, setApplyResults] = useState<HarnessApplyToResult[] | null>(null);
   // The last switch, undoable inside its toast (polyforge#259 T4 AC1).
-  const [undoRecord, setUndoRecord] = useState<{ record: SettingsWrite; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] } | null>(null);
+  const [undoRecord, setUndoRecord] = useState<{ record: SettingsWriteItems; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] } | null>(null);
   // The group switch that is running, and what the last one left undone.
   const [bulkGroup, setBulkGroup] = useState<string | null>(null);
   const [groupStatus, setGroupStatus] = useState<{ group: string; error: string } | null>(null);
@@ -1134,24 +1161,46 @@ export function SkillsConfig({
       ok: !result.error,
       text: result.error ?? t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten"),
     })));
-    // A landed switch carries its own undo — the same field, the state it
-    // replaced, for as long as the toast lives (T4 AC1).
-    const record = recordWrite({
+    // A landed switch carries its own undo: each harness's real previous value
+    // (pi's effective state, claude's native word), captured before the write
+    // (review #5), for as long as the toast lives (T4 AC1).
+    const record = recordWriteItems({
       field: row.key,
-      previous: state === "enabled" ? "disabled" : "enabled",
+      previous: rowSwitchValues(row, harnesses),
+      written: items.map((item) => ({ harness: item.harness, state: item.state })),
       ok: results.every((result) => !result.error),
       at: Date.now(),
     });
     setUndoRecord(record === null ? null : { record, row, harnesses });
   }, [switchRound, t]);
 
-  /** The toast's one click: write the previous state back through the same path. */
-  const undoSwitch = useCallback((entry: { record: SettingsWrite; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] }) => {
+  /**
+   * The toast's one click: write each harness's previous value back through the
+   * same route — unless the field has moved since (owner 4A: a concurrent change
+   * abandons the undo instead of overwriting it).
+   */
+  const undoSwitch = useCallback(async (entry: { record: SettingsWriteItems; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] }) => {
     setUndoRecord(null);
-    const target = undoWrite(entry.record);
-    if (target === null) return;
-    void applySwitch(entry.row, entry.harnesses, target.value === "enabled" ? "enabled" : "disabled");
-  }, [applySwitch]);
+    const current = rows.find((candidate) => candidate.key === entry.record.field);
+    const currentValues = current ? rowSwitchValues(current, entry.harnesses) : [];
+    const plan = undoPlan(entry.record, currentValues, Date.now());
+    if (!plan.ok) {
+      if (plan.reason === "changed") setSaveError(t("settings.undoSuperseded"));
+      return;
+    }
+    const items = plan.items
+      .map((item) => rowWireItem(entry.row, item))
+      .filter((item): item is SkillSwitchItemWire => item !== null);
+    if (items.length === 0) return;
+    const results = await switchRound([entry.row.key], items);
+    if (results === null) return;
+    const applied: { pi?: "enabled" | "disabled"; claude?: string } = {};
+    for (const item of plan.items) {
+      if (item.harness === "pi") applied.pi = item.state === "enabled" ? "enabled" : "disabled";
+      else applied.claude = item.state;
+    }
+    setRows((prev) => applyRowSwitchResults(prev, results, applied));
+  }, [rows, switchRound, t]);
 
   /** claude's own partition: one native word through the same gated write. */
   const writeClaudeState = useCallback(async (row: UnifiedSkillRow, state: string) => {
@@ -1379,7 +1428,7 @@ export function SkillsConfig({
                 <SettingsSavedToast
                   texts={{ saved: t("settings.saved"), undo: t("settings.undo") }}
                   remainingMs={undoRecord.record.lifetimeMs}
-                  onUndo={() => undoSwitch(undoRecord)}
+                  onUndo={() => void undoSwitch(undoRecord)}
                   onExpire={() => setUndoRecord(null)}
                 />
               )}

@@ -19,6 +19,7 @@ export const enLocale: LocalePlugin = {
     "settings.discard": "Discard",
     "settings.saved": "Saved",
     "settings.undo": "Undo",
+    "settings.undoSuperseded": "That setting changed elsewhere, so the undo was dropped. Read the page again, then change it if you still want to.",
     "settings.title": "Settings",
     "settings.general": "General",
     "settings.generalDescription": "Choose how Pi Web looks and which language it uses.",
