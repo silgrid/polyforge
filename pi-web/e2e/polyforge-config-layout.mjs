@@ -887,7 +887,13 @@ try {
     }) }));
     await page.route("**/api/polyforge/config", (route) => {
       if (route.request().method() !== "POST") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ capable: true, file: { sha256: "e2e-host-sha" }, items: hostItems }) });
-      writes.push(route.request().postDataJSON());
+      const body = route.request().postDataJSON();
+      writes.push(body);
+      // The file takes the value, so the panel's re-read shows the new state
+      // (a static mock would leave the draft dirty for ever).
+      for (const item of hostItems) {
+        if (item.key === body.key) { item.value = body.value; item.source = "file"; item.set = true; }
+      }
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "saved", entry: null }) });
     });
     await page.goto(`${base}/?session=${SESSION}`, { waitUntil: "domcontentloaded", timeout: NAV_MS });
