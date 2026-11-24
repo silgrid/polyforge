@@ -189,8 +189,38 @@ export interface StepTierWrite {
   candidates: string[];
 }
 
-/** Stub (polyforge#258 u1): the tier move's key writes, filled in by the
- *  implementation commit. */
-export function stepTierWritePlan(_catalog: ReadonlyArray<StepTierItem>, _identity: { harness: "pi" | "claude"; model: string }, _target: string | null): StepTierWrite[] {
-  return [];
+/** The key writes that move one harness's model identity to a target tier
+ *  (or unset it): the add to the target comes first (a crash between the
+ *  two keys leaves a duplicate, never a loss — the ticket's 先加后删), the
+ *  identity's effort entries move exactly as they are, and a tier the
+ *  removal would leave empty unsets (pf refuses an empty list). A no-op
+ *  move plans nothing. */
+export function stepTierWritePlan(catalog: ReadonlyArray<StepTierItem>, identity: { harness: "pi" | "claude"; model: string }, target: string | null): StepTierWrite[] {
+  const entries: string[] = [];
+  for (const item of catalog) {
+    for (const entry of identityEntries(item.candidates, identity)) {
+      if (!entries.includes(entry)) entries.push(entry);
+    }
+  }
+  // A model no tier names yet still gains the target: its candidate is the
+  // identity itself, no effort suffix (a plan that only moved existing
+  // entries would leave an unset model's set a silent no-op).
+  const moving = entries.length > 0 ? entries : [`${identity.harness}:${identity.model}`];
+  const plan: StepTierWrite[] = [];
+  if (target !== null) {
+    const current = catalog.find((item) => item.tier === target)?.candidates ?? [];
+    const next = [...current];
+    for (const entry of moving) if (!next.includes(entry)) next.push(entry);
+    if (next.length !== current.length) {
+      plan.push({ action: "set", tier: target, candidates: next });
+    }
+  }
+  for (const item of catalog) {
+    if (target !== null && item.tier === target) continue;
+    const remaining = item.candidates.filter((candidate) => !moving.includes(candidate));
+    if (remaining.length === item.candidates.length) continue;
+    if (remaining.length === 0) plan.push({ action: "unset", tier: item.tier, candidates: [] });
+    else plan.push({ action: "set", tier: item.tier, candidates: remaining });
+  }
+  return plan;
 }
