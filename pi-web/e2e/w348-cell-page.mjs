@@ -1,5 +1,6 @@
 // carries: lib/polyforge-cells*, app/api/polyforge/cells/*
 // carries: app/api/polyforge/polyforge-cells-routes*
+// carries: components/PolyforgeConfig*, components/ConfigDangerMenu*
 // — Settings › Polyforge Host and Cells page acceptance.
 //
 // Authored against artifacts/spec.md (AC8) and reproduced in the capsule's
