@@ -916,7 +916,8 @@ try {
     assert.equal(await region.locator('[data-pf-region-key="max_concurrent_jobs"] button', { hasText: "Save" }).count(), 0,
       "a Host row still has its own Save button");
     assert.equal(writes.length, 0, "typing into a Host field wrote before the footer's save");
-    await footer.getByRole("button", { name: "Save (2)", exact: true }).click();
+    // build finding u11#5: the footer's word is the ticket's 「保存（n 项改动）」.
+    await footer.getByRole("button", { name: "Save (2 change(s))", exact: true }).click();
     // A bounded poll of the request log (this suite has no waitFor helper).
     const deadline = Date.now() + NAV_MS;
     while (writes.length < 2 && Date.now() < deadline) await page.waitForTimeout(100);
