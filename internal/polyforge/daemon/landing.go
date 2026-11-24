@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -139,12 +140,17 @@ func (l *leaseManager) Hold(ctx context.Context, wi, capsuleDir string, repos []
 	if err != nil {
 		return nil, err
 	}
+	sorted := leaseableRepos(repos)
+	if len(sorted) == 0 {
+		// A local-path clone has no server identity: there is no key the
+		// server could normalize. Such a workspace (a development
+		// machine's local origin) runs without a lease.
+		return leaseNoop{}, nil
+	}
 	c, err := l.cycle(ctx, wi)
 	if err != nil {
 		return nil, err
 	}
-	sorted := append([]string(nil), repos...)
-	sort.Strings(sorted)
 	since := l.now()
 	for i, repo := range sorted {
 		if err := l.acquire(ctx, c, branch, repo, func(pos int) {
@@ -159,6 +165,35 @@ func (l *leaseManager) Hold(ctx context.Context, wi, capsuleDir string, repos []
 	return &leaseHoldGroup{manager: l, cycle: c, repos: sorted}, nil
 }
 
+// leaseNoop is the hold of a workspace with no leaseable repository.
+type leaseNoop struct{}
+
+func (leaseNoop) Err() error                  { return nil }
+func (leaseNoop) Check(context.Context) error { return nil }
+func (leaseNoop) Release()                    {}
+
+// leaseableRepos answers the repositories the lease server can name: a
+// remote URL or an SCP-style remote. A local-path clone (a development
+// origin) has no forge identity and is kept out — the interval and the
+// single-dispatch lock then run without a lease for it.
+func leaseableRepos(repos []string) []string {
+	out := make([]string, 0, len(repos))
+	for _, r := range repos {
+		if !localPathRepo(r) && !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// localPathRepo reports a repository spelling that is a filesystem path,
+// not a remote the server can normalize.
+func localPathRepo(repo string) bool {
+	r := strings.TrimSpace(repo)
+	return r == "" || strings.HasPrefix(r, "/") || strings.HasPrefix(r, ".") || strings.HasPrefix(r, "~")
+}
+
 // HoldRepo acquires one repository's landing lease for one dispatch (the
 // single-dispatch merge lock of micro's merge and a lane's revert step, Q4):
 // same key, same server mechanism, same before-merge check as the lanes'
@@ -169,6 +204,14 @@ func (l *leaseManager) HoldRepo(ctx context.Context, wi, capsuleDir, repo string
 	}
 	if err := l.recoverOnce(ctx); err != nil {
 		return nil, err
+	}
+	if len(leaseableRepos([]string{repo})) == 0 {
+		// A local-path clone has no server identity: there is no key the
+		// server could normalize, and the server would refuse it. Such a
+		// workspace (a development machine's local origin) runs the
+		// single-dispatch lock without a lease; every forge-named repo
+		// takes one.
+		return func() {}, nil
 	}
 	branch, err := targetBranchOf(capsuleDir)
 	if err != nil {
@@ -192,6 +235,9 @@ func (l *leaseManager) HoldRepo(ctx context.Context, wi, capsuleDir, repo string
 func (l *leaseManager) Check(ctx context.Context, wi, repo string) error {
 	if l == nil || l.hub == nil {
 		return fmt.Errorf("this daemon has no aihub client for the landing lock")
+	}
+	if localPathRepo(repo) {
+		return nil // no server identity: there is no lease to check
 	}
 	l.mu.Lock()
 	c := l.cycles[wi]
