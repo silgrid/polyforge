@@ -27,6 +27,9 @@ const ERROR_SUMMARY_KEYS: Readonly<Record<string, string>> = {
   "http-404": "serverError.notFound",
   "http-409": "serverError.conflict",
   "http-500": "serverError.server",
+  // pf's own refusal codes, as the settings routes pass them through
+  "config-cas-409": "serverError.conflict",
+  "core-409": "serverError.conflict",
 };
 
 const FALLBACK_SUMMARY_KEY = "serverError.unknown";

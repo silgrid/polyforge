@@ -6,6 +6,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import {
   setLastSettingsSection,
   SETTINGS_TABS,
+  mayLeaveSection,
   settingsSectionRequiresProject,
   type SettingsSection,
 } from "@/lib/settings-navigation";
@@ -199,9 +200,11 @@ export function SettingsPanel({
   const reportUnsaved = useCallback((id: SettingsSection, dirty: boolean) => {
     setUnsavedSections((current) => (current[id] === dirty ? current : { ...current, [id]: dirty }));
   }, []);
+  // The decision is lib/settings-navigation's pure fact (review #2: tested as
+  // behaviour, not as this file's source text).
   const mayLeave = useCallback(
-    () => !Object.values(unsavedSections).some(Boolean) || window.confirm(t("settings.unsavedLeave")),
-    [unsavedSections, t],
+    () => mayLeaveSection(unsavedSections, section, null, (question) => window.confirm(question), t("settings.unsavedLeave")),
+    [unsavedSections, section, t],
   );
   const onClose = useCallback(() => {
     if (!mayLeave()) return;
@@ -249,7 +252,7 @@ export function SettingsPanel({
 
   const activateSection = (nextSection: SettingsSection) => {
     // Leaving the tab being edited with unsaved changes asks first (T4 AC1).
-    if (nextSection !== section && unsavedSections[section] && !window.confirm(t("settings.unsavedLeave"))) return;
+    if (!mayLeaveSection(unsavedSections, section, nextSection, (question) => window.confirm(question), t("settings.unsavedLeave"))) return;
     setMountedSections((current) => new Set(current).add(nextSection));
     setSection(nextSection);
     setLastSettingsSection(nextSection);

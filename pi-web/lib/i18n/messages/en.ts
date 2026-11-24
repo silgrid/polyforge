@@ -15,7 +15,7 @@ export const enLocale: LocalePlugin = {
     "common.settings": "Settings",
     "settings.unsavedLeave": "This page has unsaved changes. Leave and drop them?",
     "settings.unsavedCount": "{count} unsaved change(s)",
-    "settings.saveWithCount": "Save ({count})",
+    "settings.saveWithCount": "Save ({count} change(s))",
     "settings.discard": "Discard",
     "settings.dangerMenu": "More actions",
     "settings.dangerConfirm": "Run “{action}”? This cannot be undone.",

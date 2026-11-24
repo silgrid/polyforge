@@ -15,7 +15,7 @@ export const zhTWLocale: LocalePlugin = {
     "common.settings": "設定",
     "settings.unsavedLeave": "這一頁有未儲存的改動，離開就會丟掉。確定離開嗎？",
     "settings.unsavedCount": "{count} 項未儲存改動",
-    "settings.saveWithCount": "儲存（{count}）",
+    "settings.saveWithCount": "儲存（{count} 項改動）",
     "settings.discard": "丟棄",
     "settings.dangerMenu": "更多操作",
     "settings.dangerConfirm": "確認執行「{action}」？此操作不可復原。",

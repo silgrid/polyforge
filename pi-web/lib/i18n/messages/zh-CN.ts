@@ -15,7 +15,7 @@ export const zhCNLocale: LocalePlugin = {
     "common.settings": "设置",
     "settings.unsavedLeave": "这一页有未保存的改动，离开就会丢掉。确定离开吗？",
     "settings.unsavedCount": "{count} 项未保存改动",
-    "settings.saveWithCount": "保存（{count}）",
+    "settings.saveWithCount": "保存（{count} 项改动）",
     "settings.discard": "丢弃",
     "settings.dangerMenu": "更多操作",
     "settings.dangerConfirm": "确认执行「{action}」？此操作不可撤销。",

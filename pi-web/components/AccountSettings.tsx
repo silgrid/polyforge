@@ -399,18 +399,10 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
     })();
   }, [pane]);
 
-  // A failed write's line: the route's own words when it sent a code, else the
-  // localized line with those words kept for the details fold (T4 AC2).
-  const writeFailureText = (note: string) => {
-    const text = serverErrorText(note.startsWith("settings.") ? null : note);
-    return {
-      summary: note.startsWith("settings.") ? t(note) : t(text.summaryKey, text.summaryParams),
-      details: note.startsWith("settings.") ? null : text.details,
-    };
-  };
-
   const [writeResults, setWriteResults] = useState<{ target: string; status: string; reason?: string }[] | null>(null);
-  const [writeNote, setWriteNote] = useState<string | null>(null);
+  // review #10: the failure line carries its own split — a localized summary and
+  // the server's words for the fold — never a translated string re-inspected.
+  const [writeNote, setWriteNote] = useState<{ summary: string; details: string | null } | null>(null);
   const saveCredentials = useCallback((body: Record<string, unknown>) => {
     void (async () => {
       try {
@@ -419,7 +411,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         });
-        const answer = await response.json() as { results?: { target: string; status: string; reason?: string }[]; message?: string };
+        const answer = await response.json() as { results?: { target: string; status: string; reason?: string }[]; message?: string; code?: string; params?: Record<string, string | number> };
         if (response.ok && answer.results) {
           setWriteResults(answer.results);
           setWriteNote(null);
@@ -427,11 +419,12 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
           load();
         } else {
           setWriteResults(null);
-          setWriteNote(answer.message ?? t("settings.accountWriteFailed"));
+          const failure = serverErrorText(answer.code ? { code: answer.code, params: answer.params, message: answer.message } : answer.message);
+          setWriteNote({ summary: t(failure.summaryKey, failure.summaryParams), details: failure.details });
         }
       } catch {
         setWriteResults(null);
-        setWriteNote(t("settings.accountWriteFailed"));
+        setWriteNote({ summary: t(serverErrorText(null).summaryKey), details: null });
       }
     })();
   }, [t, load]);
@@ -471,10 +464,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
             onSaveCredentials={pane === "claude" ? saveCredentials : undefined}
           />
           {writeResults && <CredentialWriteResults results={writeResults} />}
-          {writeNote && (() => {
-            const failure = writeFailureText(writeNote);
-            return <ConfigErrorNotice summary={failure.summary} detailsLabel={t("i18n.detailsLabel")} details={failure.details} />;
-          })()}
+          {writeNote && <ConfigErrorNotice summary={writeNote.summary} detailsLabel={t("i18n.detailsLabel")} details={writeNote.details} />}
           {loginTerminal && (
             <div data-account-login-terminal className="settings-account-login-terminal">
               {/* Attach, never create: the server already started this
