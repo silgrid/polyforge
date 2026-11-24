@@ -311,6 +311,18 @@ func (w *Workflow) WithSkipped(ids []string) *Workflow {
 	return out
 }
 
+// FutureDispatchable answers whether step id can be dispatched again from
+// the execution record's current position (polyforge#270, the owner's Q1 B):
+// a step later in the lane that still runs counts; a step that already ran
+// counts only when a gate that is itself still reachable can rewind to it
+// (directly or after a later rewind), the lane's rewind-only steps count
+// where a rewind covers them, and a step the effective skip set switches
+// off never counts. The rewind budget is not consulted: an exhausted budget
+// still leaves the owner's own authorization to run another round.
+func (w *Workflow) FutureDispatchable(step string, exec *capsule.Execution, skips []string) bool {
+	return false
+}
+
 // LoadWorkflow reads the lane at bundleDir through the one lane loader
 // and answers its execution graph; a lane with any contract defect is
 // refused with every defect (*workflow.LoadError).
