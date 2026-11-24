@@ -29,10 +29,19 @@ export async function checkModelDiscovery(page) {
     const settings = page.getByRole("dialog", { name: "Settings", exact: true });
     // The models.json editor is embedded in the unified Models page.
     await settings.getByRole("button", { name: "Models", exact: true }).click();
-    const modelRows = settings.locator(".models-sidebar-indented-item");
-    await modelRows.filter({ hasText: /^claude-existing$/ }).waitFor(); // a model without a name is listed by its id
-    assert.equal(await modelRows.filter({ hasText: /^Relay Existing$/ }).count(), 1, "A model is listed by its models.json name");
-    await settings.locator(".config-sidebar-item").filter({ hasText: /^anthropic$/ }).click();
+    const host = settings.locator('.settings-section-host[data-settings-section="models"]:not([hidden])');
+    // The models.json editor is the flat pi Providers subpage (T3): a page
+    // provider picker + model picker instead of the nested editor's sidebar.
+    await host.locator('[data-model-subpage="providers"]').click();
+    const providerSelect = host.getByLabel("Provider", { exact: true });
+    const modelSelect = host.getByLabel("Model", { exact: true });
+    await providerSelect.selectOption("provider:anthropic");
+    await modelSelect.locator("option").first().waitFor({ state: "attached" });
+    assert.equal(await modelSelect.locator("option").filter({ hasText: /^claude-existing$/ }).count(), 1, "A model without a name is listed by its id");
+    await providerSelect.selectOption("provider:relay");
+    await modelSelect.locator("option").filter({ hasText: /^Relay Existing$/ }).first().waitFor({ state: "attached" });
+    assert.equal(await modelSelect.locator("option").filter({ hasText: /^Relay Existing$/ }).count(), 1, "A model is listed by its models.json name");
+    await providerSelect.selectOption("provider:anthropic");
     const api = settings.locator(".config-field-label").filter({ hasText: /^API$/ }).locator("..").locator("select");
     assert.equal(await api.inputValue(), "", "A missing protocol stays unspecified in the editor");
     const discover = async () => {
@@ -45,7 +54,7 @@ export async function checkModelDiscovery(page) {
     assert.equal(discoveries[0].provider.api, undefined, "Discovery must reach the catalog protocol fallback");
     assert.equal(discoveries[0].provider.baseUrl, undefined);
 
-    await settings.locator(".config-sidebar-item").filter({ hasText: /^relay$/ }).click();
+    await providerSelect.selectOption("provider:relay");
     assert.equal(await api.inputValue(), "openai-responses");
     await discover();
     assert.equal(discoveries[1].provider.api, "openai-responses", "Explicit protocols must stay authoritative");
