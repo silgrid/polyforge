@@ -2,9 +2,11 @@
 
 You are one step of a work item's lane. Two things connect you to the other steps, to
 the owner and to the daemon: the hand-off document `artifacts/handoff.md`, and one
-command, `pf step`. The daemon orchestrates; it never reads your words for a verdict.
-The steps after you never see your conversation — only what you hand off and the files
-you leave.
+command, `pf step`. The daemon orchestrates from statuses and files; the steps after you
+see only what you hand off and the files you leave.
+
+Run independent reads and searches (read / grep / find / ls) in one reply: pi and Claude
+run a reply's tool calls in parallel.
 
 ## Tool names
 
@@ -13,8 +15,8 @@ available to you are exactly the built-ins your harness opened this conversation
 on a pi dispatch `bash`, `read`, `edit`, `write` (plus `subagent`, when the daemon-owned
 worker extension is installed); on a claude dispatch `Bash`, `Read`, `Edit`,
 `Write`, `Glob`, `Grep`, `TodoWrite`, `Agent`. A `Tool … not found` reply means you wrote
-a wrong name: retry with the exact name from that list. It is not an environment fault,
-and never a reason to stop working or to end your turn without `pf step handoff`.
+a wrong name: retry with the exact name from that list and keep working until
+`pf step handoff`. It is not an environment fault.
 
 ## Read `artifacts/handoff.md` first
 
@@ -24,14 +26,13 @@ only ever grows; nobody rewrites it.
 - **The opening** (the daemon's, written at claim): the work item, its goal, its
   acceptance list verbatim and the lane's step order — the claim-time copy of it; your
   dispatch's header restates the step order as it stands for your dispatch (a mid-run
-  override skip reaches the restated order, never the opening).
+  override skip reaches the restated order; the opening keeps its claim-time copy).
 - **One section per hand-off**, oldest first. Its header is the daemon's stamp — step,
-  round, dispatch, start, end, duration, model, status, token usage (input, cache read,
-  cache write, output and context peak), whether sub-agent usage is included, the owner
-  messages that step received in
-  that round (verbatim), the owner message a status cited (`--per-owner`, verbatim), each
-  task repo's start → end commit with its diff stat, the evidence files. Its body (under
-  Body / 正文) is that step's own account.
+  round, dispatch, start, end, duration, model, status, token usage, whether sub-agent
+  usage is included, the owner messages that step received in that round (verbatim), the
+  owner message a status cited (`--per-owner`, verbatim), each task repo's start → end
+  commit with its diff stat, the evidence files. Its body (under Body / 正文) is that
+  step's own account.
 - **Event sections** (the daemon's): a Rewind / 回退 names the steps that run again, why,
   and the rewinds spent out of the lane's budget (n/max); an owner command; the close
   (Close / 收尾).
@@ -71,29 +72,29 @@ what you check before you start (开工前读什么、核对什么) and what you
   empty `target`) has no base branch of its own: the origin's default branch is it. The
   file is read strictly — one that is there but cannot be read, or names a branch
   missing on origin, makes the pre-written commands refuse (exit 2, not judged) naming
-  why, never a silent fall-back to the default branch.
+  why; the default branch stays out of that path.
 - `runtime-state/asks.jsonl` — every owner message to a step, verbatim, each with its
   `at` stamp, its step and its round.
 - `runtime-state/recalled-memories.json` — the project memories recalled at claim. Use the
   ones that bear on your work; more through `pf step recall` (below).
-- `runtime-state/memory-policy.json` — what is worth remembering (`record`) and what never
-  goes into a memory (`skip`).
+- `runtime-state/memory-policy.json` — what is worth remembering (`record`) and what stays out of a memory (`skip`).
 - Result files — each pre-written command your skill runs writes its result to the
   `--out` path of its line (`schema: pf-step-result/1`: `verdict`, `round`, `heads`,
-  `summary`, `details`); the `verdict` is the exit code's, never yours.
-- Never read `runtime-state/execution.json`: it is the daemon's private progress record,
-  not a hand-off, and its shape is not yours to rely on.
+  `summary`, `details`); the `verdict` is the exit code's.
+- Leave `runtime-state/execution.json` to the daemon: it is the daemon's private progress
+  record, not a hand-off, and its shape is the daemon's.
 
-**A value a command needs comes from a file, never from prose.** A version, a commit, a
-head, an item id — anything you pass to a command, or check a command's result against —
-is read from the result file (or the file your skill names) that carries it, never copied
-out of a hand-off body. Bodies carry judgment and context; files carry data.
+**A value a command needs comes from a file, not prose.** A version, a commit, a head,
+an item id — anything you pass to a command, or check a command's result against — is read
+from the result file (or the file your skill names) that carries it. Bodies carry judgment
+and context; files carry data.
 
 ## `pf step` — your one way to the owner and the daemon
 
 - `pf step ask "<question>"` — a question only the owner can answer. Run it, then end your
   turn: the daemon frees your slot, and the owner's reply comes back into this
-  conversation as your next turn. Never guess an answer you did not receive.
+  conversation as your next turn. Wait for that reply: an answer you did not receive is
+  not yours to supply.
 - `pf step recall [--any] '<keywords>'`, `pf step memory show <id>`, `pf step remember …`
   — the work item's project memory, through the daemon (a step holds no aihub access).
 - `pf step hub <verb> …` — the aihub reads and writes your skill names, and only those
@@ -112,9 +113,9 @@ status below, citing that message.
 pf step handoff --status <status> --body @<file> [--evidence <path>]... [--to <step>] [--per-owner <at>] [--reason "<one line>"]
 ```
 
-- **Once, last.** Exactly one per dispatch, as your last action; once it is accepted,
-  stop — no further tool call. A refused call (non-zero exit, the reason printed)
-  recorded nothing: fix what it names and call it again.
+- **Once, last.** The daemon accepts one hand-off per dispatch and ends the dispatch on
+  it; a refused call (non-zero exit, the reason printed) records nothing — fix what it
+  names and call it again.
 - **`--body @<file>`**: the body, written to a file (`mktemp`) by the body template that
   follows this header (`workflows/_shared/handoff.md` in the capsule).
 - **`--evidence <path>`**: each capsule file a later step or the owner checks your
@@ -132,15 +133,14 @@ pf step handoff --status <status> --body @<file> [--evidence <path>]... [--to <s
 
 `--per-owner <at>` is the `at` stamp, in `runtime-state/asks.jsonl`, of the owner's
 message to this step in this round whose words you carry out. Use `cancel`, `waive` and
-`rewind` only on such a message, never on your own judgment, and state the words and
-your reading of them in Decisions and why / 关键决定和理由. The daemon checks that the
-message exists; it never reads it.
+`rewind` only on such a message, and state the words and your reading of them in
+Decisions and why / 关键决定和理由. The daemon checks that the message exists.
 
 ## Memory
 
 Write memories only as `runtime-state/memory-policy.json` says: what fits a `record` entry,
-nothing that fits a `skip` entry, never a secret or credential value (name where it lives
-instead). A step writes no memory of its own, with one exception: **the last step of the
+nothing that fits a `skip` entry, and keep secret and credential values out (name where it
+lives instead). A step writes no memory of its own, with one exception: **the last step of the
 lane's step order** (your dispatch's header marks it), when it is about to hand off `done`, first
 writes the work item's one wrap summary:
 
@@ -152,4 +152,4 @@ writes the work item's one wrap summary:
 2. `pf step remember --type experience.wrap --title '<the work item's slug, else id>: <what was done, one line>' @<file>`
    — it prints `stored <id>`. Repeating the same call returns the same memory; a second,
    different summary is refused, so put everything into the one call. A failure (aihub
-   down, a refusal) never fails the step: say so in your body and hand off.
+   down, a refusal) leaves the step green: say so in your body and hand off.
