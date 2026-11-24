@@ -51,7 +51,7 @@ import type { PolyforgeCellsRead } from "@/lib/polyforge-cells";
 import { ConfigDangerMenu } from "./ConfigDangerMenu";
 import { shortenPath } from "@/lib/display-path";
 import { dirtyCount, dirtyPatch, settleDraft } from "@/lib/settings-dirty";
-import { serverErrorText } from "@/lib/server-error";
+import { responseError, serverErrorText } from "@/lib/server-error";
 import {
   POLYFORGE_POLL_INTERVAL,
   POLYFORGE_TITLE_LENGTH,
@@ -87,6 +87,7 @@ import {
   ConfigSplitView,
   ConfigStatusDot,
   ConfigSwitch,
+  ConfigErrorNotice,
 } from "./SettingsUi";
 import {
   cellAddDraftError,
@@ -161,7 +162,11 @@ interface Props {
   active: boolean;
 }
 
-type RowFeedback = { message: string; tone: "default" | "error" };
+/** One row's inline result; a refusal keeps the server's own words for the fold. */
+export type RowFeedback = { message: string; details?: string; tone: "default" | "error" };
+
+/** A failure as the page shows it: the Chinese line, the server's words for the fold. */
+type Failure = { text: string; details?: string };
 
 type SourceState = { status: "pending" | "found" | "missing"; source: string | null };
 
@@ -300,10 +305,29 @@ function formValue(key: string, raw: string): unknown {
 type Translate = (key: string, params?: TranslationParams) => string;
 
 /** pf's reload class, localized (an unknown class keeps pf's own name). */
+/** A refusal the page already put in its own words (a client check, a
+ *  localized floor message): failureLine shows it unchanged. */
+class ShownError extends Error {}
+
+/** A row's error feedback from a failed write: the Chinese line, the words folded. */
+function failureFeedback(t: Translate, error: unknown): RowFeedback {
+  const line = failureLine(t, error);
+  return { message: line.text, ...(line.details ? { details: line.details } : {}), tone: "error" };
+}
+
+/** A failure notice: the Chinese line, the server's words in the 详情 fold. */
+function FailureNotice({ failure, t }: { failure: Failure | null; t: Translate }) {
+  if (!failure) return null;
+  return <ConfigErrorNotice summary={failure.text} detailsLabel={t("i18n.detailsLabel")} details={failure.details} />;
+}
+
 /** A failed read or write as the page shows it (polyforge#259 T4 AC2): the Chinese
  *  line first, the server's own words kept for the details fold. */
-export function failureLine(t: Translate, error: unknown, withDetails = true): { text: string; details?: string } {
-  const split = serverErrorText(error instanceof Error ? error.message : String(error));
+export function failureLine(t: Translate, error: unknown, withDetails = true): Failure {
+  // A line the page already wrote in its own language is shown as it is.
+  if (error instanceof ShownError) return { text: error.message };
+  // The error itself, so a ServerError's route code picks the Chinese line.
+  const split = serverErrorText(error instanceof Error ? error : String(error));
   return {
     text: t(split.summaryKey, split.summaryParams),
     ...(withDetails && split.details ? { details: split.details } : {}),
@@ -327,15 +351,21 @@ function regionToggles(disclosure: Record<PolyforgeDisclosureRegion, boolean>, s
 }
 
 /** One row's (or history entry's) inline result; an error is an alert. */
-export function RowFeedbackLine({ feedback }: { feedback: RowFeedback | undefined }) {
+export function RowFeedbackLine({ feedback, detailsLabel }: { feedback: RowFeedback | undefined; detailsLabel: string }) {
   if (!feedback) return null;
   return (
-    <p
+    <div
       className={`polyforge-config-row-feedback${feedback.tone === "error" ? " is-error" : ""}`}
       role={feedback.tone === "error" ? "alert" : undefined}
     >
-      {feedback.message}
-    </p>
+      <span>{feedback.message}</span>
+      {feedback.details && (
+        <details className="settings-reason-details">
+          <summary>{detailsLabel}</summary>
+          <span className="settings-reason-original">{feedback.details}</span>
+        </details>
+      )}
+    </div>
   );
 }
 
@@ -348,8 +378,8 @@ async function postRollback(entry: PolyforgeConfigHistoryEntry, cwd: string | nu
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: entry.id, key: entry.key, old: entry.old, entry, cwd: cwd ?? "" }),
   });
-  const data = await response.json() as { error?: string; message?: string };
-  if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+  const data = await response.json().catch(() => null) as { error?: string; message?: string } | null;
+  if (!response.ok || !data || data.error) throw responseError(data, response.status);
   return data.message;
 }
 
@@ -418,10 +448,10 @@ function DisclosureToggle({ open, controls, onToggle, marker, children }: {
 export function PolyforgeConfig({ cwd, active }: Props) {
   const { t } = useI18n();
   const [detect, setDetect] = useState<PolyforgeDetectStatus | null>(null);
-  const [detectError, setDetectError] = useState<string | null>(null);
+  const [detectError, setDetectError] = useState<Failure | null>(null);
   const [sourceState, setSourceState] = useState<SourceState>({ status: "pending", source: null });
   const [toggleBusy, setToggleBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<Failure | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   // a history rollback's result is keyed by entry.id and
   // rendered under that entry; the footer keeps only page-level status
@@ -447,11 +477,11 @@ export function PolyforgeConfig({ cwd, active }: Props) {
   useEffect(() => {
     let cancelled = false;
     void fetch("/api/polyforge/step-tiers")
-      .then(async (response) => ({ ok: response.ok, body: await response.json().catch(() => null) as { capable?: boolean; reason?: string; error?: string; tiers?: { tier: string; candidates: string[] }[]; defined?: { pi: string[]; claude: string[] } } | null }))
-      .then(({ ok, body }) => {
+      .then(async (response) => ({ ok: response.ok, status: response.status, body: await response.json().catch(() => null) as { capable?: boolean; reason?: string; error?: string; tiers?: { tier: string; candidates: string[] }[]; defined?: { pi: string[]; claude: string[] } } | null }))
+      .then(({ ok, status, body }) => {
         if (cancelled) return;
         if (!ok || !body || body.error) {
-          setTierCatalog({ groups: null, reason: body?.reason ?? body?.error ?? `HTTP ${ok ? "error" : "refused"}` });
+          setTierCatalog({ groups: null, reason: failureLine(t, responseError(body, status), false).text });
           return;
         }
         setTierCatalog(body.capable === true && Array.isArray(body.tiers) && body.defined
@@ -460,14 +490,14 @@ export function PolyforgeConfig({ cwd, active }: Props) {
       })
       .catch(() => { if (!cancelled) setTierCatalog({ groups: null, reason: "the step-tier catalog read failed" }); });
     return () => { cancelled = true; };
-  }, []);
+  }, [t]);
   // the list's Cell registry (the Cells card's read, moved up:
   // the list, the Cell panes and Add Cell share it) and the selected entry.
   const [cellsRead, setCellsRead] = useState<PolyforgeCellsRead | null>(null);
-  const [cellsError, setCellsError] = useState<string | null>(null);
+  const [cellsError, setCellsError] = useState<Failure | null>(null);
   const [cellBusy, setCellBusy] = useState<string | null>(null);
   // A lifecycle result renders in the pane it came from (a profile, or "add").
-  const [cellMessage, setCellMessage] = useState<{ pane: string; tone: "ok" | "error"; text: string } | null>(null);
+  const [cellMessage, setCellMessage] = useState<{ pane: string; tone: "ok" | "error"; text: string; details?: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [selection, setSelection] = useState<PaneSelection>({ kind: "host" });
   const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set(["host"]));
@@ -479,14 +509,14 @@ export function PolyforgeConfig({ cwd, active }: Props) {
   const runDetect = useCallback(async (force: boolean) => {
     try {
       const response = await fetch(`/api/polyforge/detect${force ? "?force=1" : ""}`);
-      const data = await response.json() as PolyforgeDetectStatus & { error?: string };
-      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      const data = await response.json().catch(() => null) as (PolyforgeDetectStatus & { error?: string }) | null;
+      if (!response.ok || !data || data.error) throw responseError(data, response.status);
       setDetect(data);
       setDetectError(null);
     } catch (error) {
-      setDetectError(error instanceof Error ? error.message : String(error));
+      setDetectError(failureLine(t, error));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!active) {
@@ -516,13 +546,13 @@ export function PolyforgeConfig({ cwd, active }: Props) {
       const response = await fetch("/api/polyforge/cells");
       const body = await response.json() as PolyforgeCellsRead;
       setCellsRead(body);
-      setCellsError(body.error ?? null);
+      setCellsError(body.error ? failureLine(t, responseError(body, response.status)) : null);
       return body;
     } catch (error) {
-      setCellsError(error instanceof Error ? error.message : String(error));
+      setCellsError(failureLine(t, error));
       return null;
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (active) void runCellsRead();
@@ -536,17 +566,17 @@ export function PolyforgeConfig({ cwd, active }: Props) {
     setCellMessage(null);
     try {
       const response = await fetch(url, init);
-      const body = await response.json() as { ok?: boolean; error?: string };
-      if (!response.ok || body.error) throw new Error(body.error ?? `HTTP ${response.status}`);
+      const body = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || !body || body.error) throw responseError(body, response.status);
       setCellMessage({ pane, tone: "ok", text: done });
       return { ok: true, read: await runCellsRead() };
     } catch (error) {
-      setCellMessage({ pane, tone: "error", text: error instanceof Error ? error.message : String(error) });
+      setCellMessage({ pane, tone: "error", ...failureLine(t, error) });
       return { ok: false, read: null };
     } finally {
       setCellBusy(null);
     }
-  }, [runCellsRead]);
+  }, [runCellsRead, t]);
 
   const repairCell = (profile: string) => void cellAct(profile, `repair:${profile}`, `/api/polyforge/cells/${encodeURIComponent(profile)}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "repair" }),
@@ -624,12 +654,12 @@ export function PolyforgeConfig({ cwd, active }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: enabled ? "enable" : "disable", source: sourceState.source, scope: "global", cwd }),
       });
-      const data = await response.json() as { error?: string };
-      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      const data = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok || !data || data.error) throw responseError(data, response.status);
       setActionMessage(t("polyforge.settings.packageToggled"));
       await runDetect(false);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      setActionError(failureLine(t, error));
     } finally {
       setToggleBusy(false);
     }
@@ -647,7 +677,7 @@ export function PolyforgeConfig({ cwd, active }: Props) {
       setConfigEpoch((epoch) => epoch + 1);
       await runHistory();
     } catch (error) {
-      setRowFeedback({ [feedbackId]: { message: error instanceof Error ? error.message : String(error), tone: "error" } });
+      setRowFeedback({ [feedbackId]: failureFeedback(t, error) });
     } finally {
       setWriteBusy(null);
     }
@@ -661,7 +691,7 @@ export function PolyforgeConfig({ cwd, active }: Props) {
     void runCellsRead();
   }, [runCellsRead, runHistory]);
   // A Cell's Reload outcome is page-level status: the footer's.
-  const onPageStatus = useCallback((error: string | null, message: string | null) => {
+  const onPageStatus = useCallback((error: Failure | null, message: string | null) => {
     setActionError(error);
     if (message !== null) setActionMessage(message);
   }, []);
@@ -720,7 +750,7 @@ export function PolyforgeConfig({ cwd, active }: Props) {
     detect.pfPresent === false || detect.pfVersionBelowMinimum || (detect.daemon !== null && !detect.daemon.reachable)
   ));
 
-  const renderFeedback = (id: string) => <RowFeedbackLine feedback={rowFeedback[id]} />;
+  const renderFeedback = (id: string) => <RowFeedbackLine feedback={rowFeedback[id]} detailsLabel={t("i18n.detailsLabel")} />;
   // The history region locks open on a rollback error.
   const lockMarker = (ids: string[]): string | null => (ids.some((id) => rowFeedback[id]?.tone === "error") ? t("polyforge.settings.configErrorMarker") : null);
   const historyRegion = regionToggle("history", lockMarker(history.map((entry) => entry.id)));
@@ -753,7 +783,9 @@ export function PolyforgeConfig({ cwd, active }: Props) {
 
   // A lifecycle outcome, in the pane it belongs to.
   const paneMessage = (pane: string) => cellMessage?.pane === pane ? (
-    <p className={cellMessage.tone === "error" ? "config-add-source-error" : "polyforge-config-card-hint"} role="status">{cellMessage.text}</p>
+    cellMessage.tone === "error"
+      ? <FailureNotice failure={cellMessage} t={t} />
+      : <p className="polyforge-config-card-hint" role="status">{cellMessage.text}</p>
   ) : null;
 
   // One Cell's head: its name and state, AIHub, counts, pf's notice, and the
@@ -818,9 +850,7 @@ export function PolyforgeConfig({ cwd, active }: Props) {
       <p className="polyforge-config-card-hint">{t("polyforge.cells.hint")}</p>
       {paneMessage("host")}
 
-      {detectError && (
-        <p role="alert" className="config-add-source-error">{detectError}</p>
-      )}
+      <FailureNotice failure={detectError} t={t} />
 
       {detect && (
         <section className="polyforge-config-card polyforge-config-status" aria-label={t("polyforge.settings.configStatusTitle")}>
@@ -1053,7 +1083,7 @@ export function PolyforgeConfig({ cwd, active }: Props) {
                 {t("polyforge.cells.cellsGroup")}
               </ConfigSidebarGroupLabel>
               {(cellsError || (cellsRead && !cellsSupported)) && (
-                <ConfigSidebarGroupStatus note={cellsRead && !cellsSupported ? t("polyforge.cells.upgrade") : null} error={cellsError} />
+                <ConfigSidebarGroupStatus note={cellsRead && !cellsSupported ? t("polyforge.cells.upgrade") : null} error={cellsError?.text ?? null} />
               )}
               {profiles.map((profile) => {
                 const cell = cellOf(profile);
@@ -1101,8 +1131,9 @@ export function PolyforgeConfig({ cwd, active }: Props) {
       <ConfigFooter
         status={
           <ConfigFooterStatus
-            summary={actionError ?? actionMessage ?? (detect ? t("polyforge.settings.detected") : t("polyforge.loading"))}
+            summary={actionError?.text ?? actionMessage ?? (detect ? t("polyforge.settings.detected") : t("polyforge.loading"))}
             tone={actionError ? "error" : "default"}
+            details={actionError?.details ? [actionError.details] : undefined}
           />
         }
       >
@@ -1142,7 +1173,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
   /** A write landed (or was refused after pf touched the file): the page re-reads its history and the registry. */
   onWritten: () => void;
   /** Reload's outcome, page-level status (the footer's). */
-  onPageStatus: (error: string | null, message: string | null) => void;
+  onPageStatus: (error: Failure | null, message: string | null) => void;
   /** the shared picker's catalog (the page's one read), threaded to both card surfaces. */
   tierCatalog: { groups: StepTierPickerGroup[] | null; reason: string | null };
 }) {
@@ -1154,7 +1185,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
   // notice rollback's by the key, rendered under that row.
   const [rowFeedback, setRowFeedback] = useState<Record<string, RowFeedback>>({});
   const [config, setConfig] = useState<PolyforgeConfigRead | null>(null);
-  const [configError, setConfigError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<Failure | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [modelEdits, setModelEdits] = useState<Record<string, string[]>>({});
   const [modelAdds, setModelAdds] = useState<Record<string, string>>({});
@@ -1180,14 +1211,14 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
   const runConfigRead = useCallback(async () => {
     try {
       const response = await fetch(`/api/polyforge/config?cwd=${encodeURIComponent(cwd ?? "")}&profile=${encodeURIComponent(profile)}`);
-      const data = await response.json() as PolyforgeConfigRead & { error?: string };
-      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      const data = await response.json().catch(() => null) as (PolyforgeConfigRead & { error?: string }) | null;
+      if (!response.ok || !data || data.error) throw responseError(data, response.status);
       setConfig(data);
       setConfigError(null);
     } catch (error) {
-      setConfigError(error instanceof Error ? error.message : String(error));
+      setConfigError(failureLine(t, error));
     }
-  }, [cwd, profile]);
+  }, [cwd, profile, t]);
 
   // A cwd change is a NEW snapshot: drafts and row feedback never carry over
   // from another cwd's read.
@@ -1234,18 +1265,18 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
           expect_state: expectState,
         }),
       });
-      const data = await response.json() as { error?: string; message?: string; diff?: unknown; entry?: PolyforgeConfigHistoryEntry | null };
+      const data = await response.json().catch(() => ({})) as { error?: string; message?: string; diff?: unknown; entry?: PolyforgeConfigHistoryEntry | null };
       // the summarize floor refusal (400 naming the floor) is
       // shown in the page's language, with the version the read found.
       if (response.status === 400 && key.startsWith("summarize.") && data.error?.includes(POLYFORGE_CONFIG_SUMMARIZE_MINIMUM_PF_VERSION)) {
-        throw new Error(t("polyforge.settings.summarizeWriteRefused", {
+        throw new ShownError(t("polyforge.settings.summarizeWriteRefused", {
           required: POLYFORGE_CONFIG_SUMMARIZE_MINIMUM_PF_VERSION,
           found: config.pfVersion ?? t("polyforge.settings.versionUnparseable"),
         }));
       }
-      if (!response.ok || data.error) {
-        throw new Error(data.diff ? `${data.error ?? "refused"} (${JSON.stringify(data.diff)})` : data.error ?? `HTTP ${response.status}`);
-      }
+      // The route's code (config-cas-409 …) picks the Chinese line; its words
+      // and the CAS diff stay for the 详情 fold.
+      if (!response.ok || data.error) throw responseError(data, response.status);
       setRowFeedback({ [feedbackId]: { message: data.message ?? t("polyforge.settings.configSaved"), tone: "default" } });
       const entry = data.entry;
       if (CONNECTION_KEYS.includes(key) && entry) setNotices((current) => ({ ...current, [key]: entry }));
@@ -1257,7 +1288,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
       setModelAdds((current) => { const next = { ...current }; delete next[key]; return next; });
       return true;
     } catch (error) {
-      setRowFeedback({ [feedbackId]: { message: error instanceof Error ? error.message : String(error), tone: "error" } });
+      setRowFeedback({ [feedbackId]: failureFeedback(t, error) });
       await runConfigRead();
       onWritten();
       // a refused mapping may still have landed in the file (pf writes, then the Host refuses)
@@ -1350,12 +1381,12 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cwd: cwd ?? "", profile }),
       });
-      const data = await response.json() as { error?: string };
-      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      const data = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok || !data || data.error) throw responseError(data, response.status);
       onPageStatus(null, t("polyforge.settings.configReloaded"));
       await runConfigRead();
     } catch (error) {
-      onPageStatus(error instanceof Error ? error.message : String(error), null);
+      onPageStatus(failureLine(t, error), null);
     } finally {
       setWriteBusy(null);
     }
@@ -1375,7 +1406,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
       onWritten();
       setDrafts((current) => { const next = { ...current }; delete next[entry.key]; return next; });
     } catch (error) {
-      setRowFeedback({ [feedbackId]: { message: error instanceof Error ? error.message : String(error), tone: "error" } });
+      setRowFeedback({ [feedbackId]: failureFeedback(t, error) });
     } finally {
       setWriteBusy(null);
     }
@@ -1548,7 +1579,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
     );
   };
 
-  const renderFeedback = (id: string) => <RowFeedbackLine feedback={rowFeedback[id]} />;
+  const renderFeedback = (id: string) => <RowFeedbackLine feedback={rowFeedback[id]} detailsLabel={t("i18n.detailsLabel")} />;
 
   // a saved connection key's inline notice — the running
   // daemon keeps the old value until a restart — with a one-click rollback
@@ -1681,7 +1712,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
         <ConfigSectionTitle>{t("polyforge.settings.configTitle")}</ConfigSectionTitle>
         {/* its own class — one ellipsised line with the full text in the title at desktop, whole and balanced on phones. */}
         <p className="config-machine-scope-hint" title={machineScope}>{machineScope}</p>
-        {configError && <p role="alert" className="config-add-source-error">{configError}</p>}
+        <FailureNotice failure={configError} t={t} />
         {configReason && <p className="config-scope-switch-reason">{configReason}</p>}
         {config && (
           <>
@@ -1898,13 +1929,13 @@ function HostSettingsRegion({ title }: { title: string }) {
   const runRead = useCallback(async () => {
     try {
       const response = await fetch(HOST_REGION_READ_URL);
-      const body = await response.json() as PolyforgeConfigRead & { error?: string };
-      if (!response.ok || body.error) throw new Error(body.error ?? `HTTP ${response.status}`);
+      const body = await response.json().catch(() => null) as (PolyforgeConfigRead & { error?: string }) | null;
+      if (!response.ok || !body || body.error) throw responseError(body, response.status);
       setRead(body);
     } catch (error) {
       setMessage({ tone: "error", ...failureLine(t, error) });
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => { void runRead(); }, [runRead]);
 
@@ -1916,8 +1947,8 @@ function HostSettingsRegion({ title }: { title: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(hostRegionWriteBody(action, key, value, read?.file?.sha256 ?? null)),
       });
-      const body = await response.json() as { error?: string; message?: string; entry?: PolyforgeConfigHistoryEntry | null };
-      if (!response.ok || body.error) throw new Error(body.error ?? `HTTP ${response.status}`);
+      const body = await response.json().catch(() => ({})) as { error?: string; message?: string; entry?: PolyforgeConfigHistoryEntry | null };
+      if (!response.ok || body.error) throw responseError(body, response.status);
       setMessage({ tone: "ok", text: body.message ?? t("polyforge.settings.configSaved") });
       const entry = body.entry;
       if (CONNECTION_KEYS.includes(key) && entry) setNotices((current) => ({ ...current, [key]: entry }));
@@ -1974,18 +2005,18 @@ function HostSettingsRegion({ title }: { title: string }) {
   // polyforge#51: the unclassified fallback errors under the pattern
   // editors — the operator's candidates for the next pattern.
   const [unclassified, setUnclassified] = useState<{ windowDays: number; items: { text: string; count: number; lastAt: string }[] } | null>(null);
-  const [unclassifiedError, setUnclassifiedError] = useState<string | null>(null);
+  const [unclassifiedError, setUnclassifiedError] = useState<Failure | null>(null);
   const runUnclassified = useCallback(async () => {
     try {
       const response = await fetch("/api/polyforge/unclassified");
-      const body = await response.json() as { pfPresent?: boolean; report?: { windowDays: number; items: { text: string; count: number; lastAt: string }[] } | null; error?: string };
-      if (!response.ok || body.error) throw new Error(body.error ?? `HTTP ${response.status}`);
+      const body = await response.json().catch(() => null) as { pfPresent?: boolean; report?: { windowDays: number; items: { text: string; count: number; lastAt: string }[] } | null; error?: string } | null;
+      if (!response.ok || !body || body.error) throw responseError(body, response.status);
       setUnclassified(body.report ?? null);
       setUnclassifiedError(null);
     } catch (error) {
-      setUnclassifiedError(error instanceof Error ? error.message : String(error));
+      setUnclassifiedError(failureLine(t, error));
     }
-  }, []);
+  }, [t]);
   useEffect(() => { void runUnclassified(); }, [runUnclassified]);
   // a pattern list's shown value: one regex per line (polyforge#51)
   const hostPatternsShownValue = (item: { key: string; value?: unknown; source?: string } | undefined): string => {
@@ -2090,7 +2121,7 @@ function HostSettingsRegion({ title }: { title: string }) {
       <div className="polyforge-config-unclassified" data-pf-unclassified="host" role="group" aria-label={t("polyforge.settings.unclassifiedTitle")} style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
         <p className="polyforge-config-card-title">{t("polyforge.settings.unclassifiedTitle")}</p>
         <p className="polyforge-config-card-hint">{t("polyforge.settings.unclassifiedHint")}</p>
-        {unclassifiedError && <p className="config-add-source-error" role="alert">{unclassifiedError}</p>}
+        <FailureNotice failure={unclassifiedError} t={t} />
         {unclassified && unclassified.items.length === 0 && <p className="polyforge-config-card-hint">{t("polyforge.settings.unclassifiedEmpty")}</p>}
         {unclassified?.items.map((item) => (
           <p key={item.text} className="polyforge-config-unclassified-row" data-pf-unclassified-text={item.text}>
@@ -2191,7 +2222,7 @@ function AddCellPane({ read, supported, busy, message, onAdd }: {
 }
 
 /** One workflow-card row's pending edit state. */
-type WorkflowRowFeedback = { message: string; tone: "default" | "error" };
+type WorkflowRowFeedback = RowFeedback;
 
 /**
  * The workflow card: the installed bundles' steps for one
@@ -2224,7 +2255,7 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
   const { disclosure, setRegion } = usePolyforgeDisclosure();
   // The last good read: a failed refresh never clears it.
   const [read, setRead] = useState<PolyforgeWorkflowsRead | null>(null);
-  const [readError, setReadError] = useState<string | null>(null);
+  const [readError, setReadError] = useState<Failure | null>(null);
   // The ↻ pattern: busy while the newest read is in flight, and
   // only that newest read may write the card or end the spin.
   const [refreshing, setRefreshing] = useState(false);
@@ -2240,7 +2271,7 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
     setRefreshing(true);
     fetch(`/api/polyforge/workflows?cwd=${encodeURIComponent(cwd ?? "")}&profile=${encodeURIComponent(profile)}`)
       .then(async (response) => {
-        const body = await response.json() as PolyforgeWorkflowsRead & { error?: string };
+        const body = await response.json() as PolyforgeWorkflowsRead & { error?: string; code?: string };
         if (seq !== readSeqRef.current) return;
         setRefreshing(false);
         // Good = at least one workspace answered with a reachable daemon; a
@@ -2248,18 +2279,18 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
         const good = response.ok && body.capable && workflowUnion(body).sources.some((entry) => entry.workflows?.daemon_reachable === true);
         if (!good) {
           // Keep the list on screen; the error sits above it.
-          setReadError(body.reason ?? body.error ?? `HTTP ${response.status}`);
+          setReadError(failureLine(t, responseError({ error: body.reason ?? body.error, code: body.code }, response.status)));
           return;
         }
         setRead(body);
-        setReadError(body.reason ?? null);
+        setReadError(body.reason ? failureLine(t, responseError({ error: body.reason, code: body.code }, response.status)) : null);
       })
       .catch((error: unknown) => {
         if (seq !== readSeqRef.current) return;
         setRefreshing(false);
-        setReadError(error instanceof Error ? error.message : String(error));
+        setReadError(failureLine(t, error));
       });
-  }, [cwd, profile]);
+  }, [cwd, profile, t]);
 
   useEffect(() => {
     if (!active) return;
@@ -2319,15 +2350,15 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
           expect_state: { file_sha256: owner.declared?.yaml.sha256 ?? null, values: {} },
         }),
       });
-      const data = await response.json() as { error?: string; message?: string };
-      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      const data = await response.json().catch(() => ({})) as { error?: string; message?: string };
+      if (!response.ok || data.error) throw responseError(data, response.status);
       setFeedback({ [rowId]: { message: data.message ?? t("polyforge.settings.configSaved"), tone: "default" } });
       setChainEdits((current) => { const next = { ...current }; delete next[rowId]; return next; });
       setChainAdds((current) => { const next = { ...current }; delete next[rowId]; return next; });
       runRead();
       onWritten();
     } catch (error) {
-      setFeedback({ [rowId]: { message: error instanceof Error ? error.message : String(error), tone: "error" } });
+      setFeedback({ [rowId]: failureFeedback(t, error) });
     } finally {
       setWriting(null);
     }
@@ -2430,7 +2461,7 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
           <span>{t("polyforge.settings.classLiveNote")}</span>
         </p>
       )}
-      {readError && <p role="alert" className="config-add-source-error">{readError}</p>}
+      <FailureNotice failure={readError} t={t} />
       {workflows && !workflows.write_capable && (
         <p className="config-scope-switch-reason">
           {t("polyforge.settings.workflowCapabilityHint")}{workflows.write_reason ? ` (${workflows.write_reason})` : ""}
@@ -2545,11 +2576,7 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
                   </label>
                 )}
                 {renderEditor(row)}
-                {feedback[row.id] && (
-                  <p className={`polyforge-config-row-feedback${feedback[row.id].tone === "error" ? " is-error" : ""}`} role={feedback[row.id].tone === "error" ? "alert" : undefined}>
-                    {feedback[row.id].message}
-                  </p>
-                )}
+                <RowFeedbackLine feedback={feedback[row.id]} detailsLabel={t("i18n.detailsLabel")} />
               </li>
             ))}
           </ul>
