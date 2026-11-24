@@ -225,6 +225,10 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   const { t } = useI18n();
   const enabled = useEnabledModels(cwd);
   const [page, setPage] = useState<ModelSubpage>(initialSubpage);
+  // The Provider editor owns a models.json draft. Once visited it stays
+  // mounted (hidden), so switching subpages never throws that draft away; it
+  // is not fetched before the first visit.
+  const [providersVisited, setProvidersVisited] = useState(initialSubpage === "providers");
   const [draft, setDraft] = useState<ModelPageDraft>(emptyDraft);
   const [drawerRow, setDrawerRow] = useState<ModelViewRow | null>(null);
   // The drawer keeps the catalog it opened with, so a background re-read never
@@ -400,6 +404,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   }, [dirty]);
   const changePage = (next: ModelSubpage) => {
     if (dirty > 0 && !window.confirm(t("models.unsavedLeave"))) return;
+    if (next === "providers") setProvidersVisited(true);
     setPage(next);
   };
 
@@ -465,14 +470,13 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
               <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
             </section>
           )}
-          {page === "providers" && (
-            <section className="settings-model-section is-provider-page" data-model-page-pane="providers" aria-label={t("models.providersHeading")}>
+          {(page === "providers" || providersVisited) && (
+            <section hidden={page !== "providers"} className="settings-model-section is-provider-page" data-model-page-pane="providers" aria-label={t("models.providersHeading")}>
               <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
             </section>
           )}
           {page === "claude" && (
             <section className="settings-model-section" data-model-page-pane="claude" aria-label={t("models.claudeCustomHeading")}>
-              <h3>{t("models.claudeCustomHeading")}</h3>
               <ClaudeCustomModels onRefresh={() => setRevision((previous) => previous + 1)} />
             </section>
           )}
