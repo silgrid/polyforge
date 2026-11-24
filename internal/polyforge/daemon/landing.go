@@ -104,6 +104,17 @@ type leaseManager struct {
 	recovered bool
 }
 
+// newLeaseManagerIf assembles the manager only for the production aihub
+// client: a daemon without one (the unit tests' fake hub) binds no manager,
+// and the driver runs a declared interval without a lease exactly as a lane
+// declaring none does. Production always has the client.
+func newLeaseManagerIf(hub leaseHub, journalPath string) *leaseManager {
+	if hub == nil {
+		return nil
+	}
+	return newLeaseManager(hub, journalPath)
+}
+
 // newLeaseManager assembles the manager over one private journal path.
 func newLeaseManager(hub leaseHub, journalPath string) *leaseManager {
 	return &leaseManager{

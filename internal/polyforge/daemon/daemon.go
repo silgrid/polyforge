@@ -834,7 +834,7 @@ func New(cfg Config) (*Daemon, error) {
 		obsDone:      make(chan struct{}),
 		ready:        make(chan struct{}),
 		sup:          supervise.NewRegistry(),
-		leases:       newLeaseManager(leaseHubOf(cfg.Hub), filepath.Join(cfg.DataDir, leaseJournalFile)),
+		leases:       newLeaseManagerIf(leaseHubOf(cfg.Hub), filepath.Join(cfg.DataDir, leaseJournalFile)),
 		verifyQ:      cfg.SharedAdmission,
 		upgradeDrain: cfg.UpgradeDrain,
 		// the Cell's own command_path (a reload moves it)
@@ -866,7 +866,9 @@ func New(cfg Config) (*Daemon, error) {
 		d.verifyQ = newVerifyQueue(cfg.StartupFile.Daemon.MaxConcurrentBars, cfg.StartupFile.Daemon.BarLoadThreshold)
 	}
 	d.runCtx, d.cancelRun = context.WithCancel(context.Background())
-	d.leases.runCtx = d.runCtx
+	if d.leases != nil {
+		d.leases.runCtx = d.runCtx
+	}
 	if cfg.HostSlots == nil {
 		// unhosted: this daemon owns the task lane's bound itself, starting
 		// from its file's value (0 = the default) — a hosted Cell gets the
