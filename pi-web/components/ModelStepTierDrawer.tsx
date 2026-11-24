@@ -7,7 +7,7 @@
 // a failure stops there with the draft kept — the #151 rules, restored after
 // #256 removed the inline editor.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { ModelViewRow } from "@/lib/harness/model-view";
 import {
@@ -61,6 +61,9 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
   for (const identity of identities) perHarness[identity.harness] = stepTierState(tier.tiers, identity);
   const view = stepTierRowView(identities.map((identity) => identity.harness), perHarness);
   const [draft, setDraft] = useState<string | null>(null);
+  // The submit reads the ref, so a target chosen in the same turn as the click
+  // is never lost to a not-yet-flushed render (the e2e's finding, u5#1).
+  const draftRef = useRef<string | null>(null);
   const [selection, setSelection] = useState<HarnessApplyToSelection>({ mode: "all", selected: [] });
   const [results, setResults] = useState<HarnessApplyToResult[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -68,6 +71,7 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
   const target = draft !== null ? draft : view.kind === "all" ? view.tier : "";
 
   const submit = async () => {
+    const chosen = draftRef.current !== null ? draftRef.current : view.kind === "all" ? view.tier : "";
     const targets = applyToTargets(selection, row.harnesses.map((harness) => ({ harness, label: harness })));
     if (targets.length === 0) return;
     // a harness in several tiers is replaced by the chosen single tier — confirm first
@@ -90,7 +94,7 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
         // hash the write expects — the CAS then guards exactly that state
         const read = await tierRead();
         if (!read.ok) { harnessError = read.error; break; }
-        const plan = stepTierWritePlan(stepTierItems(read.items), identity, target === "" ? null : target);
+        const plan = stepTierWritePlan(stepTierItems(read.items), identity, chosen === "" ? null : chosen);
         if (plan.length === 0) break;
         const answer = await tierWrite(plan[0], read.hash);
         if (!answer.ok) {
@@ -139,7 +143,7 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
               aria-label={t("models.stepTier")}
               disabled={busy}
               value={target}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => { draftRef.current = event.target.value; setDraft(event.target.value); }}
             >
               <option value="">{t("models.stepTierUnset")}</option>
               {stepTierDisplayOrder([...new Set(tier.tiers.map((item) => item.tier))]).map((name) =>

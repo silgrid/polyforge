@@ -1112,6 +1112,7 @@ try {
     await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
     await waitFor(() => tierWrites().some((args) => args.includes("unset") && args.includes("step_tiers.default")),
       ACTION_MS, "the drawer's unset never reached pf");
+    await waitFor(() => tierWrites().length >= 2, ACTION_MS, "the second tier write never reached pf");
     await waitFor(async () => (await drawer.innerText()).includes("Applied"),
       ACTION_MS, "the drawer never reported the applied write");
     await drawer.getByRole("button", { name: "Close", exact: true }).click({ timeout: ACTION_MS });
