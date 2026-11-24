@@ -119,7 +119,7 @@ func newLeaseManagerIf(hub leaseHub, journalPath string) *leaseManager {
 // newLeaseManager assembles the manager over one private journal path.
 func newLeaseManager(hub leaseHub, journalPath string) *leaseManager {
 	return &leaseManager{
-		hub: nil, journal: aihubclient.NewLeaseJournal(journalPath),
+		hub: hub, journal: aihubclient.NewLeaseJournal(journalPath),
 		now: time.Now, poll: leasePollEvery, renewEvery: leaseRenewEvery, ttl: leaseTTL,
 		cycles: map[string]*leaseCycle{},
 	}
