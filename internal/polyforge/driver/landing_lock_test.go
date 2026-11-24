@@ -595,3 +595,61 @@ func TestLandingEnterBeforeFirstDispatch(t *testing.T) {
 		t.Fatalf("held at dispatch: %v, want build 0, sync 1, merge 1", at)
 	}
 }
+
+// TestLandingLossDuringEnterHoldsAgain: the enter step itself loses the
+// lease while running; its re-entry dispatch must HOLD the lease before it
+// runs (review r4#1): the fix is not to skip Hold when the plan already
+// stands on enter.
+func TestLandingLossDuringEnterHoldsAgain(t *testing.T) {
+	d, sp, _, fl := landingEnv(t, "sync", "verification", spec("build"), spec("sync"), spec("verification"))
+	build := done("")
+	build.act = func() { fl.loseSticky(errors.New("the landing lock was lost in sync")) }
+	held := done("")
+	held.hold = true
+	reentered := done("")
+	reentered.act = func() {
+		fl.mu.Lock()
+		heldNow := fl.held
+		fl.mu.Unlock()
+		if !heldNow {
+			t.Errorf("the re-entered enter step dispatched without holding the lease")
+		}
+		fl.clear()
+	}
+	sp.script = []fakeEntry{build, held, reentered, done("")}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if holds, _ := fl.counts(); holds != 2 {
+		t.Fatalf("holds %d, want the initial and the re-entry hold", holds)
+	}
+}
+
+// TestLandingAskOnEnterHoldsAgain: an ask on the enter step (a non-gate
+// step) releases and re-enters at that same step; the re-entry takes the
+// lease before dispatching (review r4#1).
+func TestLandingAskOnEnterHoldsAgain(t *testing.T) {
+	d, _, _, fl := landingEnv(t, "sync", "verification", spec("sync"), spec("verification"))
+	if err := d.transition(TransitionRequest{Kind: TransInit, SpawnN: d.currentSpawnN()}); err != nil {
+		t.Fatal(err)
+	}
+	d.leaseHold = fl
+	fl.held = true
+	d.releaseLeaseForAsk("sync")
+	if _, releases := fl.counts(); releases != 1 {
+		t.Fatalf("releases %d, want the ask to release once", releases)
+	}
+	handled, err := d.ensureLease(context.Background(), "sync")
+	if err != nil || handled {
+		t.Fatalf("ensureLease after the ask = %v, %v; want the enter re-entry to hold, not rewind", handled, err)
+	}
+	fl.mu.Lock()
+	held := fl.held
+	fl.mu.Unlock()
+	if !held {
+		t.Fatal("the re-entered enter step did not hold the lease")
+	}
+	if holds, _ := fl.counts(); holds != 1 {
+		t.Fatalf("holds %d, want the re-entry's hold", holds)
+	}
+}
