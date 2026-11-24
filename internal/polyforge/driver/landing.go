@@ -196,18 +196,21 @@ func (d *Driver) ensureLease(ctx context.Context, stepID string) (bool, error) {
 	if d.leaseReentry {
 		d.leaseReentry = false
 		target := d.workflow.Steps[enter].ID
-		if stepID == target {
-			return false, nil
+		if stepID != target {
+			if err := d.transition(TransitionRequest{
+				Kind:   TransLeaseReentry,
+				StepID: stepID,
+				Reason: "the landing lock was released (an ask, a lost lease or a step failure): the interval re-enters at " + target,
+				SpawnN: d.currentSpawnN(),
+			}); err != nil {
+				return false, fmt.Errorf("driver: landing-lock re-entry failed: %w", err)
+			}
+			return true, nil
 		}
-		if err := d.transition(TransitionRequest{
-			Kind:   TransLeaseReentry,
-			StepID: stepID,
-			Reason: "the landing lock was released (an ask, a lost lease or a step failure): the interval re-enters at " + target,
-			SpawnN: d.currentSpawnN(),
-		}); err != nil {
-			return false, fmt.Errorf("driver: landing-lock re-entry failed: %w", err)
-		}
-		return true, nil
+		// Already standing on the declared enter step: no rewind is needed,
+		// but the re-entry still takes the lease BEFORE it dispatches. A
+		// return here would run the enter step (develop's sync) outside the
+		// lock, the very race the interval exists to prevent (review r4#1).
 	}
 	// A driver built without the daemon's manager (the unit tests' lanes)
 	// runs no lease; the production daemon always binds one, whose own Hold
