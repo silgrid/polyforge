@@ -374,8 +374,10 @@ func (w *Workflow) FutureDispatchable(step string, exec *capsule.Execution, skip
 		return false // every step done or skipped: nothing dispatches again
 	}
 	reachable := make([]bool, len(w.Steps))
-	markForward := func(from int, rewound bool) {
-		for i := from; i < len(w.Steps); i++ {
+	// mark makes [from, to) reachable; rewound says a rewind covers the span
+	// (it activates the rewind-only steps in it).
+	mark := func(from, to int, rewound bool) {
+		for i := from; i < to; i++ {
 			if skipped[i] {
 				continue
 			}
@@ -385,11 +387,13 @@ func (w *Workflow) FutureDispatchable(step string, exec *capsule.Execution, skip
 			reachable[i] = true
 		}
 	}
-	markForward(current, false)
-	// A reachable gate can FAIL and rewind to its target; from that target
-	// the forward order runs again, so the target and everything after it
-	// (a rewind covers the rewind-only steps it passes) become reachable —
-	// and with them any gate they contain. Repeat until nothing new.
+	mark(current, len(w.Steps), false)
+	// A reachable gate can FAIL and rewind to its target; the rewind covers
+	// [target, gate) only (the driver archives that span), so its steps —
+	// the rewind-only ones included — become reachable, and with them any
+	// gate they contain. The steps from the gate on run in forward order as
+	// already marked: a rewind-only step there needs a gate of its own.
+	// Repeat until nothing new.
 	for {
 		before := 0
 		for _, r := range reachable {
@@ -405,7 +409,7 @@ func (w *Workflow) FutureDispatchable(step string, exec *capsule.Execution, skip
 			if !ok {
 				continue
 			}
-			markForward(t, true)
+			mark(t, i, true)
 		}
 		after := 0
 		for _, r := range reachable {
