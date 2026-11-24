@@ -92,7 +92,14 @@ func (d *Driver) releaseLeaseForAsk(stepID string) {
 		return
 	}
 	if d.leaseHold != nil {
-		d.leaseReentry = true
+		// An ask at the interval's exit step (develop's merge — the human
+		// merge mode's wait) is the interval's end: release and let the
+		// reply resume that step, so a person's landing is not preceded by
+		// another sync/verification round. An ask before the exit re-enters
+		// at the declared enter step after the reply.
+		if _, exit, ok := d.leaseInterval(); !ok || d.workflow.Steps[exit].ID != stepID {
+			d.leaseReentry = true
+		}
 		d.releaseLease("ask")
 	}
 }
