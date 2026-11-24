@@ -234,7 +234,7 @@ func (d *Daemon) overrideView(wi string, item *api.WorkItem) (*protocol.Override
 		row.Pending = a.Models || a.Tier || a.Skip || a.Params
 		fillEffective(&row, ov, a, sources)
 		row.CanOverrideModels, row.ModelOverrideReason = d.modelOverlayFace(scene, wf, spec.ID)
-		if row.CanOverrideModels || row.Models != nil || row.Tier != "" {
+		if row.CanOverrideModels { // a step with no next dispatch never claims one (review r1#4)
 			row.ModelEffectScope = modelEffectNextDispatch
 		}
 		out.Steps = append(out.Steps, row)
@@ -571,7 +571,7 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 		fillRow(&row, out.Entry)
 	}
 	row.CanOverrideModels, row.ModelOverrideReason = d.modelOverlayFace(scene, wf, req.Step)
-	if row.CanOverrideModels || row.Models != nil || row.Tier != "" {
+	if row.CanOverrideModels { // a step with no next dispatch never claims one (review r1#4)
 		row.ModelEffectScope = modelEffectNextDispatch
 	}
 	note := out.Note

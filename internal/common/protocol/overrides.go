@@ -62,7 +62,9 @@ type OverrideStepView struct {
 	ModelOverrideReason string `json:"model_override_reason,omitempty"`
 	// ModelEffectScope names when a written models/tier overlay takes
 	// effect: "next_dispatch" — always the next dispatch of the step, never
-	// the finished round or a live dispatch (polyforge#270).
+	// the finished round or a live dispatch (polyforge#270). It is set only
+	// with CanOverrideModels: a step with no next dispatch leaves it empty,
+	// an overlay it still carries included.
 	ModelEffectScope string `json:"model_effect_scope,omitempty"`
 }
 
