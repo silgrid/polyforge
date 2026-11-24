@@ -388,7 +388,7 @@ a = sys.argv[1:]
 if a[:2] == ["step", "lock-check"]:
     repo = a[a.index("--repo") + 1] if "--repo" in a else ""
     if os.environ.get("FAKE_PF_REFUSE") == repo:
-        sys.stderr.write("pf step lock-check --repo %s: the landing lock was lost\n" % repo)
+        sys.stderr.write("pf step lock-check --repo %s: the landing lock was lost\\n" % repo)
         sys.exit(1)
     print("lock-check: held")
     sys.exit(0)
