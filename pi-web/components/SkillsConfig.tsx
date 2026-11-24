@@ -107,6 +107,22 @@ export function refusalResult(t: Translate, harness: "pi" | "claude", failure: s
   };
 }
 
+/** One switch round's result item as the route sends it: a refused item carries its code (owner 2A). */
+export type SkillSwitchResult = SkillApplyResult & { code?: string };
+
+/** A save failure as the panel shows it: the Chinese line, the server's words for the fold. */
+export interface SkillSaveError {
+  summary: string;
+  details?: string;
+}
+
+/** One switch result as its result row: a refused item reads by its route code (T4 AC2). */
+export function switchResultRow(t: Translate, result: SkillSwitchResult): HarnessApplyToResult {
+  return result.error
+    ? refusalResult(t, result.harness, result.error)
+    : { harness: result.harness, ok: true, text: t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten") };
+}
+
 /**
  * What each of these harnesses holds right now, as the undo record stores it:
  * pi's effective state, claude's own native word (polyforge#259 T4, review #5 —
@@ -323,7 +339,7 @@ function HarnessChips({ row }: { row: Pick<UnifiedSkillRow, "harnesses"> }) {
   );
 }
 
-function SkillDetail({
+export function SkillDetail({
   row,
   piSkill,
   cwd,
@@ -348,8 +364,8 @@ function SkillDetail({
   cwd: string | null;
   applyResults: HarnessApplyToResult[] | null;
   applyBusy: boolean;
-  saveError: string | null;
-  claudeSaveError: string | null;
+  saveError: SkillSaveError | null;
+  claudeSaveError: SkillSaveError | null;
   updateStatus?: SkillUpdateResult;
   checkingUpdate: boolean;
   updating: boolean;
@@ -454,7 +470,7 @@ function SkillDetail({
           )}
           {saveError && (
             <span style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>
-              {saveError}
+              {saveError.summary} {saveError.details}
             </span>
           )}
         </div>
@@ -553,7 +569,7 @@ function SkillDetail({
           )}
           {claudeSaveError && (
             <span style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>
-              {claudeSaveError}
+              {claudeSaveError.summary} {claudeSaveError.details}
             </span>
           )}
           <span style={{ fontSize: 11, color: "var(--text-dim)", display: "block", marginTop: 6 }}>
@@ -973,8 +989,8 @@ export function SkillsConfig({
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(() => getLastSettingsSelection("skills", cwd));
   const [toggling, setToggling] = useState<Set<string>>(new Set());
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [claudeSaveError, setClaudeSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<SkillSaveError | null>(null);
+  const [claudeSaveError, setClaudeSaveError] = useState<SkillSaveError | null>(null);
   const [applyResults, setApplyResults] = useState<HarnessApplyToResult[] | null>(null);
   // The last switch, undoable inside its toast (polyforge#259 T4 AC1).
   const [undoRecord, setUndoRecord] = useState<{ record: SettingsWriteItems; row: UnifiedSkillRow; harnesses: ("pi" | "claude")[] } | null>(null);
@@ -1144,7 +1160,7 @@ export function SkillsConfig({
       if (!res.ok || d.error || !d.results) throw new Error(d.error ?? `HTTP ${res.status}`);
       return d.results;
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError({ summary: e instanceof Error ? e.message : String(e) });
       return null;
     } finally {
       setToggling((current) => {
@@ -1170,9 +1186,7 @@ export function SkillsConfig({
       ...(row.pi && harnesses.includes("pi") ? { pi: state } : {}),
       ...(row.claude && harnesses.includes("claude") ? { claude: state === "disabled" ? "user-invocable-only" : "enabled" } : {}),
     }));
-    setApplyResults(results.map((result) => (result.error
-      ? refusalResult(t, result.harness as "pi" | "claude", result.error)
-      : { harness: result.harness, ok: true, text: t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten") })));
+    setApplyResults(results.map((result) => switchResultRow(t, result)));
     // A landed switch carries its own undo: each harness's real previous value
     // (pi's effective state, claude's native word), captured before the write
     // (review #5), for as long as the toast lives (T4 AC1).
@@ -1202,7 +1216,7 @@ export function SkillsConfig({
     const plan = undoPlan(entry.record, currentValues, Date.now());
     if (!plan.ok) {
       // `loadSkills` already refreshed the page; the prompt says the undo was dropped.
-      if (plan.reason === "changed") setSaveError(t("settings.undoSuperseded"));
+      if (plan.reason === "changed") setSaveError({ summary: t("settings.undoSuperseded") });
       return;
     }
     const items = plan.items
@@ -1218,9 +1232,7 @@ export function SkillsConfig({
     }
     setRows((prev) => applyRowSwitchResults(prev, results, applied));
     // A refused harness on the way back is shown like any other round's result.
-    setApplyResults(results.map((result) => (result.error
-      ? refusalResult(t, result.harness as "pi" | "claude", result.error)
-      : { harness: result.harness, ok: true, text: t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten") })));
+    setApplyResults(results.map((result) => switchResultRow(t, result)));
   }, [loadSkills, switchRound, t]);
 
   /** claude's own partition: one native word through the same gated write. */
@@ -1232,7 +1244,7 @@ export function SkillsConfig({
     if (results === null) return;
     const failed = results.find((result) => result.error);
     if (failed) {
-      setClaudeSaveError(failed.error ?? t("serverError.unknown"));
+      setClaudeSaveError({ summary: failed.error ?? t("serverError.unknown") });
       return;
     }
     setRows((prev) => applyRowSwitchResults(prev, results, { claude: state }));
@@ -1284,7 +1296,7 @@ export function SkillsConfig({
       if (!res.ok || d.error) throw new Error(d.error ?? `HTTP ${res.status}`);
       await loadSkills();
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      setSaveError({ summary: e instanceof Error ? e.message : String(e) });
     } finally {
       setCleaningLegacy(null);
     }
