@@ -574,11 +574,15 @@ try {
     // the refusal reaches the row only after the route's pf spawns
     // answer, which a fixed 500 ms dwell outran on GitHub's 2-core runner; wait
     // for pf's text (bounded), then assert on the row as before.
-    const rowText = async () => (await rowOf("claude_bin").innerText()).replace(/\s+/g, " ");
+    // polyforge#259 T4 AC2 (review r4#1): pf's own words and its diff now sit in
+    // the row's closed 详情 fold, which innerText does not read; textContent does.
+    const rowText = async () => ((await rowOf("claude_bin").textContent()) ?? "").replace(/\s+/g, " ");
     for (const deadline = Date.now() + 20_000; Date.now() < deadline && !/must be a URL/.test(await rowText());) await delay(100);
     const refused = await rowText();
     assert.match(refused, /must be a URL/, `pf's own refusal is not on the row: ${refused.slice(0, 200)}`);
     assert.match(refused, /claude_bin/, "the row does not show pf's key-level diff");
+    const shown = (await rowOf("claude_bin").locator(".polyforge-config-row-feedback").innerText()).replace(/\s+/g, " ");
+    assert.doesNotMatch(shown, /must be a URL/, `pf's own words are the row's main line, not folded: ${shown.slice(0, 200)}`);
     assert.equal(sha(readFileSync(cliToml, "utf8")), CLI_SHA, "pi-web wrote cli.toml itself");
   });
 } catch (error) {
