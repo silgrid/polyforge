@@ -59,7 +59,7 @@ func TestDevelopBuildPromptDelegatesToSubagents(t *testing.T) {
 		"A unit is `subagent` when an implementer sub-agent made both its commits, else `main`",
 		// AC4: Claude dispatches through Agent; a dispatch without an
 		// isolated sub-agent (pi's fact, a Claude step without the Agent tool) builds itself
-		"The `Agent` tool (Claude Code), `subagent_type: \"general-purpose\"`, in the foreground (never `run_in_background`)",
+		"The `Agent` tool (Claude Code), `subagent_type: \"general-purpose\"`, in the foreground (`run_in_background` stays off)",
 		// (contract 3's `summary` is the hand-off since workflow contract 4)
 		"When this dispatch's facts say it dispatches no sub-agent, your tools offer no `Agent` tool, or a dispatch fails to start, do that work yourself, record `main` and say why in your hand-off.",
 		// a task is self-contained and never stops the step (workflow
@@ -67,10 +67,10 @@ func TestDevelopBuildPromptDelegatesToSubagents(t *testing.T) {
 		// contract 4 every owner question, hand-off and hub call is a
 		// `pf step` the task never runs, and contract 3's result envelope
 		// is artifacts/handoff.md)
-		"It never runs `pf step` (no question to the owner, no hand-off, no hub call), never writes `runtime-state/` or `artifacts/handoff.md`",
+		"Its whole surface is the brief: `pf step` (owner questions, hand-off, hub calls), `runtime-state/` and `artifacts/handoff.md` stay yours",
 		// PR 12: a task returns its unit's run; the session records units.json
 		"the run that went red then green (`repo`, `cwd`, `argv`) with both exit codes, its marker",
-		"You write `artifacts/build/units.json` from what the tasks return (a task never writes it).",
+		"You write `artifacts/build/units.json` from what the tasks return.",
 	} {
 		if !strings.Contains(flat, w) {
 			t.Errorf("develop/build prompt must carry %q", w)
