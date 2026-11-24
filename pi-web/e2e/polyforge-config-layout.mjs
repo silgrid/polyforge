@@ -870,12 +870,11 @@ try {
 
   // polyforge#259 T4 AC1 (owner 1A): the Host region's editable fields are one
   // draft — one footer「保存（n 项改动）」 writes exactly the changed keys, and no
-  // row keeps a Save of its own. The expected count and the written keys come
-  // from the fields the scenario types into, never from the page's own numbers.
+  // row keeps a Save of its own. Its own page, with every route mocked before
+  // the first request: the Host-only keys render behind a supported Cell read,
+  // and the verify container's real `pf` differs from the host's
+  // (build finding u11#7/u11#8).
   await check("S259-HOST-SAVE — Host 区的改动由一个 footer 保存", async () => {
-    // The section is already open on the Polyforge pane (open()): the Host
-    // routes go in before the Host pane mounts, and nothing reloads.
-    const { context, page, dialog } = await open({ width: 1280, locale: "en" });
     const writes = [];
     const hostItems = [
       { key: "max_concurrent_jobs", value: 4, source: "file", set: true, schema: { kind: "int", min: 1 } },
@@ -884,11 +883,23 @@ try {
       { key: "transient_error_patterns", value: ["timeout"], source: "file", set: true },
       { key: "model_error_patterns", value: [], source: "default", set: false },
     ];
-    // The Host-only keys render only when the Cell registry reads (the upgrade
-    // hint stands in otherwise), and the verify container has no pf
-    // (build finding u11#7).
+    const context = await h.browser.newContext({ viewport: { width: 1280, height: 980 }, locale: "en-US" });
+    await context.addInitScript(() => {
+      try {
+        window.localStorage.setItem("pi-locale", "en");
+        window.localStorage.setItem("pi-web:polyforge-config-disclosure", JSON.stringify({
+          detect: true, cliToml: true, daemon: true, workspace: true, history: true, install: true, workflow: true,
+        }));
+      } catch { /* storage unavailable */ }
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(20_000);
     await page.route("**/api/polyforge/cells", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       capabilities: ["cell-list", "cell-scoped-write"], supported: true, cells: [{ profile: "default", state: "serving" }],
+    }) }));
+    await page.route("**/api/polyforge/detect*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      pfPresent: true, pfVersion: "v2.20.11", pfVersionBelowMinimum: false, line: "internal",
+      piSkillInstalled: true, piSkillEnabled: true, claudeSkillsSymlink: true, claudeSessionStartHook: true, daemon: { reachable: true },
     }) }));
     await page.route("**/api/polyforge/config?host=1", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       capable: true, file: { path: "/root/.config/polyforge/cli.toml", sha256: "e2e-host-sha" }, items: hostItems, memoryPolicy: null,
@@ -904,6 +915,12 @@ try {
       }
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "saved", entry: null }) });
     });
+    const dialog = page.locator('[role="dialog"][aria-label="Settings"]').first();
+    await page.goto(`${base}/?session=${SESSION}`, { waitUntil: "domcontentloaded", timeout: NAV_MS });
+    await page.getByText("E2E polyforge layout host session").first().waitFor({ state: "attached", timeout: NAV_MS });
+    await page.locator('button[aria-label="Settings"]').first().click();
+    await dialog.waitFor({ state: "visible", timeout: NAV_MS });
+    await dialog.getByRole("button", { name: "Polyforge", exact: true }).click();
     await selectPane(page, "host");
     const region = dialog.locator('[data-pf-settings-region="host"]').first();
     await region.waitFor({ state: "visible", timeout: 60_000 });
