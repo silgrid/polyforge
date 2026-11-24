@@ -57,7 +57,7 @@ export type UndoPlan =
   | { ok: false; reason: "expired" | "changed" };
 
 /** 登记一次多 harness 写入；失败不登记。 */
-export function recordWriteItems(_input: {
+export function recordWriteItems(input: {
   field: string;
   previous: SettingsWriteItem[];
   written: SettingsWriteItem[];
@@ -65,16 +65,33 @@ export function recordWriteItems(_input: {
   at: number;
   lifetimeMs?: number;
 }): SettingsWriteItems | null {
-  return null;
+  if (!input.ok) return null;
+  return {
+    field: input.field,
+    previous: input.previous.map((item) => ({ ...item })),
+    written: input.written.map((item) => ({ ...item })),
+    at: input.at,
+    lifetimeMs: input.lifetimeMs ?? UNDO_LIFETIME_MS,
+  };
 }
 
-/** 撤销计划：过期或字段已被别处改过就放弃（polyforge#259 T4，owner 4A）。 */
+/**
+ * 撤销计划（owner 4A）：过期就放弃；字段里有一个已经不是这次写入留下的值，说明
+ * 别处改过它，也放弃——撤销永远不覆盖别人的写入。
+ */
 export function undoPlan(
-  _record: SettingsWriteItems | null,
-  _current: SettingsWriteItem[],
-  _now: number,
+  record: SettingsWriteItems | null,
+  current: SettingsWriteItem[],
+  now: number,
 ): UndoPlan {
-  return { ok: false, reason: "expired" };
+  if (record === null || now >= record.at + record.lifetimeMs) return { ok: false, reason: "expired" };
+  const byHarness = new Map(current.map((item) => [item.harness, item.state]));
+  for (const written of record.written) {
+    if (!byHarness.has(written.harness) || byHarness.get(written.harness) !== written.state) {
+      return { ok: false, reason: "changed" };
+    }
+  }
+  return { ok: true, items: record.previous.map((item) => ({ ...item })) };
 }
 
 /** 一次多 harness 写入的撤销记录。 */
