@@ -141,17 +141,20 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEf
                 checked={row.chatAvailable} disabled={!enabled.view?.editable || enabled.pending !== null}
                 onChange={(event) => enabled.setModels(key, [key], event.target.checked)} /></label>
             : <span>pi: {row.chatAvailable ? t("models.available") : t("models.unavailable")}</span>)}
-          {row.harnesses.includes("claude") && <span> claude: {t("models.unsupported")}</span>}
+          {row.harnesses.includes("claude") && <span data-claude-chat="always" title={t("models.chatAlwaysOnReason")}>
+            {" "}claude: {t("models.chatAlwaysOn")}<span className="settings-model-info" aria-hidden="true"> ⓘ</span>
+          </span>}
         </td>
         <td>
-          {onEffort && row.harnesses.includes("pi") && supported.length > 0 && <label>pi <select
-            aria-label={`${t("models.reasoning")} — ${key}`}
-            value={piSettings?.perModelReasoningEffort[key]?.raw ?? ""}
-            onChange={(event) => onEffort(row.provider, row.id, event.target.value)}>
-            <option value="">{t("i18n.default")}</option>
-            {supported.map((level) => <option key={level} value={level}>{level}</option>)}
-          </select></label>}
-          <span>{row.reasoning.join(", ") || t("models.notProvided")}</span>
+          {onEffort && row.harnesses.includes("pi") && supported.length > 0
+            ? <label>pi <select
+              aria-label={`${t("models.reasoning")} — ${key}`}
+              value={piSettings?.perModelReasoningEffort[key]?.raw ?? ""}
+              onChange={(event) => onEffort(row.provider, row.id, event.target.value)}>
+              <option value="">{t("models.followGlobal", { level: piSettings?.reasoningEffort?.raw ?? t("models.notProvided") })}</option>
+              {supported.map((level) => <option key={level} value={level}>{level}</option>)}
+            </select></label>
+            : <span data-reasoning="readonly">{row.reasoning.join(", ") || t("models.notProvided")}</span>}
         </td>
         {tier && <td><StepTierBadges row={row} tier={tier} /></td>}
       </tr>;

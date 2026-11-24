@@ -3743,3 +3743,12 @@ select.mcp-add-input {
 .models-provider-picker select:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 .is-provider-page .config-panel-root.is-embedded { flex-direction: column; }
 .is-provider-page .config-panel-root.is-embedded > .config-panel-surface { padding: 0 2px; }
+.settings-model-info { color: var(--text-dim); cursor: help; }
+.settings-model-table [data-reasoning="readonly"] {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
