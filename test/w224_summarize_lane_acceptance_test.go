@@ -1,3 +1,4 @@
+// carries: test/w224_summarize_lane_acceptance_test.go
 package test
 
 // w224_summarize_lane_acceptance_test.go: the polyforge#224 acceptance
@@ -153,6 +154,58 @@ func w224AwaitSummary(t *testing.T, inst *v1Install, d *v1Daemon, wi string, bou
 	return w224Snap{}
 }
 
+// w224AwaitNextSummary waits for the summarize call a marked request
+// started after an earlier call FAILED: the projection answers the
+// pre-call state while the call is in flight (lane.go Projection), so the
+// earlier call's error is still held then and is no fact of the new call.
+// It polls plain fetches until the new call's success lands — a summary —
+// and answers that snapshot for the caller's exact assertions; bound caps
+// the wait, it is no fixed delay.
+func w224AwaitNextSummary(t *testing.T, inst *v1Install, d *v1Daemon, wi string, bound time.Duration) w224Snap {
+	t.Helper()
+	deadline := time.Now().Add(bound)
+	var last w224Snap
+	for time.Now().Before(deadline) {
+		last = w224SnapOf(t, inst, d, wi)
+		if last.Summary != nil {
+			return last
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Fatalf("the next summarize call landed no summary in the snapshot of %s within %v (held error %q; daemon log tail: %s)", wi, bound, w224Str(last.SummaryError), d.logTail())
+	return w224Snap{}
+}
+
+// w224DemandUntilFact waits for the FIRST summarize fact of a WI whose
+// step is running: a marked request that lands before the step's dispatch
+// is live (agent handle, spawn journal, transcript) arms nothing and
+// records nothing (watchsnap.go summarizeDemand, lane.go Marked), so —
+// as the panel does on every read — it re-issues the marked request until
+// a fact lands. Each round reads a plain snapshot first and stops at the
+// first summary or error, so no request follows the call that produced
+// it. It answers that snapshot, the time right after the LAST marked
+// request (the call starts inside a marked request, so an interval
+// measured from here is measured from no earlier than the call's start)
+// and the number of marked requests sent; bound caps the wait.
+func w224DemandUntilFact(t *testing.T, inst *v1Install, d *v1Daemon, wi string, bound time.Duration) (w224Snap, time.Time, int) {
+	t.Helper()
+	deadline := time.Now().Add(bound)
+	var lastDemand time.Time
+	sent := 0
+	for time.Now().Before(deadline) {
+		s := w224SnapOf(t, inst, d, wi)
+		if s.Summary != nil || s.SummaryError != nil {
+			return s, lastDemand, sent
+		}
+		w224Demand(t, inst, d, wi)
+		lastDemand = time.Now()
+		sent++
+		time.Sleep(300 * time.Millisecond)
+	}
+	t.Fatalf("no summarize fact ever landed in the snapshot of %s within %v ((no summary, no error) after %d marked requests; daemon log tail: %s)", wi, bound, sent, d.logTail())
+	return w224Snap{}, time.Time{}, sent
+}
+
 // w224AssertSummaryLine pins the held line's content contract and the
 // dispatch facts the fake narrates: ONE plain-text line, at most 200
 // characters, held with its age and no error, naming the model, a
@@ -269,6 +322,14 @@ func w224NewWI(t *testing.T, inst *v1Install, goal string, plan func(wi string) 
 // a turn a real agent appends mid-step.
 func w224GrowCmd(sleepS int) string {
 	return fmt.Sprintf(`sleep %d; for f in "$PI_CODING_AGENT_SESSION_DIR"/*.jsonl; do printf '%%s\n' '{"t":"turn","at":"w224","text":"scripted transcript growth"}' >> "$f"; done`, sleepS)
+}
+
+// w224GrowOnBarrierCmd is w224GrowCmd's growth gated on an event instead
+// of a fixed sleep: it waits for the barrier file the test creates (polled
+// every 0.1 s, bounded: past boundS seconds it exits 1 without growing),
+// then appends the same scripted turn to the transcript.
+func w224GrowOnBarrierCmd(barrier string, boundS int) string {
+	return fmt.Sprintf(`i=0; while [ ! -e '%s' ]; do i=$((i+1)); if [ "$i" -gt %d ]; then exit 1; fi; sleep 0.1; done; for f in "$PI_CODING_AGENT_SESSION_DIR"/*.jsonl; do printf '%%s\n' '{"t":"turn","at":"w224","text":"scripted transcript growth"}' >> "$f"; done`, barrier, boundS*10)
 }
 
 // w224AwaitRun polls the fake agent's journal until the Run command whose
@@ -437,15 +498,27 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	inst := newV1Install(t)
 	root := w224HarnessRoot(t)
 	d := newV1Daemon(t, inst, w224OptArgs("--claude-bin", inst.fakepiPath, "--harness-root", root))
-	w224Summarize(t, d, "pi:e2e-w224-fail", "claude:e2e-w224-claude")
+	w224Summarize(t, d, "pi:e2e-w224-fail", "claude:e2e-w224-claude-slow")
 	d.start()
 
+	// The transcript grows when the test creates growBarrier — once the
+	// 60 s interval since the first call has passed — not after a fixed
+	// sleep that a loaded host can outrun.
+	growBarrier := filepath.Join(t.TempDir(), "w224-grow")
 	wi := w224NewWI(t, inst, "w224: a failed call walks to the next candidate", func(wi string) []map[string]any {
 		return []map[string]any{
-			{"do": "envelope", "id": "fix", "run": []string{w224GrowCmd(75)}, "ms": 30000},
+			{"do": "envelope", "id": "fix", "run": []string{w224GrowOnBarrierCmd(growBarrier, 150)}, "ms": 30000},
 			{"do": "envelope", "id": "review", "outcome": "completed"},
 		}
 	})
+	// W224_INJECT_EARLY_DEMAND=1 (test-only, off by default) issues the
+	// first marked request before the submit — the daemon has no live
+	// dispatch for the WI yet, so the request arms nothing — the first
+	// demand a loaded host lands before the step's agent and transcript
+	// are ready.
+	if os.Getenv("W224_INJECT_EARLY_DEMAND") == "1" {
+		w224Demand(t, inst, d, wi)
+	}
 	d.pf(t, "submit", wi)
 	waitStepStatus(t, d, wi, "fix", "in_progress", 30*time.Second)
 	capDir := d.capsuleDir(wi)
@@ -454,8 +527,15 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	// The first call fails raw: the snapshot carries the RAW error text
 	// (the harness's own stderr wording, never faked), no summary, and
 	// the failure breaks nothing (the snapshot stays whole).
-	w224Demand(t, inst, d, wi)
-	s := w224AwaitSummary(t, inst, d, wi, 15*time.Second)
+	// A marked request landing before the step's dispatch is live arms
+	// nothing, so the marked request is re-issued until the first fact
+	// lands. The first call started inside the last of them (Marked sets
+	// the interval clock before the route answers), so the interval is
+	// measured from no later than firstDemandAt.
+	s, firstDemandAt, demands := w224DemandUntilFact(t, inst, d, wi, 15*time.Second)
+	if demands < 1 {
+		t.Fatalf("a summarize fact landed before any marked request (%+v): a plain fetch armed the lane", s)
+	}
 	if s.Summary != nil {
 		t.Fatalf("a summary is held for a failed call: %q", *s.Summary)
 	}
@@ -481,10 +561,18 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	// The walk: the interval passes, the transcript grows, and the next
 	// call dispatches the NEXT candidate — the claude one, context flag
 	// --bare (token auth mode per the ruling), its success clearing the
-	// error.
+	// error. The growth is released only once 61 s have passed since the
+	// first request (the spec's 60 s spacing plus a second), and the
+	// marked request follows the growth's completion. The slow candidate
+	// (12 s in the fake) keeps the call in flight past the first polls,
+	// while the projection still answers the first call's error.
+	time.Sleep(time.Until(firstDemandAt.Add(61 * time.Second)))
+	if err := os.WriteFile(growBarrier, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	w224AwaitRun(t, capDir, "PI_CODING_AGENT_SESSION_DIR", 85*time.Second)
 	w224Demand(t, inst, d, wi)
-	w224AssertSummaryLine(t, w224AwaitSummary(t, inst, d, wi, 15*time.Second), "e2e-w224-claude", "--bare")
+	w224AssertSummaryLine(t, w224AwaitNextSummary(t, inst, d, wi, 40*time.Second), "e2e-w224-claude-slow", "--bare")
 
 	// No credential value appears in the dispatch argv, the daemon log or
 	// any artifact: the sentinel lives only in the settings.json the test
