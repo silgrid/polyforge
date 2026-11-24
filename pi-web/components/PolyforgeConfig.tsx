@@ -2071,7 +2071,9 @@ function HostSettingsRegion({ title }: { title: string }) {
     const landed: Record<string, string> = {};
     for (const key of plain) {
       if (!(await postOnce({ action: "set", key, value: values[key] }))) break;
-      landed[key] = hostDraft(key);
+      // A list settles to the lines it wrote (blank lines dropped, trimmed) —
+      // the text the re-read shows — so a landed list leaves no draft behind.
+      landed[key] = HOST_LIST_KEYS.includes(key) ? (values[key] as string[]).join("\n") : hostDraft(key);
     }
     setDrafts((current) => settleDraft(current, landed) as Record<string, string>);
     setBusy(null);
