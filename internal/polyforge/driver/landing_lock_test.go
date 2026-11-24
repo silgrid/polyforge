@@ -528,22 +528,20 @@ func TestLandingRenewLossStopsDispatch(t *testing.T) {
 	build.act = func() { fl.loseSticky(errors.New("the landing lock was lost (renewing app)")) }
 	held := done("")
 	held.hold = true
-	sp.script = []fakeEntry{build, held, done(""), done("")}
+	reentered := done("")
+	reentered.act = func() { fl.clear() }
+	sp.script = []fakeEntry{build, held, reentered, done("")}
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	exec := readExec(t, d.execPath)
-	var landing []capsule.RewindRecord
-	for _, r := range exec.RewindStats.Rewinds {
-		if r.Class == capsule.RewindLockCycle {
-			landing = append(landing, r)
-		}
-	}
-	if len(landing) != 1 || landing[0].ToStep != "sync" {
-		t.Fatalf("landing rewind %+v, want one to sync", landing)
-	}
 	if AgentRewindCount(exec.RewindStats.Rewinds) != 0 {
 		t.Fatal("the lost lease was charged to the rewind budget")
+	}
+	// the loss happened on the enter step itself: its re-entry needs no
+	// rewind record, but it must take the lease again (holds == 2)
+	if holds, _ := fl.counts(); holds != 2 {
+		t.Fatalf("holds %d, want the original and the re-entry hold", holds)
 	}
 }
 
