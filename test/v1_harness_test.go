@@ -253,6 +253,7 @@ func newV1InstallTaskRepo(t *testing.T) (*v1Install, taskRemote) {
 // on the e2e project (nil = none).
 func newV1InstallRepos(t *testing.T, repos []api.ProjectRepo) *v1Install {
 	t.Helper()
+	repos = leaseableProjectRepos(t, repos)
 	bins := v1Bins(t)
 	inst := &v1Install{
 		t:          t,
@@ -312,6 +313,50 @@ func newV1InstallRepos(t *testing.T, repos []api.ProjectRepo) *v1Install {
 		t.Fatalf("create project: %v", err)
 	}
 	return inst
+}
+
+// leaseableProjectRepos gives the e2e project forge-shaped repository
+// URLs (owner ruling 2026-11-24, 2A: the fixtures use a normalizable URL,
+// not a production exception): a local origin is declared as
+// `https://forge.invalid/e2e-<n>/<name>.git` and a `url.<local>.insteadOf`
+// line in the test HOME rewrites that prefix back to the local bare
+// repository, so git clones and pushes while the lease server normalizes a
+// real forge identity. A URL that is already normalizable is kept.
+func leaseableProjectRepos(t *testing.T, repos []api.ProjectRepo) []api.ProjectRepo {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("test HOME: %v", err)
+	}
+	cfgPath := filepath.Join(home, ".gitconfig")
+	out := make([]api.ProjectRepo, 0, len(repos))
+	var add strings.Builder
+	for i, r := range repos {
+		local := strings.TrimSpace(r.URL)
+		abs := strings.TrimPrefix(local, "file://")
+		if !strings.HasPrefix(local, "file://") && !strings.HasPrefix(local, "/") {
+			out = append(out, r)
+			continue
+		}
+		host := fmt.Sprintf("https://forge.invalid/e2e-%d/", i)
+		dir := filepath.Dir(abs) + "/"
+		add.WriteString(fmt.Sprintf("[url \"file://%s\"]\n\tinsteadOf = %s\n", dir, host))
+		out = append(out, api.ProjectRepo{Name: r.Name, URL: host + filepath.Base(abs)})
+	}
+	if add.Len() > 0 {
+		f, err := os.OpenFile(cfgPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatalf("write git config: %v", err)
+		}
+		if _, err := f.WriteString(add.String()); err != nil {
+			f.Close()
+			t.Fatalf("write git config: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("write git config: %v", err)
+		}
+	}
+	return out
 }
 
 // startAihubProc starts one `pf aihub` process in its own process group and

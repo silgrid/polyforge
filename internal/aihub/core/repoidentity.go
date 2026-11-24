@@ -15,7 +15,6 @@ package core
 
 import (
 	"net/url"
-	pathpkg "path"
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -38,18 +37,6 @@ func (r RepoIdentity) Key() string {
 // trailing `/` and a trailing `.git` are dropped; host and path are
 // lowercased. A value that names no repository is CORE-400.
 func NormalizeRepoURL(raw string) (RepoIdentity, error) {
-	// A local origin (file:// URL or an absolute path) is a development
-	// workspace's repository: its identity is the path itself, so the
-	// lease key stays stable while the daemon needs no network forge. It
-	// is still fail-closed on an empty or relative path.
-	if abs, ok := localRepoPath(raw); ok {
-		clean := strings.Trim(pathpkg.Clean(abs), "/")
-		if clean == "" {
-			return RepoIdentity{}, Fail(api.ErrCoreBadInput, "LEASE_REPO_INVALID",
-				"repository %q names no path", raw)
-		}
-		return RepoIdentity{Host: "local", Owner: "path", Name: clean}, nil
-	}
 	host, path, err := parseRepoURL(raw)
 	if err != nil {
 		return RepoIdentity{}, err
@@ -77,20 +64,6 @@ func NormalizeRepoURL(raw string) (RepoIdentity, error) {
 		Owner: strings.ToLower(strings.Join(segs[:len(segs)-1], "/")),
 		Name:  strings.ToLower(segs[len(segs)-1]),
 	}, nil
-}
-
-// localRepoPath answers the absolute path a local origin names (a file://
-// URL or an absolute path).
-func localRepoPath(raw string) (string, bool) {
-	s := strings.TrimSpace(raw)
-	if strings.HasPrefix(s, "file://") {
-		p := strings.TrimPrefix(s, "file://")
-		return p, strings.HasPrefix(p, "/")
-	}
-	if strings.HasPrefix(s, "/") {
-		return s, true
-	}
-	return "", false
 }
 
 // RepoIdentities resolves repository URLs to lease keys over one store,

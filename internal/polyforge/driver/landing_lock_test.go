@@ -19,6 +19,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // fakeLander is one interval's IntervalLeases: it counts the holds and
@@ -311,6 +312,7 @@ func TestLandingLockFailRoutesToEnterUncharged(t *testing.T) {
 	merge.OnFail = &OnFail{Target: "build"}
 	d, sp, _, _ := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), merge)
 	lost := fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusFail, "the landing lock was lost (renewing app)")}}
+	lost.act = func() { d.leaseLost.Store(true) }
 	sp.script = []fakeEntry{done(""), done(""), lost, done(""), done("")}
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -363,6 +365,142 @@ func TestLandingBlockedResumeReentersEnter(t *testing.T) {
 
 // TestLandingRenewLossStopsDispatch: a lease lost while a dispatch runs
 // stops that dispatch and re-enters at enter, uncharged.
+// TestLandingGateFailOutsideIntervalStaysCharged: a review gate's FAIL
+// (before the interval) keeps its on_fail target and is charged, even with
+// a lost lease recorded and the words in its reason (review r2#2).
+func TestLandingGateFailOutsideIntervalStaysCharged(t *testing.T) {
+	review := spec("review")
+	review.Gate = true
+	review.OnFail = &OnFail{Target: "build"}
+	d, sp, _, _ := landingEnv(t, "sync", "merge", spec("build"), review, spec("sync"), spec("merge"))
+	d.leaseLost.Store(true)
+	lost := fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusFail, "the landing lock was lost (renewing app)")}}
+	sp.script = []fakeEntry{done(""), lost, done(""), done(""), done("")}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	exec := readExec(t, d.execPath)
+	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].ToStep != "build" || exec.RewindStats.Rewinds[0].Class != capsule.RewindCharged {
+		t.Fatalf("rewinds %+v, want the review FAIL charged to build", exec.RewindStats.Rewinds)
+	}
+}
+
+// TestLandingVerificationFailReturnsToBuild: a real verification FAIL
+// (inside the interval, no lost lease) keeps on_fail build and is charged,
+// even when its reason mentions the lock (review r2#2).
+func TestLandingVerificationFailReturnsToBuild(t *testing.T) {
+	ver := spec("verification")
+	ver.Gate = true
+	ver.OnFail = &OnFail{Target: "build"}
+	d, sp, _, _ := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), ver, spec("merge"))
+	lost := fakeEntry{res: &StepResult{Handoff: handoffOf(stepcall.StatusFail, "the landing lock test case failed")}}
+	sp.script = []fakeEntry{done(""), done(""), lost, done(""), done(""), done(""), done("")}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	exec := readExec(t, d.execPath)
+	if len(exec.RewindStats.Rewinds) != 1 || exec.RewindStats.Rewinds[0].ToStep != "build" || exec.RewindStats.Rewinds[0].Class != capsule.RewindCharged {
+		t.Fatalf("rewinds %+v, want the verification FAIL charged to build", exec.RewindStats.Rewinds)
+	}
+}
+
+// TestLandingCancelReleases: a cancelled run releases the interval lease.
+func TestLandingCancelReleases(t *testing.T) {
+	d, sp, _, fl := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), spec("merge"))
+	sp.script = []fakeEntry{done(""), {hold: true}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx) }()
+	waitUntil(t, "the interval lease held", func() bool {
+		fl.mu.Lock()
+		defer fl.mu.Unlock()
+		return fl.held
+	})
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after the cancel")
+	}
+	fl.mu.Lock()
+	held := fl.held
+	fl.mu.Unlock()
+	if held {
+		t.Fatal("the interval lease stayed held after the cancel")
+	}
+	if _, releases := fl.counts(); releases != 1 {
+		t.Fatalf("releases %d, want one", releases)
+	}
+}
+
+// TestLandingSkippedExitReleases: skipping the exit step leaves the
+// interval and releases before the next step dispatches.
+func TestLandingSkippedExitReleases(t *testing.T) {
+	dir := t.TempDir()
+	sp := &fakeSpawner{}
+	log := &eventLog{}
+	fl := &fakeLander{}
+	merge := spec("merge")
+	merge.Skippable = true
+	wf := testLane(4, spec("build"), spec("sync"), merge, spec("after")).WithSkipped([]string{"merge"})
+	wf.LockInterval = &workflow.LeaseInterval{Enter: "sync", Exit: "merge"}
+	d, err := New(Config{
+		WI: WIInfo{ID: "wi_skip", CapsuleDir: dir, BundleName: "b"}, ExecPath: dir + "/runtime-state/execution.json",
+		Workflow: wf, Spawner: sp, Log: log, IntervalLeases: fl,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := done("")
+	after.act = func() {
+		fl.mu.Lock()
+		held := fl.held
+		fl.mu.Unlock()
+		if held {
+			t.Errorf("the after step dispatched under the skipped interval's lease")
+		}
+	}
+	sp.script = []fakeEntry{done(""), done(""), after}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, releases := fl.counts(); releases != 1 {
+		t.Fatalf("releases %d, want one", releases)
+	}
+}
+
+// TestLandingQueueFactReachesSupervisor: waiting for the lease sends the
+// supervisor a StepQueued fact, never a stall.
+func TestLandingQueueFactReachesSupervisor(t *testing.T) {
+	dir := t.TempDir()
+	sp := &fakeSpawner{}
+	log := &eventLog{}
+	fl := &fakeLander{queued: true}
+	link := supervise.NewLink("wi_q")
+	wf := testLane(4, spec("sync"), spec("merge"))
+	wf.LockInterval = &workflow.LeaseInterval{Enter: "sync", Exit: "merge"}
+	d, err := New(Config{
+		WI: WIInfo{ID: "wi_q", CapsuleDir: dir, BundleName: "b"}, ExecPath: dir + "/runtime-state/execution.json",
+		Workflow: wf, Spawner: sp, Log: log, IntervalLeases: fl, Link: link,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.script = []fakeEntry{done(""), done("")}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	queued := false
+	for _, f := range link.Facts.Drain() {
+		if q, ok := f.(supervise.StepQueued); ok && q.Step == "sync" {
+			queued = true
+		}
+	}
+	if !queued {
+		t.Fatal("no StepQueued fact reached the supervisor for the waiting enter step")
+	}
+}
+
 func TestLandingRenewLossStopsDispatch(t *testing.T) {
 	merge := spec("merge")
 	d, sp, _, fl := landingEnv(t, "sync", "merge", spec("build"), spec("sync"), merge)

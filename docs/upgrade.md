@@ -1601,11 +1601,10 @@ releases it when the interval ends, the workflow leaves it, or the owner
 is asked; a lost lease and an ask of a non-gate step re-enter at the
 declared enter step and charge no rewind, while a gate's ask
 (verification's waiver, the human merge's person) resumes that gate in
-place (owner ruling 2026-11-24, 1A). A local (`file://` or absolute-path)
-repository origin normalizes to a `local/path/...` lease key, so a
-development workspace takes a real lease instead of being exempt; an
-origin the server cannot normalize pauses the lock for the owner's
-mapping. The in-memory per-repository merge lock is gone:
+place (owner ruling 2026-11-24, 1A). A repository origin the server cannot
+normalize (a local path) pauses the lock for the owner's mapping; the
+e2e fixtures declare a normalizable forge URL and rewrite it to their
+local clone with git's `url.<base>.insteadOf`. The in-memory per-repository merge lock is gone:
 micro's merge and integrate's revert take the same server lease for one
 dispatch. `pf step lock-check --repo <claim repo name>` renews the lease
 under the calling ticket and refuses on any failure, and `merge.py` /

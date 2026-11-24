@@ -25,7 +25,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
@@ -617,13 +616,19 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 		return nil
 	}
 	class := capsule.RewindCharged
-	// A FAIL whose one-line reason names the landing lock is Q7's lost
-	// cycle, not the work's defect: it re-enters at the lane's declared
-	// enter step and counts toward no rewind budget.
-	if enter, _, ok := d.leaseInterval(); ok && strings.Contains(v.FailReason, "landing lock") {
-		target = d.workflow.Steps[enter].ID
-		class = capsule.RewindLockCycle
-	} else {
+	// Q7's lost cycle is DRIVER state, not the agent's wording: only a gate
+	// inside the declared interval, settled while the driver had recorded a
+	// lost lease (`leaseLost`), re-enters at the declared enter step and
+	// counts toward no rewind budget. Every other gate FAIL keeps its
+	// on_fail target and is charged as before (Q8: a real verification FAIL
+	// returns to build; review, before enter, is never pushed forward).
+	if enter, exit, ok := d.leaseInterval(); ok && d.leaseLost.Load() {
+		if gi, ok := d.workflow.indexOf(gate); ok && gi >= enter && gi <= exit {
+			target = d.workflow.Steps[enter].ID
+			class = capsule.RewindLockCycle
+		}
+	}
+	if class == capsule.RewindCharged {
 		switch {
 		case v.PerOwner:
 			class = capsule.RewindOwner
