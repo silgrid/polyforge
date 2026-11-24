@@ -71,7 +71,7 @@ func TestW82StepPromptCarriesToolNameCorrection(t *testing.T) {
 		"`Tool … not found`",
 		"retry with the exact name",
 		"not an environment fault",
-		"end your turn without `pf step handoff`",
+		"keep working until `pf step handoff`",
 	} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("the tool-names section lacks %q:\n%s", want, section)

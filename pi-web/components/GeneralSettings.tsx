@@ -55,6 +55,9 @@ export interface GeneralSettingsProps {
   onSessionReloaded: () => void;
   quoteSelectionEnabled: boolean;
   onQuoteSelectionChange: (enabled: boolean) => void;
+  /** Reopen the first-time onboarding wizard (polyforge#167): passed only in
+   *  the workstation image, so a host-mode Pi Web shows no entry. */
+  onReopenOnboarding?: () => void;
 }
 
 /**
@@ -188,7 +191,7 @@ function AgentLanguageSettings() {
   );
 }
 
-export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, onQuoteSelectionChange }: GeneralSettingsProps) {
+export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, onQuoteSelectionChange, onReopenOnboarding }: GeneralSettingsProps) {
   const { locale, setLocale, supportedLocales, t } = useI18n();
   // The claude hook-activity preference (85a4): a Pi Web preference with no
   // claude-native home, read and written through /api/claude-permissions'
@@ -400,6 +403,13 @@ export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEn
 
   return (
     <div className="settings-general is-pane">
+      {onReopenOnboarding && (
+        <section className="settings-general-section" data-onboarding-reopen>
+          <h3 className="settings-general-heading">{t("onboarding.reopen")}</h3>
+          <p className="settings-general-description">{t("onboarding.reopenHint")}</p>
+          <ConfigButton variant="secondary" onClick={onReopenOnboarding}>{t("onboarding.reopenAction")}</ConfigButton>
+        </section>
+      )}
       <section className="settings-general-section">
         <h3 className="settings-general-heading">{t("settings.appearance")}</h3>
         <div role="radiogroup" aria-label={t("settings.appearance")} className="settings-theme-options">

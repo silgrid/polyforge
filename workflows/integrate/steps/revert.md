@@ -12,3 +12,12 @@ with the reverts applied; it also tells you where the items to revert come from 
 collect and the full gate wrote) and how to route on its exit code. You never run git or gh
 yourself; a reverted item's record moves to `reverted` through the hub writes the command
 writes and you register.
+
+## 完成判据 — done criteria
+
+`done` only when every item below holds:
+
+1. **Every id of the list to revert** — `artifacts/integrate/rulings.json`'s `reverts` plus `artifacts/integrate/gate-decision.json`'s `reverts`, each once — has one `details.reverts[]` entry in `artifacts/integrate/revert.json` with `done: true`.
+2. **Every repo of `artifacts/integrate/repair-plan.json`'s `repos[]`** has one `details.fixes[]` entry: landed (its `pr` and `merge` named) or not landed with its `why`.
+3. The command exited 0 and `artifacts/integrate/revert-ops.json` was registered (`pf step hub batch`).
+4. **Every repo of `details.heads`** is the pin the gate gets, named in the hand-off.

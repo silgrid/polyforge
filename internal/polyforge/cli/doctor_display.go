@@ -135,7 +135,7 @@ func piPackageCheck(agentDir, home string) doctorCheck {
 		c.Status, c.Detail = "skip", skip
 		return c
 	}
-	hint := "the polyforge pi package (routing skill + pf-chat session extension) is not installed — re-run tools/install.sh, or add the local release \"" + releaseCurrent(home) + "\" to packages in " + filepath.Join(agentDir, "settings.json")
+	hint := "the polyforge pi package (routing skill + pf-chat session extension) is not installed — image: docs/getting-started.md (the workstation image carries it); host: re-run tools/install.sh, or add the local release \"" + releaseCurrent(home) + "\" to packages in " + filepath.Join(agentDir, "settings.json")
 	cfg, exists, err := readPiSettings(agentDir)
 	if err != nil {
 		c.Status, c.Detail = "warn", "cannot tell: "+err.Error()

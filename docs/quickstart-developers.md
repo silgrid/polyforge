@@ -1,5 +1,10 @@
 # Quickstart (developers — from-zero smoke run)
 
+**Developers, from source.** This walkthrough builds `pf` from the repository
+and drives a from-zero smoke run. A newcomer who wants the shipped machine
+starts at [getting started](getting-started.md) (the workstation image)
+instead.
+
 A from-zero smoke run on one machine: start a local aihub, set up a
 project and a machine identity, file a minimal work item, and drive it
 through file → submit → watch → wrap on a local `pf daemon`. The
