@@ -43,6 +43,10 @@ Settings › 权限 is the unified permission page (`components/HarnessPermissio
 - Each level entered pushes a history entry that copies `history.state` (Next's router state) and keeps the URL, so the system Back goes up one level; the panel's Back calls `history.back()` while it has entries, and closing Settings drops them (`history.go(-n)`). Desktops never push.
 - A level change animates with the Web Animations API (`animatePhoneLevelChange`, from a layout effect so the new level never shows in place first): going in, the main area slides in from the right with a fading edge shadow; going back, from 30% left, fading up; the header's Back and title fade in beside it. Only the new level moves (the old one is gone at once) and `.settings-dialog-main` clips it. Nothing moves under `prefers-reduced-motion`.
 
+## Dialog width and the tab bar (polyforge#259 T4 AC3)
+- The dialog's surface is `width: min(1280px, calc(100vw - 32px))` (`app/settings.css`, `.settings-dialog-surface`): a fixed 1080px used to leave big margins on a wide screen and squeeze the panes on a narrow one, and 900/1280/1600 are the widths the acceptance measures. The sidebar is `clamp(200px, 20%, 260px)` (`.config-sidebar`), so it follows the dialog's width down to a readable 200px.
+- The section tab bar (`components/SettingsSectionTabs.tsx`, rendered by `SettingsPanel`) keeps every section's **text** at every width (owner ruling 2026-11-23: no icon-only bar) and scrolls horizontally once nine tabs no longer fit. Below 1000px a chevron (`[data-settings-tabs-more]`, decorative and skipped by a screen reader) marks the sections off the bar's right edge, and the bar itself stays inside the dialog and never under the close button. The hint is CSS-only (a media query plus the thin scrollbar), so no JavaScript watches the scroll position. `e2e/settings-responsive-259.mjs` measures all of it at 900/1280/1600 and writes the delivery screenshots.
+
 ## Polyforge section (pi#122, configuration panel)
 
 Settings › Polyforge is always visible — not `requiresProject`-gated, openable

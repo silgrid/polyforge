@@ -101,11 +101,14 @@
   overflow: hidden;
 }
 
+/* The settings sidebar scales with the dialog (polyforge#259 T4 AC3):
+   `clamp(200px, 20%, 260px)` keeps a wide dialog's split view in proportion
+   and never squeezes the list below a readable 200px. */
 .config-sidebar {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  width: 240px;
+  width: clamp(200px, 20%, 260px);
   min-height: 0;
   border-right: 1px solid var(--border);
   background: var(--bg-panel);
@@ -1423,10 +1426,13 @@
   outline: none;
 }
 
+/* The dialog is as wide as the viewport allows and never wider than 1280px
+   (polyforge#259 T4 AC3): a fixed 1080px left wide screens with big margins
+   and a narrow one with a squeezed pane. */
 .settings-dialog-surface {
   display: flex;
   flex-direction: column;
-  width: 1080px;
+  width: min(1280px, calc(100vw - 32px));
   max-width: calc(100vw - 16px);
   height: 84vh;
   max-height: calc(100dvh - 16px);
@@ -1456,6 +1462,7 @@
 
 .settings-section-tabs {
   display: flex;
+  flex: 1 1 auto;
   align-items: stretch;
   gap: 2px;
   min-width: 0;
@@ -1527,6 +1534,35 @@
 
 .settings-section-tab:focus-visible[aria-current="page"] {
   outline: none;
+}
+
+/* The tab bar keeps every section's text (owner ruling 2026-11-23, no icon-only
+   bar) and scrolls once it does not fit. Nine tabs at 96px need more than a
+   1000px dialog, so below that width the bar scrolls and this chevron is its
+   visible scroll hint (polyforge#259 T4 AC3): the bar never leaves the
+   dialog and the user still sees that more sections are off the edge. */
+.settings-section-tabs-more {
+  display: none;
+}
+
+@media (max-width: 1000px) {
+  .settings-section-tabs {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .settings-section-tabs-more {
+    position: absolute;
+    top: 0;
+    right: 46px;
+    display: flex;
+    align-items: center;
+    height: 50px;
+    padding-left: 12px;
+    background: linear-gradient(to right, transparent, var(--bg) 45%);
+    color: var(--text-muted);
+    pointer-events: none;
+  }
 }
 
 .settings-section-icon {
@@ -2197,6 +2233,10 @@
   }
 
   .settings-section-tabs {
+    display: none;
+  }
+
+  .settings-section-tabs-more {
     display: none;
   }
 

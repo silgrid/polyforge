@@ -12,6 +12,7 @@ import {
 import type { ProjectTrustStatus } from "@/lib/api-types";
 import { focusModalPanel, listenForPanelEscape } from "@/lib/stacked-dialog";
 import { ConfigDetailNavigationContext, type ConfigDetailNavigation } from "./SettingsUi";
+import { SettingsSectionTabs } from "./SettingsSectionTabs";
 import { HarnessGeneralSettings } from "./HarnessGeneralSettings";
 import { HarnessPermissionSettings } from "./HarnessPermissionSettings";
 import { HarnessModelSettings } from "./HarnessModelSettings";
@@ -301,26 +302,19 @@ export function SettingsPanel({
               ? t("settings.title")
               : phone.level === "section" ? sectionLabel : detailTitle}
           </strong>
-          <nav aria-label={t("settings.title")} className="settings-section-tabs">
-            {sections.map((item) => {
-              const selected = section === item.id;
-              const disabled = item.requiresProject && !cwd;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="settings-section-tab"
-                  disabled={disabled}
-                  title={disabled ? t("settings.projectRequired") : item.label}
-                  aria-current={selected ? "page" : undefined}
-                  onClick={() => activateSection(item.id)}
-                >
-                  <SettingsSectionIcon section={item.id} />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
+          {/* The tab bar and its scroll hint (polyforge#259 T4 AC3). */}
+          <SettingsSectionTabs
+            label={t("settings.title")}
+            tabs={sections.map((item) => ({
+              id: item.id,
+              label: item.label,
+              disabled: item.requiresProject && !cwd,
+              icon: <SettingsSectionIcon section={item.id} />,
+            }))}
+            active={section}
+            projectRequiredLabel={t("settings.projectRequired")}
+            onSelect={activateSection}
+          />
           <button type="button" onClick={onClose} title={t("i18n.close")} aria-label={t("i18n.close")} className="config-close-button settings-dialog-close">×</button>
         </div>
 
