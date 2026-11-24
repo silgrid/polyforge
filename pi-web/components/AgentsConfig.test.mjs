@@ -62,3 +62,31 @@ test("a profile model's pi :level suffix names its base model; a listed colon id
   assert.equal(base("openai/gpt-5:turbo", isListed), "openai/gpt-5:turbo");
   assert.equal(base("openai/gpt-5:", isListed), "openai/gpt-5:");
 });
+
+// polyforge#259 T4 AC1 (owner 1A, review r3#2): deleting a saved subagent
+// profile (writable scope, edit mode) sits behind the detail header's ⋯ menu;
+// the header has no bare Delete button.
+const { createJiti } = await import("jiti");
+const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+const React = await jiti.import("react");
+const { renderToStaticMarkup } = await jiti.import("react-dom/server");
+const { I18nProvider } = await jiti.import("@/hooks/useI18n");
+const { AgentDetailActions } = await jiti.import("./AgentsConfig.tsx");
+
+test("a subagent profile's deletion is behind the detail header's ⋯, with no bare Delete button (review r3#2)", () => {
+  const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(AgentDetailActions, {
+    canDuplicate: true,
+    deletableName: "Reviewer",
+    busy: false,
+    enabled: true,
+    switchDisabled: false,
+    onDuplicate: () => {},
+    onDelete: () => {},
+    onToggle: () => {},
+  })));
+  const actions = html.match(/<div class="config-detail-actions">([\s\S]*?)<\/div>/)?.[1];
+  assert.ok(actions, "the detail header renders its actions");
+  assert.match(actions, /<button[^>]*>Duplicate<\/button><button[^>]*class="config-danger-menu-trigger"[^>]*aria-label="More actions"/);
+  assert.doesNotMatch(html, /<button[^>]*>\s*Delete\s*<\/button>/);
+  assert.doesNotMatch(html, /config-button-danger/);
+});

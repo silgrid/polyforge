@@ -269,3 +269,53 @@ test("Models keeps credential login on Account while allowing native provider de
 // r1#5) — the managed provider's detail is the shared EnabledModelsSection,
 // pinned by e2e/harness-settings-85.mjs S11 at its new position.
 
+
+// polyforge#259 T4 AC1 (owner 1A, review r3#2): deleting a provider and removing
+// a model sit behind their detail header's ⋯ menu; neither header has a bare
+// Delete / Remove button.
+const tsxJiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+const React = await tsxJiti.import("react");
+const { renderToStaticMarkup } = await tsxJiti.import("react-dom/server");
+const { I18nProvider } = await tsxJiti.import("@/hooks/useI18n");
+const { ProviderDetail, ModelDetail } = await tsxJiti.import("./ModelsConfig.tsx");
+
+function renderDetail(component, props) {
+  return renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(component, props)));
+}
+
+function headerActions(html) {
+  const actions = html.match(/<div class="config-detail-actions">([\s\S]*?)<\/div>/)?.[1];
+  assert.ok(actions, "the detail header renders its actions");
+  return actions;
+}
+
+test("a provider's deletion is behind the detail header's ⋯, with no bare Delete button (review r3#2)", () => {
+  const html = renderDetail(ProviderDetail, {
+    name: "my-provider",
+    editingName: "my-provider",
+    provider: { baseUrl: "https://llm.example.test/v1", api: "openai-completions", models: [] },
+    onChange: () => {},
+    onEditingNameChange: () => {},
+    onRename: () => {},
+    onDelete: () => {},
+    onAddModels: () => {},
+    enabledModels: {},
+    contextOnly: true,
+  });
+  assert.match(headerActions(html), /<button[^>]*class="config-danger-menu-trigger"[^>]*aria-label="More actions"/);
+  assert.doesNotMatch(html, /<button[^>]*>\s*Delete\s*<\/button>/);
+  assert.doesNotMatch(html, /config-button-danger/);
+});
+
+test("a model's removal is behind the detail header's ⋯, with no bare Remove button (review r3#2)", () => {
+  const html = renderDetail(ModelDetail, {
+    providerName: "my-provider",
+    provider: { baseUrl: "https://llm.example.test/v1", api: "openai-completions" },
+    model: { id: "my-model" },
+    onChange: () => {},
+    onDelete: () => {},
+  });
+  assert.match(headerActions(html), /<button[^>]*class="config-danger-menu-trigger"[^>]*aria-label="More actions"/);
+  assert.doesNotMatch(html, /<button[^>]*>\s*Remove\s*<\/button>/);
+  assert.doesNotMatch(html, /config-button-danger/);
+});
