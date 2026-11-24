@@ -20,6 +20,11 @@ resume_reset: sync
 uncounted_rewinds:
   reason_contains: "branch moved since verification"
   max: 2
+# the lane's landing-lock interval (polyforge#245, 245-lane): the closed
+# step range sync..merge runs under the server landing lease of the
+# ticket's repositories at its target branch; a lease loss or ask releases
+# it and re-enters at sync
+landing_lock: { enter: sync, exit: merge }
 defaults:
   model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
   tiers: { cheap: [pi:example-gateway/model-cheap], mid: [pi:example-gateway/model-mid] }

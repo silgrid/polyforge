@@ -62,6 +62,27 @@
       "description": "bool (default false): one unfinished work item per project on the lane — a create on it reaches aihub exclusive, refused while another is not wrapped, failed or canceled",
       "type": "boolean"
     },
+    "landing_lock": {
+      "additionalProperties": false,
+      "description": "map {enter, exit} (default none): the lane-declared landing-lock interval — the closed step range in which the daemon holds the server landing lease of the ticket's repositories at its target branch, acquired before the enter step first dispatches and released when the exit step is done or the workflow leaves the interval; enter is the re-entry point after a release",
+      "properties": {
+        "enter": {
+          "description": "string, required: a step id of this lane, the interval's first step and its re-entry point",
+          "pattern": "^[a-z][a-z0-9-]{0,39}$",
+          "type": "string"
+        },
+        "exit": {
+          "description": "string, required: the same step or a later one, the interval's last step",
+          "pattern": "^[a-z][a-z0-9-]{0,39}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "enter",
+        "exit"
+      ],
+      "type": "object"
+    },
     "max_rewinds": {
       "description": "int >= 0; required when any step declares on_fail, refused otherwise",
       "minimum": 0,

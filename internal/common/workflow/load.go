@@ -89,14 +89,28 @@ type Lane struct {
 	// it must name a step of this lane (the runtime writes it into the
 	// marker, the driver rewinds to it; polyforge#117 r4).
 	ResumeReset string
-	Defaults    *Defaults
-	Steps       []Step
+	// LeaseInterval is the lane's `landing_lock`: the closed step interval
+	// (enter..exit, inclusive) in which the daemon holds the server
+	// landing lease of the ticket's repositories at its target branch
+	// (nil when the lane declares none).
+	LeaseInterval *LeaseInterval
+	Defaults      *Defaults
+	Steps         []Step
 }
 
 // UncountedRewinds is the lane's declared uncounted rewind class
 // (`uncounted_rewinds`): a gate FAIL whose one-line hand-off reason
 // carries ReasonContains falls in it. Its rewinds are charged to no
 // budget and counted on their own, toward Max.
+// LeaseInterval is the lane's declared landing-lock interval
+// (`landing_lock: {enter, exit}`): the closed step range [enter, exit] in
+// which the driver holds the server landing lease. Enter is the re-entry
+// point after a release (an ask, a lost lease, a step failure).
+type LeaseInterval struct {
+	Enter string
+	Exit  string
+}
+
 type UncountedRewinds struct {
 	// ReasonContains is the substring a gate FAIL's one-line reason
 	// carries when its rewind falls in the class (a stable prefix of the
@@ -376,6 +390,9 @@ func (l *loader) load() *Lane {
 			lane.ResumeReset = v
 		}
 	}
+	if n, ok := keys["landing_lock"]; ok {
+		lane.LeaseInterval = l.landingLock(file, off, n)
+	}
 	stepsNode, ok := keys["steps"]
 	if !ok {
 		l.at(CodeMissingKey, file, off, root, "steps", "the lane declares no steps")
@@ -424,9 +441,54 @@ func (l *loader) load() *Lane {
 			l.at(CodeInvalidValue, file, off, keys["resume_reset"], "resume_reset", "%q is not a step of this lane", lane.ResumeReset)
 		}
 	}
+	if lane.LeaseInterval != nil {
+		l.landingLockSteps(file, off, keys["landing_lock"], lane)
+	}
 	l.modelTiers(file, off, lane)
 	l.definitions(lane)
 	return lane
+}
+
+// landingLock decodes `landing_lock` (the nested mapping only; the step
+// ids are judged against the lane once its steps are read).
+func (l *loader) landingLock(file string, off int, n *yaml.Node) *LeaseInterval {
+	keys := l.mapping(file, off, n, "landing_lock", landingLockKeys, nil)
+	ll := &LeaseInterval{}
+	if en, ok := keys["enter"]; !ok {
+		l.at(CodeMissingKey, file, off, n, "landing_lock.enter", "the interval declares no enter step (its first step and re-entry point)")
+	} else if v, good := l.stringValue(file, off, en, "landing_lock.enter"); good {
+		ll.Enter = v
+	}
+	if xn, ok := keys["exit"]; !ok {
+		l.at(CodeMissingKey, file, off, n, "landing_lock.exit", "the interval declares no exit step (its last step)")
+	} else if v, good := l.stringValue(file, off, xn, "landing_lock.exit"); good {
+		ll.Exit = v
+	}
+	return ll
+}
+
+// landingLockSteps judges the interval's two step ids against the lane:
+// both must name steps of this lane and enter must not follow exit (the
+// interval is closed and one).
+func (l *loader) landingLockSteps(file string, off int, n *yaml.Node, lane *Lane) {
+	enterIdx, exitIdx := -1, -1
+	for i := range lane.Steps {
+		if lane.Steps[i].ID == lane.LeaseInterval.Enter {
+			enterIdx = i
+		}
+		if lane.Steps[i].ID == lane.LeaseInterval.Exit {
+			exitIdx = i
+		}
+	}
+	if lane.LeaseInterval.Enter != "" && enterIdx < 0 {
+		l.at(CodeInvalidValue, file, off, n, "landing_lock.enter", "%q is not a step of this lane", lane.LeaseInterval.Enter)
+	}
+	if lane.LeaseInterval.Exit != "" && exitIdx < 0 {
+		l.at(CodeInvalidValue, file, off, n, "landing_lock.exit", "%q is not a step of this lane", lane.LeaseInterval.Exit)
+	}
+	if enterIdx >= 0 && exitIdx >= 0 && enterIdx > exitIdx {
+		l.at(CodeInvalidValue, file, off, n, "landing_lock", "enter %q follows exit %q: the interval is closed and names one range", lane.LeaseInterval.Enter, lane.LeaseInterval.Exit)
+	}
 }
 
 // modelTiers judges every step's model_tier against the lane's tier

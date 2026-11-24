@@ -40,6 +40,7 @@ var laneKeys = map[string]keySpec{
 	"children_branch":   {Type: "string: the branch-name template the daemon checks a sub-ticket of this lane's work items out on — it must carry {seq} (the parent's seq), may carry {project} (the parent's project name), and its substituted name must be a legal git branch ref (WFC-112 otherwise)", Schema: pattern(`\{seq\}`)},
 	"epic":              {Type: "bool (default false): the lane's own work items are epics — the lane must also declare children_branch and resume_reset (WFC-112 otherwise), and a first claim checks such a work item out on the children branch substituted with its own seq, records no fixed target (it merges into the origin's default branch) and snapshots its children", Schema: jsonSchema{"type": "boolean"}},
 	"resume_reset":      {Type: "string: the step id an owner-resumed epic's changed-children marker resets the lane to — required when the lane declares epic, refused without it, and it must name a step of this lane (WFC-112 otherwise)", Schema: pattern(idPattern.String())},
+	"landing_lock":      {Type: "map {enter, exit} (default none): the lane-declared landing-lock interval — the closed step range in which the daemon holds the server landing lease of the ticket's repositories at its target branch, acquired before the enter step first dispatches and released when the exit step is done or the workflow leaves the interval; enter is the re-entry point after a release", Schema: object(landingLockKeys)},
 	"exclusive":         {Type: "bool (default false): one unfinished work item per project on the lane — a create on it reaches aihub exclusive, refused while another is not wrapped, failed or canceled", Schema: jsonSchema{"type": "boolean"}},
 	"defaults":          {Type: "map {model_candidates, tiers}", Schema: object(defaultsKeys)},
 	"steps":             {Type: "[]step, required, non-empty", Required: true, Schema: jsonSchema{"type": "array", "minItems": 1, "items": object(stepKeys)}},
@@ -49,6 +50,12 @@ var laneKeys = map[string]keySpec{
 var uncountedRewindsKeys = map[string]keySpec{
 	"reason_contains": {Type: "string, required, non-empty: the substring a gate FAIL's one-line hand-off reason carries when its rewind falls in the class (the stable prefix of the failing step's script summary; the rest of the line varies)", Required: true, Schema: pattern(`\S`)},
 	"max":             {Type: "int >= 0 (the default 2 when the lane declares none): the class's own rewind budget, held at `pf step handoff` exactly like max_rewinds", Schema: jsonSchema{"type": "integer", "minimum": 0}},
+}
+
+// landingLockKeys is the closed key set of `landing_lock`.
+var landingLockKeys = map[string]keySpec{
+	"enter": {Type: "string, required: a step id of this lane, the interval's first step and its re-entry point", Required: true, Schema: pattern(idPattern.String())},
+	"exit":  {Type: "string, required: the same step or a later one, the interval's last step", Required: true, Schema: pattern(idPattern.String())},
 }
 
 // defaultsKeys is the closed key set of `defaults`.
