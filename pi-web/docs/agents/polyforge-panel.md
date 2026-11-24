@@ -2760,7 +2760,11 @@ removed the read-only `HOST_READ_ONLY_KEYS` row with the per-repository bar
 ceiling) — no Cell's file card renders them; every
 Cell's own keys are its file card (`?profile=` reads, `{profile}` writes —
 the same scoped writer, pf's CAS on the file's sha256, validation and
-history). A connection key (`CONNECTION_KEYS`: the Host's daemon_socket, a
+history). A refused read or write anywhere on the page (row writes, rollbacks, Cell add/repair/remove, detect, the Host region, the workflow card) throws
+`responseError(body, status)` and shows `failureLine()`: the Chinese line the route's
+`code` names (`config-cas-409` → the conflict line; else `http-<status>`, else the generic
+line), the server's words and any CAS diff only inside the row's 「详情」 fold
+(`RowFeedbackLine`, `ConfigErrorNotice`; polyforge#259 T4 AC2). A connection key (`CONNECTION_KEYS`: the Host's daemon_socket, a
 Cell's user_id and api_key, set or unset) posts only after the confirmation
 (`data-pf-region-confirm` in the Host region, `data-pf-confirm` in a file
 card; unsetting a named Cell's api_key says a named Cell needs one — its
