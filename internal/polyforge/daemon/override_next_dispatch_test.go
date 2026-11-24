@@ -214,3 +214,37 @@ func readOverlayFile(f *ovFixture) (capsule.StepOverrides, error) {
 	ov, err := capsule.ReadStepOverrides(f.capDir)
 	return ov, err
 }
+
+// TestOverrideEffectScopeOnlyWhenRedispatchable pins review r1#4 (Q3 B: a
+// ticket that finishes normally does not dispatch the step again, and nothing
+// pretends the overlay took effect): an overlay written while the step could
+// still run again stays on its row after the work item moves past its last
+// rewind, but the row no longer says next_dispatch — it is not writable and
+// names why.
+func TestOverrideEffectScopeOnlyWhenRedispatchable(t *testing.T) {
+	f := newOverrideFixture(t, "wi_nd_stale")
+	ovNextExec(t, f, map[string]string{
+		"build": capsule.StepDone, "review": capsule.StepInProgress, "merge": capsule.StepPending,
+	}, "review", "build")
+	res, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{
+		Step: "build", Operator: "usr_nd", Models: []string{"pi:ovtest/m-ok"},
+	})
+	if ae != nil || res.Step.ModelEffectScope != "next_dispatch" {
+		t.Fatalf("the reachable build's write: %+v %+v", res, ae)
+	}
+	// the work item moves on: review passed, merge runs — build has no
+	// rewind left
+	ovNextExec(t, f, map[string]string{
+		"build": capsule.StepDone, "review": capsule.StepDone, "merge": capsule.StepInProgress,
+	}, "merge", "build")
+	row := ovViewRow(t, f, "build")
+	if len(row.Models) != 1 || row.Models[0] != "pi:ovtest/m-ok" {
+		t.Fatalf("the overlay must stay on the row: %+v", row)
+	}
+	if row.CanOverrideModels || row.ModelOverrideReason == "" {
+		t.Fatalf("a step with no next dispatch is not writable and names why: %+v", row)
+	}
+	if row.ModelEffectScope != "" {
+		t.Fatalf("a step with no next dispatch must not claim the overlay applies on it: model_effect_scope=%q", row.ModelEffectScope)
+	}
+}
