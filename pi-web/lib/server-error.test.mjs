@@ -41,3 +41,20 @@ test("nothing to say is not an error message: an empty payload answers the gener
     assert.equal(text.details, null);
   }
 });
+// polyforge#259 T4 AC2 (owner 2A): the routes append a code beside their own words,
+// so one text says which case it is. The expected values are the texts the routes
+// and pf really produce; an implementation that returns anything for everything
+// (or nothing for the CAS case) turns these red.
+test("a server text names its code, and an unknown one names none", async () => {
+  const { codeFromError } = await import("./server-error.ts");
+  assert.equal(codeFromError("pf: config-cas-409: the file changed since it was read"), "config-cas-409");
+  assert.equal(codeFromError("request-denied"), "http-403");
+  assert.equal(codeFromError("Untrusted API request"), "http-403");
+  assert.equal(codeFromError("HTTP 404"), "http-404");
+  assert.equal(codeFromError("the body is not valid JSON"), null, "an unknown text claims a code");
+  assert.equal(codeFromError(""), null);
+  assert.equal(codeFromError(null), null);
+  // A code that a route sends explicitly still answers its own message.
+  const text = serverErrorText({ code: codeFromError("pf: config-cas-409: nope") });
+  assert.equal(text.summaryKey, "serverError.conflict");
+});

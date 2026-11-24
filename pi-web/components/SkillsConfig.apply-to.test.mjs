@@ -140,3 +140,21 @@ test("the undo's previous values are the row's own, per harness", () => {
   // A harness the row does not list carries nothing to restore.
   assert.deepEqual(rowSwitchValues({ ...row, claude: undefined }, ["pi", "claude"]), [{ harness: "pi", state: "enabled" }]);
 });
+
+// polyforge#259 T4 AC2 (review #3): a refused harness's row says it in Chinese and
+// keeps the server's own words for its details fold. The expected line is the
+// generic Chinese message — the server's text must never be the main line.
+test("a refused harness reads in Chinese and keeps its own words folded", async () => {
+  const { refusalResult } = await import("./SkillsConfig.tsx");
+  const t = (key, params) => {
+    const table = { "serverError.unknown": "操作没有成功，服务端返回的原文在「详情」里。" };
+    return (table[key] ?? key).replace("{}", params?.x ?? "");
+  };
+  const row = refusalResult(t, "pi", "EACCES: permission denied, open '/root/.pi/agent/pi-web-settings.json'");
+  assert.equal(row.harness, "pi");
+  assert.equal(row.ok, false);
+  assert.equal(row.text, "操作没有成功，服务端返回的原文在「详情」里。", "the server's English became the main line");
+  assert.match(row.details ?? "", /EACCES/, "the refusal's own words are not kept for the fold");
+  const coded = refusalResult(t, "claude", { code: "config-cas-409", message: "changed since it was read" });
+  assert.equal(coded.text, "serverError.conflict", "a code does not answer its own message key");
+});
