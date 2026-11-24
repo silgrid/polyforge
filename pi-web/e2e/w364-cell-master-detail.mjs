@@ -268,7 +268,10 @@ try {
     assert.match(headText, /Cell ceiling 2/, "the Cell's head lost its Cell ceiling");
     assert.match(headText, /no model-credential source declared/, "the Cell's head does not say why execution is disabled");
     assert.ok(await head.getByRole("button", { name: "Repair", exact: true }).isVisible(), "the Cell's pane offers no repair");
-    assert.ok(await head.getByRole("button", { name: "Remove", exact: true }).isVisible(), "the Cell's pane offers no remove");
+    // polyforge#259 T4 AC1: the Cell's removal sits behind the ⋯ menu now, which
+    // asks once before it writes.
+    assert.ok(await head.getByRole("button", { name: "More actions", exact: true }).isVisible(), "the Cell's pane offers no remove");
+    assert.equal(await head.getByRole("button", { name: "Remove", exact: true }).count(), 0, "the Cell's pane still offers a bare Remove");
     assert.equal(await dialog.getByRole("button", { name: /cleanup/i }).count(), 0, "the page offers a permanent-cleanup control");
     // connection and identity, the write-only key, Cell concurrency, model source
     const region = cell.locator(".polyforge-config-cli").first();
