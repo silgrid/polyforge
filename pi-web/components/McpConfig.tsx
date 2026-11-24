@@ -2539,22 +2539,28 @@ function McpUnifiedSection({
         </>
       )}
       {onApplyTo && (
-        <HarnessApplyTo
-          texts={{
-            title: t("mcp.applyTo.title"),
-            all: t("mcp.applyTo.all"),
-            specific: t("mcp.applyTo.specific"),
-            submit: t("mcp.applyTo.submit"),
-          }}
-          targets={targets}
-          value={selection}
-          busy={controlsBusy || applyBusy}
-          onChange={setSelection}
-          onSubmit={() => {
-            if (!applyToCanSubmit(selection, targets)) return;
-            onApplyTo(row, applyToChosen(selection, targets));
-          }}
-        />
+        <div className="mcp-apply-to-row">
+          <HarnessApplyTo
+            texts={{
+              title: t("mcp.applyTo.title"),
+              all: t("mcp.applyTo.all"),
+              specific: t("mcp.applyTo.specific"),
+            }}
+            targets={targets}
+            value={selection}
+            onChange={setSelection}
+          />
+          <ConfigButton
+            size="small"
+            disabled={controlsBusy || applyBusy || !applyToCanSubmit(selection, targets)}
+            onClick={() => {
+              if (!applyToCanSubmit(selection, targets)) return;
+              onApplyTo(row, applyToChosen(selection, targets));
+            }}
+          >
+            {t("mcp.applyTo.submit")}
+          </ConfigButton>
+        </div>
       )}
     </div>
   );
@@ -2648,22 +2654,28 @@ function McpClaudeServerDetail({
       </ConfigDetailGrid>
       {entry.disabled === true && <p className="mcp-config-line is-warning">{t("mcp.claude.disabled")}</p>}
       {onApplyTo && (
-        <HarnessApplyTo
-          texts={{
-            title: t("mcp.applyTo.title"),
-            all: t("mcp.applyTo.all"),
-            specific: t("mcp.applyTo.specific"),
-            submit: t("mcp.applyTo.submit"),
-          }}
-          targets={targets}
-          value={selection}
-          busy={controlsBusy || applyBusy}
-          onChange={setSelection}
-          onSubmit={() => {
-            if (!applyToCanSubmit(selection, targets)) return;
-            onApplyTo(row, applyToChosen(selection, targets));
-          }}
-        />
+        <div className="mcp-apply-to-row">
+          <HarnessApplyTo
+            texts={{
+              title: t("mcp.applyTo.title"),
+              all: t("mcp.applyTo.all"),
+              specific: t("mcp.applyTo.specific"),
+            }}
+            targets={targets}
+            value={selection}
+            onChange={setSelection}
+          />
+          <ConfigButton
+            size="small"
+            disabled={controlsBusy || applyBusy || !applyToCanSubmit(selection, targets)}
+            onClick={() => {
+              if (!applyToCanSubmit(selection, targets)) return;
+              onApplyTo(row, applyToChosen(selection, targets));
+            }}
+          >
+            {t("mcp.applyTo.submit")}
+          </ConfigButton>
+        </div>
       )}
     </ConfigDetailStack>
   );

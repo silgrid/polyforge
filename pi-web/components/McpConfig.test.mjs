@@ -1518,7 +1518,11 @@ test("a row both sides hold shows its apply-to and its difference, with 统一�
     selected: "global\0shared",
   });
   const markup = decode(html);
-  assert.match(markup, new RegExp(`class="settings-general-heading">${messages["mcp.applyTo.title"]}`));
+  // polyforge#259 (T4 AC2): 「应用到」 is the shared compact chip, and MCP's own
+  // Apply button beside it is the page's submit.
+  assert.match(markup, new RegExp(`class="harness-apply-to-chip-label">${messages["mcp.applyTo.title"]}`));
+  assert.match(markup, /class="harness-apply-to"/);
+  assert.match(markup, new RegExp(`>${messages["mcp.applyTo.submit"]}<`), "MCP's own apply button is missing");
   assert.match(markup, /role="radiogroup"/);
   assert.match(markup, new RegExp(messages["mcp.applyTo.all"]));
   assert.match(markup, new RegExp(messages["mcp.applyTo.specific"]));

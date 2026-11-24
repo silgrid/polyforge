@@ -3600,10 +3600,50 @@ select.mcp-add-input {
 .pi-account-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .pi-account-state { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
 
-/* ---- 「应用到」 ---- */
-.harness-apply-to { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.harness-apply-to > h3 { margin: 0; }
+/* ---- 「应用到」 chip（polyforge#259 T4 AC2）----
+   A native <details>: the summary is the compact chip 「应用到：全部 ▾」, the menu
+   holds the all/specific choice and the harness checkboxes. The chip never
+   submits — the page that shows it owns the save. */
+.harness-apply-to { min-width: 0; }
+.harness-apply-to-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.6;
+  list-style: none;
+  white-space: nowrap;
+}
+/* Safari and Chromium draw their own disclosure triangle on a summary. */
+.harness-apply-to-chip::-webkit-details-marker { display: none; }
+.harness-apply-to-chip-label { color: var(--text-dim); }
+.harness-apply-to-chip-mode { color: var(--text); font-weight: 500; }
+.harness-apply-to-chip-chevron { flex-shrink: 0; transition: transform 0.15s ease; }
+.harness-apply-to[open] .harness-apply-to-chip { border-color: var(--accent); }
+.harness-apply-to[open] .harness-apply-to-chip-chevron { transform: rotate(180deg); }
+.harness-apply-to-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.harness-apply-to-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
 .harness-apply-to-modes { display: flex; flex-wrap: wrap; gap: 12px; }
+/* The chip and the page's own submit button on one line (MCP's rows): the
+   chip picks the target, the button is the save the page owns. */
+.mcp-apply-to-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; min-width: 0; }
 .harness-apply-to-mode { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; }
 .harness-apply-to-targets { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .harness-apply-to-targets > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; }

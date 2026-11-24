@@ -18,7 +18,7 @@ import {
   type StepTierWrite,
 } from "@/lib/step-tiers";
 import { runStepTierWritePlan } from "@/lib/step-tier-write";
-import { HarnessApplyTo, applyToTargets, type HarnessApplyToResult, type HarnessApplyToSelection } from "./HarnessApplyTo";
+import { HarnessApplyTo, applyToCanSubmit, applyToTargets, type HarnessApplyToResult, type HarnessApplyToSelection } from "./HarnessApplyTo";
 import { ConfigButton } from "./SettingsUi";
 import { openStackedDialog } from "@/lib/stacked-dialog";
 
@@ -155,18 +155,23 @@ export function ModelStepTierDrawer({ row, tier, tierRead, tierWrite, onClose, o
               title: t("models.stepTierApplyTo.title"),
               all: t("models.stepTierApplyTo.all"),
               specific: t("models.stepTierApplyTo.specific"),
-              submit: t("models.stepTierApplyTo.submit"),
             }}
             targets={row.harnesses.map((harness) => ({ harness, label: harness }))}
             value={selection}
-            busy={busy}
             results={results}
             onChange={setSelection}
-            onSubmit={() => void submit()}
+            open
           />
         </div>
         <footer className="model-tier-drawer-footer">
           <ConfigButton onClick={onClose}>{t("i18n.cancel")}</ConfigButton>
+          <ConfigButton
+            variant="primary"
+            disabled={busy || !applyToCanSubmit(selection, row.harnesses.map((harness) => ({ harness, label: harness })))}
+            onClick={() => void submit()}
+          >
+            {t("models.stepTierApplyTo.submit")}
+          </ConfigButton>
         </footer>
       </aside>
     </div>

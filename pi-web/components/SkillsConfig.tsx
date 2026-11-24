@@ -417,18 +417,17 @@ function SkillDetail({
         </div>
       </div>
 
-      {/* The unified switch: 「应用到」 + 启用 / 停用, one request per chosen harness. */}
+      {/* The unified scope chip + 启用/停用: one request per chosen harness (the
+          chip only picks the target; these buttons are the page's save). */}
       <ConfigField label={t("skills.switchField")}>
         <HarnessApplyTo
           texts={{
             title: t("skills.applyTo.title"),
             all: t("skills.applyTo.all"),
             specific: t("skills.applyTo.specific"),
-            submit: "",
           }}
           targets={targets}
           value={selection}
-          busy={applyBusy}
           results={applyResults}
           onChange={setSelection}
         />
