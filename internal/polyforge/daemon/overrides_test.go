@@ -255,22 +255,26 @@ func TestOverrideWriteValidation(t *testing.T) {
 	}
 }
 
-// A step with a live dispatch is refused; the parked postures' frozen
-// current step is not (see the paused test below).
-func TestOverrideWriteRunningStepRefused(t *testing.T) {
+// A step with a live dispatch accepts the two model aspects for its NEXT
+// dispatch (polyforge#270): the write lands in the overlay record, the
+// answer marks the next dispatch, and the dispatch in flight keeps its
+// execution record. The skip switch and a param keep the old refusals (the
+// next-dispatch test pins them, TestOverrideNextDispatch).
+func TestOverrideWriteRunningStepNextDispatch(t *testing.T) {
 	f := newOverrideFixture(t, "wi_ov4b")
-	_, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "build", Models: []string{"pi:ovtest/m-ok"}})
-	if ae == nil {
-		t.Fatal("the live current step accepted a model chain")
+	before := f.td.spawner.callCount()
+	res, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "build", Models: []string{"pi:ovtest/m-ok"}})
+	if ae != nil {
+		t.Fatalf("the live current step must accept a model chain for its next dispatch: %s (%s)", ae.Code, ae.Detail)
 	}
-	if ae.Code != api.ErrDaemonConflict {
-		t.Fatalf("code %s, want DAEMON-409 (%s)", ae.Code, ae.Detail)
+	if !res.Changed || !res.Step.CanOverrideModels || res.Step.ModelEffectScope != "next_dispatch" {
+		t.Fatalf("the answer must mark the next dispatch: %+v", res.Step)
 	}
-	if !strings.Contains(ae.Detail, "live dispatch") {
-		t.Fatalf("the refusal must name the live dispatch: %s", ae.Detail)
+	if after := f.td.spawner.callCount(); after != before {
+		t.Fatalf("the write started %d dispatch(es) more, want none", after-before)
 	}
-	if _, err := os.Stat(f.overlayFile()); !os.IsNotExist(err) {
-		t.Fatal("a refused write left an overlay file behind")
+	if e := f.readOverlay(t).Steps["build"]; e == nil || len(e.Models) != 1 || e.Models[0] != "pi:ovtest/m-ok" {
+		t.Fatalf("the overlay after the live write: %+v", e)
 	}
 }
 
@@ -753,15 +757,16 @@ func TestOverrideViewHonoursMergeTimes(t *testing.T) {
 // land nor ever be consumed (r1#6). DAEMON-409, nothing recorded.
 func TestOverrideWriteTerminalRefused(t *testing.T) {
 	f := newOverrideFixture(t, "wi_ov12")
-	// the control while it runs: a done step refuses the overlay as a
-	// step that already ran (not as a terminal work item)
+	// the control while it runs: a done step with no rewind left refuses
+	// the overlay as a step that will not be dispatched again (a done step
+	// a later gate can still rewind to accepts it — polyforge#270)
 	f.writeExec(t, map[string]*capsule.Step{
 		"build":  {Status: capsule.StepDone, Round: 1},
-		"review": {Status: capsule.StepInProgress, Round: 1},
-		"merge":  {Status: capsule.StepPending},
-	}, "review")
-	if _, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "build", ClearModels: true}); ae == nil || ae.Code != api.ErrDaemonConflict || !strings.Contains(ae.Detail, "already ran") {
-		t.Fatalf("a running work item's done step must refuse the overlay as already ran: %+v", ae)
+		"review": {Status: capsule.StepDone, Round: 1},
+		"merge":  {Status: capsule.StepInProgress, Round: 1},
+	}, "merge")
+	if _, ae := f.td.ovPost(t, f.wi, protocol.OverrideWriteRequest{Step: "build", ClearModels: true}); ae == nil || ae.Code != api.ErrDaemonConflict || !strings.Contains(ae.Detail, "will not be dispatched again") {
+		t.Fatalf("a running work item's done step with no rewind left must refuse the overlay: %+v", ae)
 	}
 	if err := f.td.rt.Stop(context.Background(), f.wi, protocol.FinishWrapped); err != nil {
 		t.Fatalf("wrapped close: %v", err)

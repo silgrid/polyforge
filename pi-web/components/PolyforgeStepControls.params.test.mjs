@@ -181,3 +181,36 @@ test("a failed catalog read leaves the override's manual fill alone, with its re
   assert.match(nodes(hook).map(textOf).join(""), /needs pf 0\.2\.4/, "the read's reason shows beside the fill");
   done();
 });
+
+// polyforge#270 (Q6 B/Q7 A): a done or live step whose view row says the
+// daemon accepts a model overlay for its NEXT dispatch renders the single
+// model setter again — with the next-dispatch note — while its params and
+// the skip switch keep the old read-only rules. A started step with no
+// such row still renders nothing (the test above).
+test("a done step's row opens the model setter for its next dispatch; params and skip stay read-only", async () => {
+  const { hook, posts, done } = setup({
+    params: PARAMS_ROW,
+    unstarted: false,
+    row: {
+      id: "review", status: "done", skippable: false,
+      canOverrideModels: true, modelEffectScope: "next_dispatch",
+      effective: ["claude:strong"], source: "step override",
+    },
+  });
+  assert.ok(nodes(hook).some((n) => n.type === "input" && "data-pf-step-controls-model" in n.props), "the model setter renders");
+  assert.equal(nodes(hook).filter((n) => "data-pf-param-input" in (n.props ?? {})).length, 0, "no param input");
+  assert.equal(nodes(hook).filter((n) => "data-pf-param-set" in (n.props ?? {})).length, 0, "no param set");
+  assert.equal(nodes(hook).filter((n) => "data-pf-step-controls-skip" in (n.props ?? {})).length, 0, "no skip switch");
+  const text = nodes(hook).map(textOf).join("");
+  assert.ok(text.includes("polyforge.stepControls.nextDispatch"), `the next-dispatch note renders, got ${text}`);
+  const input = nodes(hook).find((n) => n.type === "input" && n.props["data-pf-step-controls-model"] === "");
+  input.props.onChange({ target: { value: "claude:strong" } });
+  hook.flush();
+  nodes(hook).find((n) => n.type === "button" && "data-pf-step-controls-apply" in n.props).props.onClick();
+  await settle();
+  assert.equal(posts.length, 1);
+  assert.deepEqual(JSON.parse(posts[0].init.body), {
+    wi: "wi_A1", action: { kind: "models", step: "review", models: ["claude:strong"] },
+  }, "the same one-model write shape");
+  done();
+});

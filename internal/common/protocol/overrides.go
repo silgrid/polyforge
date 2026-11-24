@@ -51,6 +51,21 @@ type OverrideStepView struct {
 	// level (e.g. steps.<project>.<step>.models), or "" (no list: the
 	// harness adapter's default model).
 	Source string `json:"source,omitempty"`
+	// CanOverrideModels says whether a models/tier set or clear on this
+	// step is accepted now (polyforge#270): the step's next dispatch is
+	// still reachable — a later runnable step or the step itself, a gate
+	// that can rewind to it included — so the overlay governs that next
+	// dispatch, never the round that already ran or the dispatch in flight.
+	CanOverrideModels bool `json:"can_override_models"`
+	// ModelOverrideReason explains CanOverrideModels=false: the step will
+	// not be dispatched again from the work item's current position.
+	ModelOverrideReason string `json:"model_override_reason,omitempty"`
+	// ModelEffectScope names when a written models/tier overlay takes
+	// effect: "next_dispatch" — always the next dispatch of the step, never
+	// the finished round or a live dispatch (polyforge#270). It is set only
+	// with CanOverrideModels: a step with no next dispatch leaves it empty,
+	// an overlay it still carries included.
+	ModelEffectScope string `json:"model_effect_scope,omitempty"`
 }
 
 // OverrideParamView is one step param's overlay override: the value it

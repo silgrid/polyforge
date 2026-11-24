@@ -941,9 +941,13 @@ project switched off (the claim's file above — the per-ticket overlay
 cannot restore it), and a `--skip` that would move the lane's last step
 onto a step that has already started (its last-step obligations were
 settled at its dispatch). The model-chain
-half of the same overlay (`--models`) outranks every candidate source of
-that step's dispatches for the whole ticket; see
-[config.md](config.md#pf-override--the-per-step-overlay).
+half of the same overlay (`--models`/`--tier`) outranks every candidate source
+of that step's dispatches for the whole ticket, and — unlike the skip
+switch — it is accepted on a step that already ran or is running now: the
+change governs that step's next dispatch, leaves the finished round or the
+live dispatch unchanged, and holds until cleared or replaced (not consumed
+once); a step the lane cannot dispatch again refuses it (polyforge#270,
+[config.md](config.md#pf-override--the-per-step-overlay)).
 
 **A sub-ticket's target branch (polyforge#80).** A lane may declare
 `children_branch`, a branch-name template over `{seq}` (the parent's
