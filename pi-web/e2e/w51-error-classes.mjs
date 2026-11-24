@@ -1,4 +1,4 @@
-// carries: lib/polyforge-unclassified*, app/api/polyforge/unclassified/*
+// carries: lib/polyforge-unclassified*, app/api/polyforge/unclassified/*, lib/host-pattern-lines*
 // — polyforge#51, end-to-end: the Host region's additional
 // failure-classification pattern lists, the two slow-model latency bounds
 // and the unclassified-error list (the last 7 days' fallback texts), driven
@@ -11,7 +11,8 @@
 // lib/polyforge-config-write* are deliberately NOT carried: three suites
 // already declare each of them (the e2e-carries cap is three per tracked
 // path); this suite's own surface — the unclassified read and its panel —
-// is what it uniquely pins.
+// is what it uniquely pins, with lib/host-pattern-lines* — the lines a
+// Host pattern-list save writes and settles to (W2, polyforge#277).
 //
 //   node e2e/w51-error-classes.mjs
 import assert from "node:assert/strict";
