@@ -45,7 +45,35 @@ anything is sent.
 shape as `pf submit --models`. Precedence: **the overlay > `pf submit --models` > workspace yaml step/tier > bundle > yaml default > bundle defaults**; inside the overlay an explicit `--models` chain outranks `--tier`. The overlay is read at every dispatch, so the next dispatch of
 that step takes its first candidate and a model-class failure rotates
 along it. The overlay holds for the whole ticket (a rewind's re-dispatch
-included) until cleared.
+included) until cleared — it is **not consumed once** by its first
+dispatch (Q3 B).
+
+## The next dispatch on a step that ran or is running
+
+A models/tier overlay is for the step's **next dispatch**, so it is also
+accepted on a step that already ran (done) or is running right now
+(polyforge#270, the owner's Q1 B/Q2 B):
+
+- **Reachability is the judge**: the daemon computes, from the lane graph,
+  the execution record and the effective skips, whether the step can still
+  be dispatched again. A later step that still runs can re-dispatch it; a
+  done step counts only while a runnable gate's `on_fail` can rewind to it
+  (a done build with review/verification still ahead, for example); a
+  rewind_only step waits for a rewind that covers it; the rewind budget is
+  not consulted (the owner's own authorization can open another round).
+- **A step with no next dispatch refuses** (`DAEMON-409` naming the
+  reason): the done prefix past its last rewind, an effectively skipped
+  step, a completed lane.
+- **The change does not touch the dispatch in flight**: only the capsule's
+  overlay record is written; the running process keeps its candidate and
+  the finished round keeps its execution record and attempts. A dispatch
+  whose candidate composition already ran keeps that snapshot — the change
+  governs the next composition (Q4 A).
+- **The view and the answer say so**: the step row carries
+  `can_override_models`, `model_override_reason` when it cannot be written
+  and `model_effect_scope: "next_dispatch"`; the write answer says the
+  change applies on the next dispatch (the finished or live one
+  unchanged). The skip switch and params keep their old rules.
 
 ## Who may be written
 
@@ -65,8 +93,19 @@ included) until cleared.
   per-ticket layer), anything else is dropped with a line — never a
   refused claim — and the key is cleared once that publish succeeded.
 - A step **with a live dispatch** (a running ticket's current
-  in_progress step): refused `DAEMON-409`.
-- A step that **already ran** (done/skipped): refused for every action.
+  in_progress step): the model aspects — `--models`, `--clear-models`,
+  `--tier`, `--clear-tier` — are accepted for its **next dispatch**
+  (polyforge#270); the dispatch in flight is not interrupted and keeps its
+  candidate and round. The skip switch and a param keep the old refusal
+  (`DAEMON-409`): they would change the dispatch in flight.
+- A step that **already ran** (done/skipped): the model aspects are
+  accepted while the lane can still dispatch the step again — a later
+  runnable gate's `on_fail` rewinds to it (a done build with a running
+  review or verification gate, for instance) — and take effect on that
+  step's next dispatch; the round that ran keeps its candidate, round and
+  attempts. A step the lane will not dispatch again (no rewind left, an
+  effective skip, a completed lane) refuses them `DAEMON-409` naming the
+  reason; skip and params are refused for every done step.
 - A **paused** ticket: every step that has not finished accepts a chain —
   including the frozen current step (the change-before-wake window); the
   change stays in the kept scene, not published, until the resume here
@@ -171,9 +210,12 @@ which values changed.
 `overlay param <name>="<value>" …`, every param override of the step;
 a clear: `overlay param <name> cleared`) plus
 `published: the capsule chain carries it` (or the posture's note for a
-parked ticket). Every change is one `pf watch` event (`override_set` /
-`override_clear`: the step, the aspect — `param` with the param's name
-for a param —, the new value, the operator).
+parked ticket) and, on a step that already ran or is running, a
+`next dispatch:` line saying the change applies on that step's next
+dispatch only (the finished round or live dispatch unchanged). Every change
+is one `pf watch` event (`override_set` / `override_clear`: the step, the
+aspect — `param` with the param's name for a param —, the new value, the
+operator).
 
 ## Failure branches
 
@@ -183,15 +225,17 @@ for a param —, the new value, the operator).
 | `DAEMON-400` | a `--tier` name outside the lane tier grammar, or a name the Host `[step_tiers]` catalog does not declare (or the catalog is empty) | Clear the tier (`--clear-tier`) or set one the catalog names (`pf config list --host` shows its tiers); `default` is validated too. |
 | `DAEMON-400` | a param the lane snapshot does not declare on the step, or a value that is not one line of at most 256 bytes | Name the params the step declares (`pf workflows --cwd <dir>`); a value goes on one line. |
 | `DAEMON-400` | a pi model the Cell's step-agent `models.json` does not declare | Add the model there first (the operator agent dir's `models.json`), then retry; claude candidates are not file-checked. The `[step_tiers]` catalog (cli.toml's step tier list) validates a `--tier` NAME only — a catalog entry never admits a pi model the Cell's `models.json` lacks (doctor's `step tiers catalog` row warns when a user-written candidate sits outside the catalog; the admission stays this file's hard check). |
-| `DAEMON-409` | the step holds a live dispatch, already ran, is not declared skippable, or is skipped at the project level (`--unskip` refused naming it) | Set it on a step that has not started, or while the ticket is parked; for a gate that must pass, use the waive; a project-level skip is the project's switch, not this ticket's. |
+| `DAEMON-409` | the step will not be dispatched again (no rewind left, effectively skipped, a completed lane), a skip/param on a live or done step, the step is not declared skippable, or is skipped at the project level (`--unskip` refused naming it) | A models/tier overlay on a done or running step is accepted while the lane can still dispatch it; otherwise set it on a step that will run, or while the ticket is parked; for a gate that must pass, use the waive; a project-level skip is the project's switch, not this ticket's. |
 | `DAEMON-403` | a step or task agent's process tree called | The overlay is the owner's move; call it from a human session. |
 | `DAEMON-404` | this daemon holds neither a job nor a capsule of the ticket, and the ticket is not queued (an id aihub does not know, one running on another machine, a terminal one with no scene here) | Set the overlay on the machine that runs (or last ran) the ticket; a queued work item answers here — its params ride the `step_params` attrs key. |
 | `DAEMON-409` | a queued work item's lane does not load on this daemon (its params/tier are written against its lane), or its chain/skip write reached the queued posture | Write the params/tier on a machine whose lane set has the bundle; the chain and the skip switch wait until the ticket runs. |
 
 Pi Web's job detail reaches the same face through this verb's routes; the
-panel offers the single-candidate form (harness + model), the skip
-toggle of a skippable step and — per declared param — a set/clear row
+panel offers the single-candidate form (harness + model) on an unstarted
+step and on a done/live step whose view row says `can_override_models`
+(with the next-dispatch note; polyforge#270), the skip toggle of a
+skippable unstarted step and — per declared param — a set/clear row
 (a tier shows its source string and has no editor yet; polyforge#81)
-(queued work items get theirs in the 工单详情; a step that already ran
-shows its params read-only). `pf params <id>` is the composed read both
-surfaces display.
+(queued work items get theirs in the 工单详情; a started step keeps its
+params read-only). `pf params <id>` is the composed read both surfaces
+display.

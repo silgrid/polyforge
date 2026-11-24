@@ -625,7 +625,10 @@ result file and the commits stamped in `handoff.md`). A work item's
 pre-submit analysis recommends one Host `[step_tiers]` tier per step as
 text, and the session sets it with `pf override <id> --step <s> --tier
 <name>` after the owner confirms (an explicit `--models` chain on the same
-step outranks it). The daemon
+step outranks it). A models/tier overlay is accepted on a step that already
+ran or is running too, governing that step's next dispatch (the finished
+round or live dispatch is unchanged) — a step the lane will not dispatch
+again refuses it (polyforge#270). The daemon
 orchestrates — the dispatch, the heavy-run admission, the merge lock, the
 rewind — and reads no content, and no agent merges by hand:
 
