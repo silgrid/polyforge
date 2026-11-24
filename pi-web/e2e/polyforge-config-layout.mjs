@@ -867,6 +867,56 @@ try {
     await noted.context.close();
   }
 
+
+  // polyforge#259 T4 AC1 (owner 1A): the Host region's editable fields are one
+  // draft — one footer「保存（n 项改动）」 writes exactly the changed keys, and no
+  // row keeps a Save of its own. The expected count and the written keys come
+  // from the fields the scenario types into, never from the page's own numbers.
+  await check("S259-HOST-SAVE — Host 区的改动由一个 footer 保存", async () => {
+    const { context, page, dialog } = await open({ width: 1280, locale: "en" });
+    const writes = [];
+    const hostItems = [
+      { key: "max_concurrent_jobs", value: 4, source: "file", set: true, schema: { kind: "int", min: 1 } },
+      { key: "daemon_socket", value: "/tmp/pf.sock", source: "file", set: true },
+      { key: "harness_root", value: "/opt/harness", source: "default", set: false },
+      { key: "transient_error_patterns", value: ["timeout"], source: "file", set: true },
+      { key: "model_error_patterns", value: [], source: "default", set: false },
+    ];
+    await page.route("**/api/polyforge/config?host=1", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      capable: true, file: { path: "/root/.config/polyforge/cli.toml", sha256: "e2e-host-sha" }, items: hostItems, memoryPolicy: null,
+    }) }));
+    await page.route("**/api/polyforge/config", (route) => {
+      if (route.request().method() !== "POST") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ capable: true, file: { sha256: "e2e-host-sha" }, items: hostItems }) });
+      writes.push(route.request().postDataJSON());
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ message: "saved", entry: null }) });
+    });
+    await page.goto(`${base}/?session=${SESSION}`, { waitUntil: "domcontentloaded", timeout: NAV_MS });
+    await page.getByText("E2E polyforge layout host session").first().waitFor({ state: "attached", timeout: NAV_MS });
+    await page.locator('button[aria-label="Settings"], button[aria-label="设置"]').first().click();
+    await dialog.waitFor({ state: "visible", timeout: NAV_MS });
+    await dialog.getByRole("button", { name: "Polyforge", exact: true }).click();
+    await selectPane(page, "host");
+    const region = dialog.locator('[data-pf-settings-region="host"]').first();
+    await region.waitFor({ state: "visible", timeout: 30_000 });
+    const jobs = region.locator('[data-pf-region-key="max_concurrent_jobs"] input');
+    const socket = region.locator('[data-pf-region-key="daemon_socket"] input');
+    await jobs.fill("7");
+    await socket.fill("/tmp/other.sock");
+    const footer = region.locator(".config-footer").first();
+    await footer.getByText("2 unsaved change(s)", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    // No row keeps a save of its own: the row's controls are unset alone.
+    assert.equal(await region.locator('[data-pf-region-key="max_concurrent_jobs"] button', { hasText: "Save" }).count(), 0,
+      "a Host row still has its own Save button");
+    assert.equal(writes.length, 0, "typing into a Host field wrote before the footer's save");
+    await footer.getByRole("button", { name: "Save (2)", exact: true }).click();
+    await waitFor(() => writes.length >= 2 || false, ACTION_MS, "the footer's save never wrote");
+    assert.deepEqual(writes.map((body) => body.key).sort(), ["daemon_socket", "max_concurrent_jobs"], "the footer wrote a key nothing changed");
+    assert.deepEqual(writes.find((body) => body.key === "max_concurrent_jobs").value, 7);
+    assert.ok(writes.every((body) => body.host === true && body.action === "set"), "a Host write lost its shape");
+    await footer.getByRole("button", { name: /Save \(/, exact: false }).waitFor({ state: "detached", timeout: ACTION_MS });
+    await context.close();
+  });
+
   await desktop.context.close();
 } catch (error) {
   console.error(`ABORT ${error?.stack ?? error}`);
