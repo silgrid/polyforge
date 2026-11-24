@@ -79,10 +79,10 @@ func TestPF62BuildDedupTextContract(t *testing.T) {
 		}},
 		"workflows/_shared/build_subagents.md": {wants: []string{
 			"the run is that unit's test alone (the test runner's own name filter; a suite without one is named in the task's answer and runs once, in the scoped command)",
-			"the red is taken once, at the test commit — no manual worktree replay: the facts engine's replay is the record",
-			flakyLower,
-			r4Lower,
-			"a long command writes its output to a log file with its exit code (`> log 2>&1; echo exit=$?`) and the log is searched after the run — never piped straight into grep, head or tail",
+			"the red is taken once, at the test commit — the facts engine's replay is the record",
+			"a flaky failure is re-run only in the suite that failed, once, by the written fast-check command itself — the same rules verification runs: the check already contains that one re-run, and a failure still red after it is red",
+			"a red-state run must exit non-zero within its limit — a unit self-reports `timeout` in units.json, else the default — and a run its limit kills is an evidence problem: the waiting inside it is bounded and an assertion failure exits at once",
+			"a long command writes its output to a log file with its exit code (`> log 2>&1; echo exit=$?`) and the log is searched after the run; piping it straight into grep, head or tail loses the failure detail and the exit code",
 		}},
 		"workflows/develop/README.md": {wants: []string{
 			"Each unit's targeted command runs only that unit's test (the test runner's own name filter; a suite that offers no filter is named in the hand-off and runs once, in the scoped command)",
