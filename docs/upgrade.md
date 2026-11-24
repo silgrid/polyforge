@@ -1589,3 +1589,21 @@ The probe answers apply for a database that already ran the old v0.2.4
 and the rollback drops the lease tables beside the split restore. No
 lane changes in this unit: the driver, `pf step lock-check` and the
 landing-lock projection arrive in the next units.
+
+## v0.2.4, the landing lock's lane interval and before-merge check (polyforge#248)
+
+The second landing-lock unit adds the lane's declared
+`landing_lock: {enter, exit}` interval (develop and epic declare
+`sync..merge`): the driver takes AIHub's server landing lease of the
+ticket's repositories at its target branch before the enter step first
+dispatches, holds it across the interval (the daemon renews it), and
+releases it when the interval ends, the workflow leaves it, or the owner
+is asked; a lost lease or an ask re-enters at the declared enter step and
+charges no rewind. The in-memory per-repository merge lock is gone:
+micro's merge and integrate's revert take the same server lease for one
+dispatch. `pf step lock-check --repo <claim repo name>` renews the lease
+under the calling ticket and refuses on any failure, and `merge.py` /
+`revert.py` run it before every real `gh pr merge`. Upgrade the AIHub
+server first (the v0.2.4 lease tables and routes), then the daemon:
+a daemon without the lease client refuses to open a declared interval,
+and the old capsules drained before the daemon upgrade never take one.
