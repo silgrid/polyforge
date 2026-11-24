@@ -899,9 +899,11 @@ try {
     const region = dialog.locator('[data-pf-settings-region="host"]').first();
     await region.waitFor({ state: "visible", timeout: 30_000 });
     const jobs = region.locator('[data-pf-region-key="max_concurrent_jobs"] input');
-    const socket = region.locator('[data-pf-region-key="daemon_socket"] input');
+    // Two non-connection keys: a connection key keeps its own confirmation, so
+    // the batch written by one click is these two (build finding u11#3).
+    const root = region.locator('[data-pf-region-key="harness_root"] input');
     await jobs.fill("7");
-    await socket.fill("/tmp/other.sock");
+    await root.fill("/opt/other-harness");
     const footer = region.locator(".config-footer").first();
     await footer.getByText("2 unsaved change(s)", { exact: true }).waitFor({ state: "visible", timeout: NAV_MS });
     // No row keeps a save of its own: the row's controls are unset alone.
@@ -913,7 +915,7 @@ try {
     const deadline = Date.now() + NAV_MS;
     while (writes.length < 2 && Date.now() < deadline) await page.waitForTimeout(100);
     assert.ok(writes.length >= 2, "the footer's save never wrote");
-    assert.deepEqual(writes.map((body) => body.key).sort(), ["daemon_socket", "max_concurrent_jobs"], "the footer wrote a key nothing changed");
+    assert.deepEqual(writes.map((body) => body.key).sort(), ["harness_root", "max_concurrent_jobs"], "the footer wrote a key nothing changed");
     assert.deepEqual(writes.find((body) => body.key === "max_concurrent_jobs").value, 7);
     assert.ok(writes.every((body) => body.host === true && body.action === "set"), "a Host write lost its shape");
     await footer.getByRole("button", { name: /Save \(/, exact: false }).waitFor({ state: "detached", timeout: NAV_MS });
