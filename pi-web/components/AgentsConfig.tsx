@@ -163,6 +163,50 @@ function Toggle({ checked, disabled, label, onChange }: { checked: boolean; disa
   );
 }
 
+/** The saved profile's header actions: Duplicate, the ⋯ delete menu (writable
+ *  scope in edit mode only, polyforge#259 T4 AC1), and the enable switch. */
+export function AgentDetailActions({
+  canDuplicate,
+  deletableName,
+  busy,
+  enabled,
+  switchDisabled,
+  onDuplicate,
+  onDelete,
+  onToggle,
+}: {
+  canDuplicate: boolean;
+  /** The profile's display name when it can be deleted here, otherwise null. */
+  deletableName: string | null;
+  busy: boolean;
+  enabled: boolean;
+  switchDisabled: boolean;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onToggle: (checked: boolean) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <ConfigDetailActions>
+      {canDuplicate && <ConfigButton size="small" onClick={onDuplicate} disabled={busy}>{t("agents.duplicate")}</ConfigButton>}
+      {deletableName !== null && (
+        <ConfigDangerMenu
+          texts={{
+            menu: t("settings.dangerMenu"),
+            action: t("agents.delete"),
+            confirmText: t("agents.deleteConfirm", { name: deletableName }),
+            confirm: t("agents.delete"),
+            cancel: t("i18n.cancel"),
+          }}
+          busy={busy}
+          onConfirm={onDelete}
+        />
+      )}
+      <ConfigSwitch checked={enabled} disabled={switchDisabled} label={enabled ? t("agents.disable") : t("agents.enable")} onChange={onToggle} />
+    </ConfigDetailActions>
+  );
+}
+
 export function AgentsConfig({
   cwd,
   sessionId = null,
@@ -611,23 +655,16 @@ export function AgentsConfig({
                         </>
                       )}
                     </ConfigDetailHeaderInfo>
-                    <ConfigDetailActions>
-                      {selected && (mode === "view" || mode === "edit") && <ConfigButton size="small" onClick={beginDuplicate} disabled={saving || toggling}>{t("agents.duplicate")}</ConfigButton>}
-                      {selected && isWritableScope(selected.scope) && mode === "edit" && (
-                        <ConfigDangerMenu
-                          texts={{
-                            menu: t("settings.dangerMenu"),
-                            action: t("agents.delete"),
-                            confirmText: t("agents.deleteConfirm", { name: selected.displayName }),
-                            confirm: t("agents.delete"),
-                            cancel: t("i18n.cancel"),
-                          }}
-                          busy={saving || toggling}
-                          onConfirm={() => void remove()}
-                        />
-                      )}
-                      <ConfigSwitch checked={draft.enabled} disabled={switchDisabled} label={draft.enabled ? t("agents.disable") : t("agents.enable")} onChange={(checked) => void toggleEnabled(checked)} />
-                    </ConfigDetailActions>
+                    <AgentDetailActions
+                      canDuplicate={!!selected && (mode === "view" || mode === "edit")}
+                      deletableName={selected && isWritableScope(selected.scope) && mode === "edit" ? selected.displayName : null}
+                      busy={saving || toggling}
+                      enabled={draft.enabled}
+                      switchDisabled={switchDisabled}
+                      onDuplicate={beginDuplicate}
+                      onDelete={() => void remove()}
+                      onToggle={(checked) => void toggleEnabled(checked)}
+                    />
                   </ConfigDetailHeader>
 
                   <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 1fr) minmax(0, 1fr)", gap: 12 }}>

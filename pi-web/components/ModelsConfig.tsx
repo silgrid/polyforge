@@ -316,7 +316,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── Provider detail ───────────────────────────────────────────────────────────
 
-function ProviderDetail({ name, editingName, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels, contextOnly = false }: {
+export function ProviderDetail({ name, editingName, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels, contextOnly = false }: {
   name: string; editingName: string; provider: ProviderEntry;
   onChange: (p: ProviderEntry) => void; onEditingNameChange: (n: string) => void;
   onRename: (n: string) => void; onDelete: () => void;
@@ -849,7 +849,7 @@ function fillEmptyModelFields(
   return { model: next, appliedCount };
 }
 
-function ModelDetail({
+export function ModelDetail({
   providerName,
   provider,
   model,

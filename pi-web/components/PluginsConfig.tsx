@@ -324,7 +324,7 @@ function AddPluginPanel({
   );
 }
 
-function PackageDetail({
+export function PackageDetail({
   pkg,
   cwd,
   busyKey,
