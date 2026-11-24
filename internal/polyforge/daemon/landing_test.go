@@ -228,3 +228,20 @@ func TestLandingHoldRepoReleasesOne(t *testing.T) {
 		t.Fatalf("journal %v, want empty", entries)
 	}
 }
+
+// TestLandingHoldJournalsBeforeGrant: the request id is in the private
+// journal before the first acquire, so a restart can release by id.
+func TestLandingHoldJournalsBeforeGrant(t *testing.T) {
+	hub := newFakeLeaseHub()
+	journalPath := filepath.Join(t.TempDir(), leaseJournalFile)
+	l := newLeaseManager(hub, journalPath)
+	l.poll = time.Millisecond
+	hold, err := l.Hold(context.Background(), "wi_1", landingCapsule(t), []string{"app"}, nil)
+	if err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+	defer hold.Release()
+	if entries, _ := l.journal.Entries(); len(entries) != 1 || entries[0].WorkItem != "wi_1" {
+		t.Fatalf("journal %+v, want one request id for wi_1", entries)
+	}
+}
