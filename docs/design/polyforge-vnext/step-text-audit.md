@@ -28,6 +28,13 @@
 工单背景写的 step-header 15 / build_subagents 8，与 Q3 口径实测的 15 / 10 的差异在
 build_subagents 一侧（9 个 `never` 加 1 个 `不要`；`does not grill` 不在计数内，按改写处理）。
 
+词数契约（owner 2026-11-24T02:50:45.427274526Z 裁决）：test 里 step-header 维持
+「严格低于改前 1752」，build_subagents 改为「不高于合入 #236 后的 main 基线 1054」
+（`origin/main` = `3b1be351`，`wc -w` = 1054）。#236 的 `Brief wording (STE80)` 块
+（54 词）由默认分支合入，不属本票改动、不在本表；本票自身把该文件从 1000 降到 999，
+sync 合入 #236 后的解为 1053 ≤ 1054。基线重定不是为省词删责任：本表所有句子与
+`build_subagents.md` 正文本次一字未再改动。
+
 未实跑 no-op 判定汇总：本表 29 条改写行中，28 条是未实跑的 no-op 推定，逐条在理由栏标注——
 工具已强制 3 条（`step-header.md:115-117` 的两行、`build_subagents.md:44-45` 的一行），
 文本重复 2 条（`step-header.md:87-90`、`build_subagents.md:43-44`），纯修辞/正面改写 23 条；
