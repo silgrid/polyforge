@@ -145,3 +145,36 @@ test("the rows carry the step's param overrides with the operator of each (the o
   assert.ok(res.note.startsWith("queued:"));
   assert.deepEqual(res.step.params, [{ name: "image", value: "reg/x:1", by: "usr_1" }]);
 });
+
+// polyforge#270: the daemon's next-dispatch face rides the same sanitizer —
+// a done or live step's model writability, the refusal reason, and the
+// effect scope survive the proxy; the value block keeps its old shape (a
+// row without the fields gains none).
+test("the sanitizer keeps the next-dispatch model writability, reason and scope (polyforge#270)", () => {
+  const view = sanitizeOverrideView({
+    work_item: "wi_A1", posture: "running",
+    steps: [
+      { id: "build", status: "done", skippable: false, can_override_models: true, model_effect_scope: "next_dispatch",
+        models: ["claude:strong"], models_by: "usr_1", effective: ["claude:strong"], source: "step override" },
+      { id: "merge", status: "in_progress", skippable: true, can_override_models: false,
+        model_override_reason: "step merge will not be dispatched again from the work item's current position" },
+      { id: "review", status: "pending", skippable: false },
+    ],
+  });
+  assert.deepEqual(view.steps[0], {
+    id: "build", status: "done", skippable: false, models: ["claude:strong"], modelsBy: "usr_1",
+    effective: ["claude:strong"], source: "step override",
+    canOverrideModels: true, modelEffectScope: "next_dispatch",
+  });
+  assert.equal(view.steps[1].canOverrideModels, false, "a false writability is kept, not dropped");
+  assert.equal(view.steps[1].modelOverrideReason, "step merge will not be dispatched again from the work item's current position");
+  assert.equal(view.steps[1].modelEffectScope, undefined);
+  assert.equal(view.steps[2].canOverrideModels, undefined, "a row without the field gains nothing");
+  const res = sanitizeOverrideWriteResult({
+    work_item: "wi_A1", changed: true, posture: "running", published: true,
+    note: "the change applies on the step's next dispatch; the round that already ran is unchanged",
+    step: { id: "build", status: "done", can_override_models: true, model_effect_scope: "next_dispatch", models: ["claude:strong"] },
+  });
+  assert.equal(res.step.canOverrideModels, true, "the write answer carries the same face");
+  assert.equal(res.step.modelEffectScope, "next_dispatch");
+});
