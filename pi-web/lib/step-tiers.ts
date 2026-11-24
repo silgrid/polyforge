@@ -181,3 +181,16 @@ export function stepTierPickerGroups(catalog: ReadonlyArray<StepTierItem>, defin
   if (unset.length > 0) groups.push({ tier: null, candidates: unset });
   return groups;
 }
+
+/** One key write a tier move plans. */
+export interface StepTierWrite {
+  action: "set" | "unset";
+  tier: string;
+  candidates: string[];
+}
+
+/** Stub (polyforge#258 u1): the tier move's key writes, filled in by the
+ *  implementation commit. */
+export function stepTierWritePlan(_catalog: ReadonlyArray<StepTierItem>, _identity: { harness: "pi" | "claude"; model: string }, _target: string | null): StepTierWrite[] {
+  return [];
+}
