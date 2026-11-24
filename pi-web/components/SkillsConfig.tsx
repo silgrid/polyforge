@@ -41,6 +41,7 @@ import {
   ConfigDetailHeaderInfo,
   ConfigDetailStack,
   ConfigEmptyState,
+  ConfigErrorNotice,
   ConfigField,
   ConfigFooter,
   ConfigListAction,
@@ -62,7 +63,7 @@ import { projectTrustReloadKey } from "./settings-ui-helpers";
 import { HarnessApplyTo, applyToCanSubmit, applyToTargets, type HarnessApplyToSelection, type HarnessApplyToResult, type HarnessApplyToTarget } from "./HarnessApplyTo";
 import { SettingsSavedToast } from "./SettingsSavedToast";
 import { recordWriteItems, undoPlan, type SettingsWriteItem, type SettingsWriteItems } from "@/lib/settings-undo";
-import { serverErrorText } from "@/lib/server-error";
+import { responseError, serverErrorText } from "@/lib/server-error";
 import { MarkdownBody } from "./MarkdownBody";
 
 type Translate = ReturnType<typeof useI18n>["t"];
@@ -116,10 +117,16 @@ export interface SkillSaveError {
   details?: string;
 }
 
+/** A failure (a ServerError keeps its route code) as the panel's save error. */
+export function saveErrorOf(t: Translate, failure: unknown): SkillSaveError {
+  const text = serverErrorText(failure);
+  return { summary: t(text.summaryKey, text.summaryParams), ...(text.details ? { details: text.details } : {}) };
+}
+
 /** One switch result as its result row: a refused item reads by its route code (T4 AC2). */
 export function switchResultRow(t: Translate, result: SkillSwitchResult): HarnessApplyToResult {
   return result.error
-    ? refusalResult(t, result.harness, result.error)
+    ? refusalResult(t, result.harness, { message: result.error, ...(result.code ? { code: result.code } : {}) })
     : { harness: result.harness, ok: true, text: t(result.harness === "pi" ? "skills.piWritten" : "skills.claudeWritten") };
 }
 
@@ -469,9 +476,7 @@ export function SkillDetail({
             </span>
           )}
           {saveError && (
-            <span style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>
-              {saveError.summary} {saveError.details}
-            </span>
+            <ConfigErrorNotice summary={saveError.summary} detailsLabel={t("i18n.detailsLabel")} details={saveError.details} />
           )}
         </div>
       </div>
@@ -568,9 +573,7 @@ export function SkillDetail({
             </span>
           )}
           {claudeSaveError && (
-            <span style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>
-              {claudeSaveError.summary} {claudeSaveError.details}
-            </span>
+            <ConfigErrorNotice summary={claudeSaveError.summary} detailsLabel={t("i18n.detailsLabel")} details={claudeSaveError.details} />
           )}
           <span style={{ fontSize: 11, color: "var(--text-dim)", display: "block", marginTop: 6 }}>
             {t("skills.claudeNotListedHint")}
@@ -1146,7 +1149,7 @@ export function SkillsConfig({
   const switchRound = useCallback(async (
     rowKeys: string[],
     items: SkillSwitchItemWire[],
-  ): Promise<SkillApplyResult[] | null> => {
+  ): Promise<SkillSwitchResult[] | null> => {
     if (items.length === 0) return [];
     setToggling((current) => new Set([...current, ...rowKeys]));
     setSaveError(null);
@@ -1156,11 +1159,11 @@ export function SkillsConfig({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items }),
       });
-      const d = (await res.json()) as { results?: SkillApplyResult[]; error?: string };
-      if (!res.ok || d.error || !d.results) throw new Error(d.error ?? `HTTP ${res.status}`);
+      const d = (await res.json()) as { results?: SkillSwitchResult[]; error?: string; code?: string };
+      if (!res.ok || d.error || !d.results) throw responseError(d, res.status);
       return d.results;
     } catch (e) {
-      setSaveError({ summary: e instanceof Error ? e.message : String(e) });
+      setSaveError(saveErrorOf(t, e));
       return null;
     } finally {
       setToggling((current) => {
@@ -1169,7 +1172,7 @@ export function SkillsConfig({
         return next;
       });
     }
-  }, []);
+  }, [t]);
 
   /** The row's unified switch (AC2): only the chosen harnesses' own stores. */
   const applySwitch = useCallback(async (
@@ -1244,11 +1247,11 @@ export function SkillsConfig({
     if (results === null) return;
     const failed = results.find((result) => result.error);
     if (failed) {
-      setClaudeSaveError({ summary: failed.error ?? t("serverError.unknown") });
+      setClaudeSaveError(saveErrorOf(t, { message: failed.error, code: failed.code }));
       return;
     }
     setRows((prev) => applyRowSwitchResults(prev, results, { claude: state }));
-  }, [switchRound]);
+  }, [switchRound, t]);
 
   // One PATCH for the whole group: each side is written on its own and
   // reported separately, so a harness the route refuses keeps its state and
@@ -1292,11 +1295,11 @@ export function SkillsConfig({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filePath: skill.filePath }),
       });
-      const d = (await res.json()) as { success?: boolean; error?: string };
-      if (!res.ok || d.error) throw new Error(d.error ?? `HTTP ${res.status}`);
+      const d = (await res.json()) as { success?: boolean; error?: string; code?: string };
+      if (!res.ok || d.error) throw responseError(d, res.status);
       await loadSkills();
     } catch (e) {
-      setSaveError({ summary: e instanceof Error ? e.message : String(e) });
+      setSaveError(saveErrorOf(t, e));
     } finally {
       setCleaningLegacy(null);
     }

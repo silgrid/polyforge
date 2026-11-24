@@ -204,7 +204,8 @@ export async function PATCH(req: Request) {
     if ("error" in single) return NextResponse.json({ error: single.error }, { status: 400 });
     const results = withRefusalCodes(await applySwitchItems([single.item], cwd));
     const refused = results[0];
-    if (refused.error) return NextResponse.json({ error: refused.error }, { status: 400 });
+    // owner 2A: the words and the status stay; the refusal's code is appended.
+    if (refused.error) return NextResponse.json({ error: refused.error, code: "skills-write-refused" }, { status: 400 });
     return NextResponse.json({ success: true });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
