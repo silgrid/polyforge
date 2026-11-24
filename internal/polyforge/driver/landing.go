@@ -174,9 +174,6 @@ func (d *Driver) watchLease(run StepRun, hold IntervalLease, stop <-chan struct{
 // rewind budget). It answers true when it already wrote that rewind, so
 // the caller plans again.
 func (d *Driver) ensureLease(ctx context.Context, stepID string) (bool, error) {
-	if true {
-		return false, nil
-	}
 	enter, _, ok := d.leaseInterval()
 	if !ok {
 		d.releaseLease("lane declares no lease_interval")
