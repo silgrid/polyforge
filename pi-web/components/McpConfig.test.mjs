@@ -1,4 +1,4 @@
-// carries: components/McpConfig.tsx, components/mcp-config-helpers.ts, components/HarnessApplyTo.tsx, lib/i18n/messages/en.ts
+// carries: components/McpConfig.tsx, components/mcp-config-helpers.ts, components/HarnessApplyTo.tsx, lib/i18n/messages/en.ts, lib/i18n/messages/zh-CN.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -12,7 +12,7 @@ const jiti = createJiti(import.meta.url, {
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
-const { McpConfig, McpConfigView } = await jiti.import("./McpConfig.tsx");
+const { McpConfig, McpConfigView, applyFailureOf } = await jiti.import("./McpConfig.tsx");
 const { ConfigSidebarGroupSwitch } = await jiti.import("./SettingsUi.tsx");
 const { enLocale } = await jiti.import("@/lib/i18n/messages/en.ts");
 const source = await readFile(new URL("./McpConfig.tsx", import.meta.url), "utf8");
@@ -390,8 +390,10 @@ test("loading, a failed load and an empty listing each say so", () => {
   assert.match(text(view({ load: { state: "loading" } })), /Loading\.\.\./);
   const denied = decode(view({ load: { state: "failed", error: { error: "Access denied", reason: "cwd-denied" } } }));
   assert.match(denied, /<div role="alert" class="config-sidebar-message is-error">Could not read the MCP settings\. Pi Web may not read this folder\.<\/div>/);
-  // Nothing to translate for an internal failure: its diagnostic is the reason.
-  assert.match(text(view({ load: { state: "failed", error: { error: "EACCES: permission denied", reason: "internal" } } })), /Could not read the MCP settings\. EACCES: permission denied/);
+  // An internal failure has no reason to translate: the generic line, its diagnostic in the 详情 fold (T4 AC2, u19).
+  const internalLoad = decode(view({ load: { state: "failed", error: { error: "EACCES: permission denied", reason: "internal" } } }));
+  assert.match(text(internalLoad.replace(/<details[\s\S]*?<\/details>/g, "")), /Could not read the MCP settings\. That did not work\. The server's own words are under Details\.$/);
+  assert.match(internalLoad, /<details[^>]*><summary>Details<\/summary><div class="config-error-notice-original">EACCES: permission denied<\/div><\/details>/);
   // A load that never answered ends with a way out, never "Loading..." for good.
   assert.match(
     text(view({ load: { state: "failed", error: { error: "GET /api/mcp did not answer within 15000 ms", timedOut: true } } })),
@@ -896,7 +898,10 @@ test("a failed change is said in the server's pane with its reason, and a timeou
   const failed = (failure, key = "global\0docs") => decode(writeView({ view: { actionError: { key, failure } } }))
     .match(/<p role="alert" class="mcp-config-line is-error">([^<]*)<\/p>/)?.[1];
   assert.equal(failed({ error: "/x: Unexpected token", reason: "unparsable", path: "/x" }), "Could not change the server: The file is not valid JSON, so Pi Web left it unchanged.");
-  assert.equal(failed({ error: "EACCES: permission denied", reason: "internal" }), "Could not change the server: EACCES: permission denied");
+  assert.equal(failed({ error: "EACCES: permission denied", reason: "internal" }), "Could not change the server: That did not work. The server's own words are under Details.");
+  assert.match(decode(writeView({ view: { actionError: { key: "global\0docs", failure: { error: "EACCES: permission denied", reason: "internal" } } } })),
+    /<p role="alert" class="mcp-config-line is-error">[^<]*<\/p><details[^>]*><summary>Details<\/summary><div class="config-error-notice-original">EACCES: permission denied<\/div><\/details>/,
+    "an internal failure's words are in the 详情 fold under the line (T4 AC2, u19)");
   assert.equal(failed({ error: "POST /api/mcp did not answer within 15000 ms", timedOut: true }),
     "Could not change the server: Pi Web did not answer in time, so the change may not have been made.");
   // Another server's failure is not shown on this one.
@@ -914,7 +919,9 @@ test("the group switch names what it left undone under the heading", () => {
   assert.ok(status, "the status sits under the Global heading");
   assert.ok(html.indexOf("config-sidebar-group-status") > html.indexOf(">global<"));
   assert.match(status, /<div role="status" class="config-sidebar-group-note">1 server\(s\) that reference PI_WEB_PASSWORD stayed off\.<\/div>/);
-  assert.match(status, /<div role="alert" class="config-sidebar-group-error">Could not change 2 of 3 servers:\ngone: The file no longer defines this server\.\nodd: EIO/);
+  assert.match(status, /<div role="alert" class="config-sidebar-group-error">Could not change 2 of 3 servers:\ngone: The file no longer defines this server\.\nodd: That did not work\. The server's own words are under Details\.<\/div>/);
+  // T4 AC2 (u19): the internal failure's own words only in the 详情 fold under the group.
+  assert.match(html, /<details[^>]*><summary>Details<\/summary><div class="config-error-notice-original">odd: EIO<\/div><\/details>/);
   const whole = decode(writeView({ view: { groupStatus: { scope: "project", keptOff: 0, failures: [], total: 1, error: { error: "x", reason: "project-untrusted" } } } }));
   assert.match(whole, /<div role="alert" class="config-sidebar-group-error">Could not change the server: This project is not trusted, so Pi Web does not change its \.pi\/mcp\.json\.<\/div>/);
   assert.ok(whole.indexOf("config-sidebar-group-error") < whole.indexOf(">global<"), "under the Project heading");
@@ -1208,7 +1215,10 @@ test("a test request that failed says why in a test's words, and keeps the last 
   assert.equal(refused.label, "Connected when tested", "the last result stays");
   assert.match(refused.text, /^0 tool\(s\) listed in/);
   assert.match(failure({ error: "x", reason: "server-missing" }).text, /Could not test the server: The file no longer defines this server\./);
-  assert.match(failure({ error: "EIO: i/o error", reason: "internal" }).text, /Could not test the server: EIO: i\/o error/);
+  // T4 AC2 (u19): an internal failure reads the generic line, its words in the 详情 fold.
+  assert.match(failure({ error: "EIO: i/o error", reason: "internal" }).text, /Could not test the server: That did not work\. The server's own words are under Details\./);
+  assert.match(decode(testView({ status: testedStatus("connected") }, { view: { tests: { [key]: { running: false, error: { error: "EIO: i/o error", reason: "internal" } } } } })),
+    /<details[^>]*><summary>Details<\/summary><div class="config-error-notice-original">EIO: i\/o error<\/div><\/details>/);
   assert.match(failure({ error: "late", timedOut: true }).text, /Could not test the server: Pi Web did not answer in time\. The test may still finish; press Refresh to see its result\./);
   // A file problem reads as a test's, not as the writer's "left it unchanged".
   assert.match(failure({ error: "x", reason: "unparsable" }).text, /Could not test the server: The file is not valid JSON, so Pi Web cannot read this entry to test it\./);
@@ -1663,4 +1673,76 @@ test("a server switch offers its undo in a toast, and a dropped undo says why", 
   const dropped = decode(view({ switchSuperseded: true }));
   assert.match(dropped, new RegExp(messages["mcp.undoSuperseded"]), "a dropped undo does not say why");
   assert.doesNotMatch(dropped, new RegExp(`>${messages["settings.undo"]}<`), "a dropped undo still offers its button");
+});
+
+// polyforge#259 T4 AC2 (u19, owner 13:57 裁定 1 / owner 2A): an MCP failure
+// reads in Chinese by its reason code, and the server's or harness's English
+// sits only inside the 详情 fold. The panel is rendered in zh-CN: the provider's
+// own value with zh-CN's t (SSR never runs the provider's locale effect). The
+// expected lines are hand-copied from lib/i18n/messages/zh-CN.ts
+// (mcp.reason.claude-unwritable, mcp.loadFailed, serverError.unknown, i18n.detailsLabel).
+const { zhCNLocale } = await jiti.import("@/lib/i18n/messages/zh-CN.ts");
+const { translateMessage } = await jiti.import("@/lib/i18n/format.ts");
+function ZhProvider({ children }) {
+  const provided = I18nProvider({ children });
+  const t = (key, params) => translateMessage("zh-CN", key, { "zh-CN": zhCNLocale.messages }, params);
+  return React.cloneElement(provided, { value: { ...provided.props.value, locale: "zh-CN", t } });
+}
+function zhView(props = {}) {
+  return decode(renderToStaticMarkup(h(ZhProvider, null, h(McpConfigView, {
+    cwd: null,
+    load: { state: "loaded", data: overview({ servers: [httpServer, stdioServer] }) },
+    selected: null,
+    refreshing: false,
+    embedded: true,
+    onSelect() {},
+    onRefresh() {},
+    onClose() {},
+    ...props,
+  }))));
+}
+const outsideFolds = (html) => text(html.replace(/<details[\s\S]*?<\/details>/g, ""));
+const foldsOf = (html) => text((html.match(/<details[\s\S]*?<\/details>/g) ?? []).join(""));
+const ZH_CLAUDE_UNWRITABLE = "Claude 一侧无法写入：找不到它的 CLI，或它的版本不在 Pi Web 认识的范围内。";
+const ZH_LOAD_FAILED = "无法读取 MCP 设置。";
+const ZH_UNKNOWN = "操作没有成功，服务端返回的原文在「详情」里。";
+const ZH_DETAILS = "详情";
+
+// Caught change: the apply-to failure not reading the harness's reason (only
+// the generic line), the harness's words printed beside the line, or no fold.
+test("a refused apply-to reads its reason in Chinese, each harness's words only in the fold (T4 AC2, u19)", () => {
+  const english = "claude: claude CLI not found on PATH";
+  const failure = applyFailureOf([
+    { harness: "pi", ok: true },
+    { harness: "claude", ok: false, reason: "claude-unwritable", error: "claude CLI not found on PATH" },
+  ]);
+  const html = zhView({ selected: "global\0github", actionError: { key: "global\0github", failure } });
+  const shown = outsideFolds(html);
+  assert.ok(shown.includes(ZH_CLAUDE_UNWRITABLE), "the row does not say the reason's Chinese line");
+  assert.ok(!shown.includes("claude CLI not found on PATH"), "the harness's English is outside the fold");
+  const fold = foldsOf(html);
+  assert.ok(fold.includes(ZH_DETAILS), "the fold is not labelled 详情");
+  assert.ok(fold.includes(english), "the harness's own words are not in the fold");
+  // With no reason to translate (internal), the generic Chinese line, the words still folded.
+  const internal = zhView({ selected: "global\0github", actionError: { key: "global\0github", failure: applyFailureOf([
+    { harness: "claude", ok: false, reason: "internal", error: "EACCES: permission denied" },
+  ]) } });
+  assert.ok(outsideFolds(internal).includes(ZH_UNKNOWN), "an internal refusal does not get the generic Chinese line");
+  assert.ok(!outsideFolds(internal).includes("EACCES"), "an internal refusal's English is outside the fold");
+  assert.ok(foldsOf(internal).includes("claude: EACCES: permission denied"), "an internal refusal's words are not folded");
+});
+
+// Caught change: failureText printing an internal or network failure's
+// diagnostic as the sidebar's line again, or dropping the fold.
+test("a failed MCP load with no reason reads in Chinese, its diagnostic only in the fold (T4 AC2, u19)", () => {
+  const html = zhView({ load: { state: "failed", error: { reason: "internal", error: "fetch failed: ECONNREFUSED" } } });
+  const shown = outsideFolds(html);
+  assert.ok(shown.includes(ZH_LOAD_FAILED), "the sidebar does not say 无法读取 MCP 设置");
+  assert.ok(shown.includes(ZH_UNKNOWN), "the sidebar does not give the generic Chinese line");
+  assert.ok(!shown.includes("fetch failed: ECONNREFUSED"), "the diagnostic is outside the fold");
+  assert.ok(foldsOf(html).includes("fetch failed: ECONNREFUSED"), "the diagnostic is not in the fold");
+  // A network failure carries no reason at all: the same.
+  const network = zhView({ load: { state: "failed", error: { error: "fetch failed: ECONNREFUSED" } } });
+  assert.ok(!outsideFolds(network).includes("ECONNREFUSED"), "a reason-less failure's English is outside the fold");
+  assert.ok(foldsOf(network).includes("fetch failed: ECONNREFUSED"));
 });
