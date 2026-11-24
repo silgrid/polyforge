@@ -57,21 +57,30 @@ var pf234WordBaselines = map[string]int{
 }
 
 // pf234Sentences splits a whitespace-flattened paragraph at sentence ends;
-// a trailing fragment without one stays its own sentence.
+// a trailing fragment without one stays its own sentence. The Chinese
+// full stop is multi-byte, so the scan compares bytes to its full form
+// rather than to a rune literal in a byte switch.
 func pf234Sentences(flat string) []string {
 	var out []string
 	start := 0
 	for i := 0; i < len(flat); i++ {
-		switch flat[i] {
-		case '.', '!', '?', '。':
-			if i+1 < len(flat) && flat[i+1] != ' ' {
-				continue
-			}
-			if s := strings.TrimSpace(flat[start : i+1]); s != "" {
-				out = append(out, s)
-			}
-			start = i + 1
+		end := 0
+		switch {
+		case flat[i] == '.' || flat[i] == '!' || flat[i] == '?':
+			end = i + 1
+		case strings.HasPrefix(flat[i:], "。"):
+			end = i + len("。")
+		default:
+			continue
 		}
+		if end < len(flat) && flat[end] != ' ' {
+			continue
+		}
+		if s := strings.TrimSpace(flat[start:end]); s != "" {
+			out = append(out, s)
+		}
+		start = end
+		i = end - 1
 	}
 	if s := strings.TrimSpace(flat[start:]); s != "" {
 		out = append(out, s)
