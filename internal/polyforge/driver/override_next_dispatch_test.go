@@ -96,9 +96,14 @@ func TestFutureDispatchable(t *testing.T) {
 		},
 		{
 			name: "an effective skip removes a step (and its gate cannot rewind)",
-			wf:   fdLane(),
-			exec: fdExec(map[string]string{"build": capsule.StepDone, "review": capsule.StepDone, "verification": capsule.StepInProgress}, nil),
-			step: "verification", skips: []string{"verification"}, want: false,
+			wf: testLane(3,
+				spec("build"),
+				gateSpec("review", "build"),
+				StepSpec{ID: "verification", Gate: true, Skippable: true, OnFail: &OnFail{Target: "build"}},
+				spec("merge")),
+			exec:  fdExec(map[string]string{"build": capsule.StepDone, "review": capsule.StepDone, "verification": capsule.StepInProgress}, nil),
+			skips: []string{"verification"},
+			step:  "verification", want: false,
 		},
 		{
 			name: "a skipped rewind target never counts",
@@ -135,7 +140,7 @@ func TestFutureDispatchable(t *testing.T) {
 				spec("build"),
 				StepSpec{ID: "audit", RewindOnly: true},
 				spec("merge")),
-			exec: fdExec(map[string]string{"build": capsule.StepDone}, map[string][]capsule.Attempt{"audit": rewound}),
+			exec: fdExec(map[string]string{"build": capsule.StepDone, "audit": capsule.StepPending}, map[string][]capsule.Attempt{"audit": rewound}),
 			step: "audit", want: true,
 		},
 		{
