@@ -101,8 +101,13 @@ import { PRESET_READ_ONLY, type ToolEntry } from "@/lib/tool-presets";
 import { getAgentsBadge, getSessionFamily, isHiddenRelation } from "@/lib/session-family";
 import { getLastSettingsSection, settingsSectionRequiresProject, type SettingsSection } from "@/lib/settings-navigation";
 import { focusIfLost } from "@/lib/stacked-dialog";
+import { OnboardingWizard } from "./OnboardingWizard";
+import { onboardingPopupOpen, type OnboardingStep, type OnboardingView } from "@/lib/onboarding-flow";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
+/** The onboarding state API's answer: an image-mode view or the host-mode
+ *  boolean alone (polyforge#167). */
+type OnboardingRead = ({ imageManaged: true } & OnboardingView) | { imageManaged: false };
 type AutoNameStatus =
   | { kind: "idle" }
   | { kind: "naming" }
@@ -550,6 +555,14 @@ export function AppShell() {
   }, []);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
+  // First-open onboarding (polyforge#167): the state API's view. Host mode
+  // answers imageManaged:false and the wizard never mounts; `dismissed` is the
+  // one popup switch, and the reopen entry clears it.
+  const [onboarding, setOnboarding] = useState<OnboardingRead | null>(null);
+  // 设置 › 常规's reopen: opens the wizard over a selected session (Q6); a
+  // dismissal clears it, and the automatic popup stays on the null-session
+  // branch below.
+  const [onboardingReopened, setOnboardingReopened] = useState(false);
   // The plain Settings button opens a phone's Settings on its list of sections; shortcuts open theirs.
   const [settingsOpenAtHome, setSettingsOpenAtHome] = useState(false);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
@@ -958,6 +971,49 @@ export function AppShell() {
     setSettingsOpenAtHome(false);
     setSettingsSection(section);
   }, []);
+
+  // The onboarding state reads once at mount (a host mode answers the one
+  // boolean, so the wizard never mounts) and every write answers the fresh
+  // view, which is the wizard's only state source.
+  const applyOnboarding = useCallback((body: OnboardingRead) => {
+    setOnboarding(body.imageManaged ? body : { imageManaged: false });
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/onboarding")
+      .then(async (response) => (response.ok ? await response.json() as OnboardingRead : null))
+      .then((body) => { if (!cancelled && body !== null) applyOnboarding(body); })
+      .catch(() => { /* an unreadable state keeps the wizard closed, never blocks the page */ });
+    return () => { cancelled = true; };
+  }, [applyOnboarding]);
+  const writeOnboarding = useCallback(async (body: Record<string, unknown>) => {
+    try {
+      const response = await fetch("/api/onboarding", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) return;
+      applyOnboarding(await response.json() as OnboardingRead);
+    } catch {
+      // Keep the last view: the wizard's action can be retried.
+    }
+  }, [applyOnboarding]);
+  const handleOnboardingComplete = useCallback((step: OnboardingStep) => {
+    void writeOnboarding({ action: "complete", step });
+  }, [writeOnboarding]);
+  const handleOnboardingSkip = useCallback((step: OnboardingStep) => {
+    void writeOnboarding({ action: "skip", step });
+  }, [writeOnboarding]);
+  const handleOnboardingDismiss = useCallback(() => {
+    setOnboardingReopened(false);
+    void writeOnboarding({ action: "dismiss" });
+  }, [writeOnboarding]);
+  const handleOnboardingReopen = useCallback(() => {
+    setOnboardingReopened(true);
+    setSettingsSection(null);
+    void writeOnboarding({ action: "reopen" });
+  }, [writeOnboarding]);
 
   const handleSidebarToggle = useCallback(() => {
     if (isMobile) {
@@ -1947,6 +2003,19 @@ export function AppShell() {
   const projectTrustCwd = selectedSession?.cwd ?? effectiveNewSessionCwd;
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
+  // AC1's popup: the first open (the null-session branch) shows it, a
+  // dismissal stops it, and Settings › 常规's reopen opens it over a session.
+  // Host mode never mounts it; the decision is the pure function's.
+  const onboardingOpen = onboardingPopupOpen({
+    imageManaged: onboarding?.imageManaged === true,
+    dismissed: onboarding?.imageManaged === true ? onboarding.dismissed : false,
+    hasSelectedSession: selectedSession !== null,
+    reopened: onboardingReopened,
+  });
+  // A positive read flag for the e2e: the shell applied the state API's
+  // answer (host, dismissed, or open) — an absence assertion polls this
+  // instead of racing the first read.
+  const onboardingRead = onboarding === null ? undefined : onboarding.imageManaged ? (onboarding.dismissed ? "dismissed" : "open") : "host";
 
   // Pane-tab restore (this wi): a browser reload re-opens every previously
   // open split-view pane, not just the single ?session= deep-link target.
@@ -3059,11 +3128,10 @@ export function AppShell() {
         }
       }
     `}</style>
-
       {/* polyforge#240: the one-time notification-permission explanation. */}
       <PolyforgeNotifications decisions={pfDecisionsFeed?.decisions ?? null} onOpenDecision={openPfDecision} />
 
-    <div style={{
+    <div data-onboarding-read={onboardingRead} style={{
       display: "flex",
       width: "100%",
       height: "var(--app-viewport-height, 100dvh)",
@@ -4066,6 +4134,17 @@ export function AppShell() {
         </div>
       </div>
     </div>
+    {onboardingOpen && onboarding?.imageManaged === true && (
+      <OnboardingWizard
+        view={onboarding}
+        cwd={activeCwd ?? newSessionCwd ?? selectedSession?.cwd ?? null}
+        onComplete={handleOnboardingComplete}
+        onSkip={handleOnboardingSkip}
+        onClose={handleOnboardingDismiss}
+        onOpenAccount={() => openSettingsSection("account")}
+        onWorkspaceChange={handleCwdChange}
+      />
+    )}
     {settingsSection && (
       <SettingsPanel
         cwd={projectTrustCwd}
@@ -4074,6 +4153,7 @@ export function AppShell() {
         openAtHome={settingsOpenAtHome}
         quoteSelectionEnabled={quoteSelectionEnabled}
         onQuoteSelectionChange={handleQuoteSelectionChange}
+        onReopenOnboarding={onboarding?.imageManaged === true ? handleOnboardingReopen : undefined}
         onClose={() => {
           setSettingsSection(null);
           setModelsRefreshKey((key) => key + 1);

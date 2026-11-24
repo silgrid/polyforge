@@ -1,4 +1,9 @@
-// carries: components/PiSubagentPanel*, components/SubagentPanelFrame*, components/PiRunningList*, components/AppShell*, components/AgentSessionPanel*, components/AppShell.split-pane-subagent.test.mjs, hooks/usePiSubagentPanel*, lib/pi-subagent-panel.ts
+// carries: components/PiSubagentPanel*, components/SubagentPanelFrame*, components/PiRunningList*, components/AgentSessionPanel*, components/AppShell.split-pane-subagent.test.mjs, hooks/usePiSubagentPanel*, lib/pi-subagent-panel.ts
+// The shell itself is not declared here (polyforge#91 fix build, review r1#B1):
+// this suite's pane assertions read SplitPaneLayout, and main's three suites
+// already declare components/AppShell.tsx — the fourth declaration put the
+// shell over the cap. AppShell changes still select this suite through its own
+// split-pane test file above.
 // polyforge#255 round 2 (review #1/#2): a pi subagent's in-chat progress
 // panel in a real browser. A local OpenAI-compatible fake model answers the
 // session's first request with an `Agent` tool call, so the built-in runtime

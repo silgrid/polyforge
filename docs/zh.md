@@ -5,6 +5,7 @@
 | 想了解什么 | 去读哪里 |
 |---|---|
 | 本页自身（中文导读） | [docs/zh.md](zh.md) |
+| 从零开始（新人主线：工作站镜像，Docker → 第一张票） | [docs/getting-started.md](getting-started.md) |
 | 术语是什么意思 | [docs/concepts.md](concepts.md) |
 | 安装、平台、升级工作机 | [docs/install.md](install.md) |
 | 升级历史 | [docs/upgrade.md](upgrade.md) |

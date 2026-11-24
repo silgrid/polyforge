@@ -20,18 +20,28 @@ type FileTicketResponse = { ok?: boolean; slug?: string; error?: string };
  * (one `pf file create` without `--bundle`: a registration ticket); success
  * hands the created slug up (the panel closes the dialog and names it), a
  * refusal keeps the dialog open with pf's text and is never retried.
+ *
+ * The onboarding wizard's first-ticket step (polyforge#167 Q5) reuses this
+ * one dialog without a source message: `analysis`/`message` are optional
+ * (blank goal/content, the first mapped project) and `lane` names the
+ * ticket's lane (`develop`). The lane rides a request header, so the
+ * Messages path's body stays exactly `{goal, project, content}` and its one
+ * flag create is unchanged.
  */
 export function PolyforgeFileTicketDialog({
   analysis,
   message,
   projects,
+  lane,
   onClose,
   onCreated,
 }: {
-  analysis: PolyforgeAnalysis;
-  message: Pick<PolyforgeMessage, "id" | "text">;
+  analysis?: PolyforgeAnalysis | null;
+  message?: Pick<PolyforgeMessage, "id" | "text"> | null;
   /** The `cli.toml`-mapped projects (the Messages project groups). */
   projects: string[];
+  /** The ticket's lane (bundle name); absent on the Messages path. */
+  lane?: string;
   onClose: () => void;
   onCreated: (slug: string) => void;
 }) {
@@ -43,6 +53,13 @@ export function PolyforgeFileTicketDialog({
   const [content, setContent] = useState(defaults.content);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The onboarding wizard opens this dialog before its mapped-projects read
+  // settles (polyforge#167 Q5): the select then starts on the first project
+  // that arrives, so a confirm never sends a blank project.
+  useEffect(() => {
+    if (project === "" && projects.length > 0) setProject(projects[0]);
+  }, [project, projects]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
@@ -57,7 +74,7 @@ export function PolyforgeFileTicketDialog({
     try {
       const response = await fetch("/api/polyforge/messages/file-ticket", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...(lane ? { "x-polyforge-lane": lane } : {}) },
         body: JSON.stringify({ goal, project, content }),
       });
       const body = await response.json() as FileTicketResponse;
@@ -84,6 +101,7 @@ export function PolyforgeFileTicketDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        data-lane={lane ?? "none"}
         style={{ width: "min(520px, 100%)", maxHeight: "100%", overflowY: "auto", background: "var(--bg-panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}
       >
         <div id={titleId} style={{ fontSize: 13, fontWeight: 600 }}>{t("polyforge.messages.ticketTitle")}</div>
