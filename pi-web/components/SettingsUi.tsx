@@ -780,6 +780,25 @@ export function ConfigFooterStatus({
   );
 }
 
+/**
+ * 一个详情页的保存 footer（polyforge#259 T4 AC1）：左边是未保存改动的条数，
+ * 右边是「保存（n）」与「丢弃」。没有改动时不渲染保存/丢弃按钮——n=0 时没有
+ * 要写的东西。词全由调用方给（`saveLabel` 收到 n）。
+ */
+export function ConfigSaveFooter({ status, dirty, saving, discardLabel, saveLabel, onDiscard, onSave }: {
+  status?: ReactNode;
+  /** 未保存改动的条数（`settings-dirty` 的 dirtyCount）。 */
+  dirty: number;
+  saving?: boolean;
+  discardLabel: string;
+  /** 「保存（n 项改动）」；n 是 dirty。 */
+  saveLabel: (count: number) => string;
+  onDiscard: () => void;
+  onSave: () => void;
+}) {
+  return null;
+}
+
 /** 一条设置页的错误 notice（polyforge#259 T4 AC2）：中文主文案，服务端原文折叠进详情。 */
 export function ConfigErrorNotice({ id, summary, detailsLabel, details }: {
   id?: string;
