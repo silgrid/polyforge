@@ -9,6 +9,7 @@ const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const { HarnessModelSettings, HarnessModelTable, ModelPageNav } = await jiti.import("./HarnessModelSettings.tsx");
+const { ModelStepTierDrawer } = await jiti.import("./ModelStepTierDrawer.tsx");
 
 test("four model subpages: the sidebar nav carries only the pages, and only the chosen pane renders", () => {
   const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
@@ -122,7 +123,7 @@ const TIER = {
 };
 const table = (rows, tier) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelTable, { rows, tier })));
 
-test("tier cells are read-only badges: a shared tier by name, differing harnesses by 归属, unset as —, and zero write controls", () => {
+test("tier cells are small labels: a shared tier by name, differing harnesses by 归属, unset as —, and no inline editor", () => {
   const html = table(TIER_ROWS, TIER);
   assert.match(html, /Step tier/, "the fifth column's header");
   assert.match(html, /data-step-tier-badge="all">default</, "a row whose every harness sits in the same single tier shows the tier name");
@@ -131,13 +132,14 @@ test("tier cells are read-only badges: a shared tier by name, differing harnesse
   assert.match(merged, /data-step-tier-badge="pi">pi: default</, "pi's own tier is named with its harness");
   assert.match(merged, /data-step-tier-badge="claude">claude: fast-chat</, "claude's own tier is named with its harness");
   assert.match(html, /data-step-tier-state="unset"/, "an unset row shows 「—」");
-  // no interactive control survives: no select, no apply-to, no button, no checkbox
-  assert.ok(!html.includes("data-step-tier-select"), "the tier select is gone");
-  assert.ok(!html.includes("Apply to"), "the apply-to control is gone");
+  // the cell is one small label that opens the drawer: no inline editor
+  assert.ok(!html.includes("data-step-tier-select"), "the inline tier select is gone");
+  assert.ok(!html.includes("Apply to"), "the inline apply-to control is gone");
   assert.ok(!html.includes("<select"), "no select renders in the tier column");
   assert.ok(!html.includes('type="checkbox"'), "no checkbox renders in the tier column");
   assert.ok(!html.includes('type="radio"'), "no radio renders in the tier column");
-  assert.ok(!html.includes("<button"), "no button renders in the tier column");
+  assert.equal((html.match(/<button/g) ?? []).length, TIER_ROWS.length, "each capable row's cell is exactly one button");
+  assert.match(html, /<button[^>]*data-step-tier-cell="editable"[^>]*aria-haspopup="dialog"/, "the label opens a dialog");
   // the other columns are untouched
   assert.match(html, /Chat availability/);
   assert.match(html, /Always available/);
@@ -187,3 +189,33 @@ test("old pf reason follows locale: version, not-installed and unreadable stay d
 // label; polyforge#258 (T3) replaces that sidebar with the four subpages, so
 // the old shape is gone (no compatibility path). The subpage assertions above
 // are the replacement.
+
+// polyforge#258 (T3) AC2: the step-tier cell is a label; the tier choice and
+// 「应用到」 live inside the right-side drawer (owner plan review item 3 A).
+test("the step-tier drawer edits the tier and keeps 应用到 inside it", () => {
+  const row = { provider: "gateway", id: "one", name: "Gateway One", harnesses: ["pi", "claude"], chatAvailable: false, reasoning: [], isDefault: false };
+  const tier = { capable: true, reason: null, tiers: [
+    { tier: "default", candidates: ["pi:gateway/one"] },
+    { tier: "fast-chat", candidates: ["claude:one"] },
+  ] };
+  const drawer = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ModelStepTierDrawer, {
+    row, tier,
+    tierRead: async () => ({ ok: true, items: [], hash: null }),
+    tierWrite: async () => ({ ok: true }),
+    onClose: () => {},
+    onSaved: () => {},
+  })));
+  assert.match(drawer, /role="dialog"/);
+  assert.match(drawer, /data-step-tier-drawer=""/);
+  assert.match(drawer, /data-step-tier-select=""/, "the drawer carries the tier select");
+  assert.match(drawer, /Apply to/, "「应用到」 is inside the drawer");
+  assert.match(drawer, /data-step-tier-current="pi">pi: default/, "each harness's current tier shows");
+  assert.match(drawer, /data-step-tier-current="claude">claude: fast-chat/);
+
+  const table = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelTable, {
+    rows: [row], tier, onOpenTier: () => {},
+  })));
+  assert.match(table, /<button[^>]*data-step-tier-cell="editable"[^>]*data-step-tier-open=""/, "the cell opens the drawer");
+  assert.ok(!table.includes("<select"), "no tier select in the cell");
+  assert.ok(!table.includes("Apply to"), "no apply-to in the cell");
+});
