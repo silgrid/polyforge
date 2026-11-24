@@ -1,6 +1,12 @@
-// carries: app/settings.css, components/SettingsPanel*
+// carries: components/SettingsSectionTabs*
 // polyforge#259 (T4) AC3 — 设置对话框的宽度自适应与 tab 栏在 900 / 1280 / 1600
 // 三个视口下都不溢出错出视口。
+//
+// 本套件按 `components/SettingsSectionTabs*` 声明（build finding u1#1）：
+// `app/settings.css` 与 `components/SettingsPanel*` 已各有 3 个套件声明，
+// `lib/e2e-carries.test.mjs` 的 3 套件上限不允许再加一个；tab 栏抽成
+// `components/SettingsSectionTabs.tsx` 后，它的变化正好选中本套件，而
+// 对话框宽度与侧栏仍由已声明这两条路径的三个套件覆盖。
 //
 // 期望值来自工单「要的结果」的两条（不是实现输出）：对话框宽度
 // `min(1280px, calc(100vw - 32px))`；侧栏 `clamp(200px, 20%, 260px)`；tab 栏
