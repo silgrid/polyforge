@@ -1693,9 +1693,11 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
     for (const provider of activeOAuth) options.push({ value: `oauth:${provider.id}`, label: `${provider.name} · OAuth`, selection: { type: "oauth", providerId: provider.id } });
     for (const provider of activeApiKey) options.push({ value: `apikey:${provider.id}`, label: `${provider.displayName} · API key`, selection: { type: "apikey", providerId: provider.id } });
     for (const [providerName] of providers) options.push({ value: `provider:${providerName}`, label: providerName, selection: { type: "provider", name: providerName } });
+    // A selected model still names its provider in the picker: the model
+    // choice has its own select beside it.
     const selectionKey = (current: Selection | null) => !current ? ""
       : current.type === "oauth" || current.type === "apikey" ? `${current.type}:${current.providerId}`
-        : current.type === "provider" ? `provider:${current.name}` : `model:${current.providerName}:${current.index}`;
+        : current.type === "provider" ? `provider:${current.name}` : `provider:${current.providerName}`;
     const customProvider = (selection?.type === "provider" || selection?.type === "model")
       ? (selection.type === "provider" ? selection.name : selection.providerName) : null;
     const customEntry = customProvider ? config.providers?.[customProvider] : undefined;
@@ -1767,7 +1769,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
     <>
     <ConfigPanelShell embedded={embedded} title={t("common.models")} subtitle="~/.pi/agent/models.json" closeLabel={t("i18n.close")} onClose={onClose}>
 
-        {!embedded && <EnabledModelsBanner controller={enabledModels} />}
+        <EnabledModelsBanner controller={enabledModels} />
 
         {/* Body */}
         <ConfigSplitView>

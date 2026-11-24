@@ -91,10 +91,11 @@ export function stepTierReasonText(host: HostTierConfig, t: (key: string, params
   return t("models.stepTierReasonUnavailable");
 }
 
-/** One row's step-tier cell, read-only (polyforge#256 B7): the current state
- *  as short badges — a single shared tier shows its name, differing harnesses
- *  show `pi: default` / `claude: fast`, an unset or incapable row shows 「—」.
- *  The editing entry point is the row's drawer (T3, ModelStepTierDrawer). */
+/** One row's step-tier cell (polyforge#256 B7, T3): the current state as short
+ *  badges — a single shared tier shows its name, differing harnesses show
+ *  `pi: default` / `claude: fast`, an unset or incapable row shows 「—」. A
+ *  capable cell is one small label button that opens the row's drawer
+ *  (ModelStepTierDrawer); no editor lives inline. */
 export function StepTierBadges({ row, tier, onOpen }: { row: ModelViewRow; tier: StepTierColumnView; onOpen?: (row: ModelViewRow) => void }) {
   const { t } = useI18n();
   if (!tier.capable) {
