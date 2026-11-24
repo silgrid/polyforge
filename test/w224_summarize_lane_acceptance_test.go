@@ -1,3 +1,4 @@
+// carries: test/w224_summarize_lane_acceptance_test.go
 package test
 
 // w224_summarize_lane_acceptance_test.go: the polyforge#224 acceptance
@@ -151,6 +152,15 @@ func w224AwaitSummary(t *testing.T, inst *v1Install, d *v1Daemon, wi string, bou
 	}
 	t.Fatalf("no summarize fact ever landed in the snapshot of %s within %v (%s; daemon log tail: %s)", wi, bound, last, d.logTail())
 	return w224Snap{}
+}
+
+// w224AwaitNextSummary waits for the summarize call a marked request
+// started after an earlier call FAILED: the projection answers the
+// pre-call state while the call is in flight (lane.go Projection), so the
+// earlier call's error is still held then.
+func w224AwaitNextSummary(t *testing.T, inst *v1Install, d *v1Daemon, wi string, bound time.Duration) w224Snap {
+	t.Helper()
+	return w224AwaitSummary(t, inst, d, wi, bound)
 }
 
 // w224AssertSummaryLine pins the held line's content contract and the
@@ -437,7 +447,7 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	inst := newV1Install(t)
 	root := w224HarnessRoot(t)
 	d := newV1Daemon(t, inst, w224OptArgs("--claude-bin", inst.fakepiPath, "--harness-root", root))
-	w224Summarize(t, d, "pi:e2e-w224-fail", "claude:e2e-w224-claude")
+	w224Summarize(t, d, "pi:e2e-w224-fail", "claude:e2e-w224-claude-slow")
 	d.start()
 
 	wi := w224NewWI(t, inst, "w224: a failed call walks to the next candidate", func(wi string) []map[string]any {
@@ -484,7 +494,7 @@ func TestW224FailedCallWalksToTheNextCandidate(t *testing.T) {
 	// error.
 	w224AwaitRun(t, capDir, "PI_CODING_AGENT_SESSION_DIR", 85*time.Second)
 	w224Demand(t, inst, d, wi)
-	w224AssertSummaryLine(t, w224AwaitSummary(t, inst, d, wi, 15*time.Second), "e2e-w224-claude", "--bare")
+	w224AssertSummaryLine(t, w224AwaitNextSummary(t, inst, d, wi, 15*time.Second), "e2e-w224-claude-slow", "--bare")
 
 	// No credential value appears in the dispatch argv, the daemon log or
 	// any artifact: the sentinel lives only in the settings.json the test
