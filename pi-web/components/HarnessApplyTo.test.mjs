@@ -28,6 +28,82 @@ const TARGETS = [
   { harness: "claude", label: "claude", disabled: true, disabledReason: "claude is not installed" },
 ];
 
+/** Every element of a component's tree (the function is called directly). */
+function collect(node) {
+  if (Array.isArray(node)) return node.flatMap(collect);
+  if (!node || typeof node !== "object") return [];
+  return [node, ...collect(node.props?.children)];
+}
+
+function textOf(node) {
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  if (node === null || node === undefined || typeof node !== "object") return typeof node === "string" ? node : "";
+  return textOf(node.props?.children);
+}
+
+/** The input control whose enclosing label's text names `label`. */
+function inputByLabel(root, label) {
+  return collect(root).find((element) => element.type === "input"
+    && collect(root).some((candidate) => candidate.type === "label"
+      && textOf(candidate.props.children).includes(label)
+      && collect(candidate).includes(element)));
+}
+
+// polyforge#259 T4, review #7: this pins the onChange semantics, which the chip
+// kept unchanged when it stopped submitting — a mode choice re-targets and keeps
+// the selection, a checkbox changes only its own harness, and nothing here
+// writes (the component takes no submit callback at all).
+test("choosing all or specific harnesses changes only the target — never a save (r1#1)", () => {
+  const changes = [];
+  const element = HarnessApplyTo({
+    texts: TEXTS,
+    targets: TARGETS,
+    value: { mode: "all", selected: [] },
+    onChange: (next) => changes.push(next),
+  });
+  const specific = inputByLabel(element, "Specific harnesses");
+  assert.ok(specific, "the specific radio is not rendered");
+  specific.props.onChange();
+  assert.deepEqual(changes, [{ mode: "specific", selected: [] }], "the mode choice changed more than the target");
+
+  const back = HarnessApplyTo({
+    texts: TEXTS,
+    targets: TARGETS,
+    value: { mode: "specific", selected: ["pi"] },
+    onChange: (next) => changes.push(next),
+  });
+  inputByLabel(back, "All harnesses").props.onChange();
+  assert.deepEqual(changes[1], { mode: "all", selected: ["pi"] }, "the mode choice dropped the selection");
+
+  const checking = HarnessApplyTo({
+    texts: TEXTS,
+    targets: TARGETS,
+    value: { mode: "specific", selected: [] },
+    onChange: (next) => changes.push(next),
+  });
+  inputByLabel(checking, "pi").props.onChange({ target: { checked: true } });
+  assert.deepEqual(changes[2], { mode: "specific", selected: ["pi"] }, "the checkbox changed more than its own harness");
+
+  const unchecking = HarnessApplyTo({
+    texts: TEXTS,
+    targets: TARGETS,
+    value: { mode: "specific", selected: ["pi"] },
+    onChange: (next) => changes.push(next),
+  });
+  inputByLabel(unchecking, "pi").props.onChange({ target: { checked: false } });
+  assert.deepEqual(changes[3], { mode: "specific", selected: [] }, "unchecking kept another harness");
+});
+
+// polyforge#259 T4, review #6: a per-target failure must be readable while the
+// chip is closed — the results are not part of the collapsed menu.
+test("a target's result stays visible while the chip is closed", () => {
+  const markup = render({ results: [{ harness: "pi", ok: false, text: "pi refused: file is read-only" }] });
+  const details = /<details[\s\S]*?<\/details>/.exec(markup)?.[0] ?? "";
+  assert.ok(details, "the chip renders no details element");
+  assert.doesNotMatch(details, /pi refused: file is read-only/, "the failure is inside the collapsed menu");
+  assert.match(markup, /data-harness="pi"[^>]*data-ok="false"/, "the per-target result is missing");
+});
+
 function render(props = {}) {
   return renderToStaticMarkup(h(HarnessApplyTo, {
     texts: TEXTS,
