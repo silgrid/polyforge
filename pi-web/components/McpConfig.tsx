@@ -6,6 +6,7 @@ import type {
   ClaudeMcpServerInfo,
   CodemodeMode,
   McpActionResponse,
+  McpApplyResult,
   McpCodemodeInfo,
   McpCodemodeInlineBudget,
   McpCodemodeMode,
@@ -219,6 +220,20 @@ function actionFailureText(failure: McpActionFailure, t: Translate): string {
   if (failure.summaryKey) return t(failure.summaryKey, failure.summaryParams);
   if (failure.timedOut) return t("mcp.actionTimedOut");
   return failureText(failure, t);
+}
+
+/**
+ * The row's 「应用到」 failure from the harnesses that refused (T4 AC2): the
+ * line it shows and each harness's own words for the details fold.
+ */
+export function applyFailureOf(failures: readonly McpApplyResult[]): McpActionFailure {
+  const split = serverErrorText({ message: failures.map((item) => `${item.harness}: ${item.error ?? item.reason ?? ""}`).join("; ") });
+  return {
+    error: split.details ?? "",
+    ...(failures[0]?.reason !== undefined ? { reason: failures[0].reason } : {}),
+    summaryKey: split.summaryKey,
+    ...(split.summaryParams ? { summaryParams: split.summaryParams } : {}),
+  };
 }
 
 /** What saving the Code mode choice, mode or budget is doing: nothing, waiting for the route, or why it failed. */
@@ -724,18 +739,7 @@ export function McpConfig({
     if (result.ok) {
       const failures = (result.data.applied?.results ?? []).filter((item) => !item.ok);
       if (failures.length > 0) {
-        // T4 AC2: the row says it in Chinese and keeps each harness's own words
-        // for the details line; a reason code still rides along.
-            const split = serverErrorText({ message: failures.map((item) => `${item.harness}: ${item.error ?? item.reason ?? ""}`).join("; ") });
-        setActionError({
-          key,
-          failure: {
-            error: split.details ?? "",
-            ...(failures[0].reason !== undefined ? { reason: failures[0].reason } : {}),
-            summaryKey: split.summaryKey,
-            ...(split.summaryParams ? { summaryParams: split.summaryParams } : {}),
-          },
-        });
+        setActionError({ key, failure: applyFailureOf(failures) });
       }
       // A side the change removed carries its undo, so the notice offers it
       // as the remove action's does (Q1 A).
