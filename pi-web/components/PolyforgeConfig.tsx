@@ -49,6 +49,7 @@ import {
 } from "@/lib/polyforge-cells-pure";
 import type { PolyforgeCellsRead } from "@/lib/polyforge-cells";
 import { shortenPath } from "@/lib/display-path";
+import { dirtyCount, dirtyPatch, settleDraft } from "@/lib/settings-dirty";
 import {
   POLYFORGE_POLL_INTERVAL,
   POLYFORGE_TITLE_LENGTH,
@@ -71,6 +72,7 @@ import {
   ConfigDetailTitle,
   ConfigFooter,
   ConfigFooterStatus,
+  ConfigSaveFooter,
   ConfigListAction,
   ConfigPanelShell,
   ConfigSectionTitle,
@@ -1889,9 +1891,8 @@ function HostSettingsRegion({ title }: { title: string }) {
 
   useEffect(() => { void runRead(); }, [runRead]);
 
-  const post = async ({ action, key, value }: RegionWrite) => {
-    setBusy(key);
-    setMessage(null);
+  /** One Host write; answers whether it landed, without touching the drafts. */
+  const postOnce = async ({ action, key, value }: RegionWrite): Promise<boolean> => {
     try {
       const response = await fetch("/api/polyforge/config", {
         method: "POST",
@@ -1903,13 +1904,19 @@ function HostSettingsRegion({ title }: { title: string }) {
       setMessage({ tone: "ok", text: body.message ?? t("polyforge.settings.configSaved") });
       const entry = body.entry;
       if (CONNECTION_KEYS.includes(key) && entry) setNotices((current) => ({ ...current, [key]: entry }));
-      setDrafts((current) => { const next = { ...current }; delete next[key]; return next; });
-      await runRead();
+      return true;
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : String(error) });
-    } finally {
-      setBusy(null);
+      return false;
     }
+  };
+  const post = async (pending: RegionWrite) => {
+    setBusy(pending.key);
+    setMessage(null);
+    const landed = await postOnce(pending);
+    if (landed) setDrafts((current) => { const next = { ...current }; delete next[pending.key]; return next; });
+    setBusy(null);
+    if (landed) await runRead();
   };
   // Every region write goes through here: a connection key asks first.
   const write = (pending: RegionWrite) => {
@@ -1978,15 +1985,52 @@ function HostSettingsRegion({ title }: { title: string }) {
     }
     write({ action: "set", key, value });
   };
-  const save = (key: string) => {
-    const raw = drafts[key] ?? regionShownValue(itemOf(key));
-    const value = formValue(key, raw);
+  /** A Host key's value as the file shows it today (the draft's baseline). */
+  const hostShown = (key: string) => HOST_LIST_KEYS.includes(key) ? hostPatternsShownValue(itemOf(key)) : regionShownValue(itemOf(key));
+  const hostDraft = (key: string) => drafts[key] ?? hostShown(key);
+  const savedValues = Object.fromEntries([...HOST_SCALAR_KEYS, ...HOST_LIST_KEYS].map((key) => [key, hostShown(key)]));
+  const draftValues = Object.fromEntries([...HOST_SCALAR_KEYS, ...HOST_LIST_KEYS].map((key) => [key, hostDraft(key)]));
+  // The footer's count and its patch are the same fact: the fields a save writes.
+  const dirty = dirtyCount(savedValues, draftValues);
+  /** One key's value from its draft, or why it cannot be written. */
+  const buildValue = (key: string): { value: unknown } | { error: string } => {
+    const raw = hostDraft(key);
+    const value = HOST_LIST_KEYS.includes(key)
+      ? raw.split("\n").map((line) => line.trim()).filter((line) => line !== "")
+      : formValue(key, raw);
     const invalid = configValueError(key, value, itemOf(key)?.schema);
-    if (invalid) {
-      setMessage({ tone: "error", text: `${key}: ${invalid}` });
-      return;
+    return invalid ? { error: invalid } : { value };
+  };
+  /**
+   * The Host region's one save (polyforge#259 T4 AC1, owner 1A): every changed
+   * field is written, a field that refuses to validate stops the batch before
+   * anything is written, and only the fields that landed settle.
+   */
+  const saveAll = async () => {
+    const patch = dirtyPatch(savedValues, draftValues);
+    const keys = Object.keys(patch);
+    if (keys.length === 0) return;
+    const values: Record<string, unknown> = {};
+    for (const key of keys) {
+      const built = buildValue(key);
+      if ("error" in built) { setMessage({ tone: "error", text: `${key}: ${built.error}` }); return; }
+      values[key] = built.value;
     }
-    write({ action: "set", key, value });
+    const connection = keys.filter((key) => CONNECTION_KEYS.includes(key));
+    const plain = keys.filter((key) => !CONNECTION_KEYS.includes(key));
+    setBusy("*");
+    setMessage(null);
+    const landed: Record<string, string> = {};
+    for (const key of plain) {
+      if (!(await postOnce({ action: "set", key, value: values[key] }))) break;
+      landed[key] = hostDraft(key);
+    }
+    setDrafts((current) => settleDraft(current, landed) as Record<string, string>);
+    setBusy(null);
+    if (Object.keys(landed).length > 0) await runRead();
+    // A connection key still asks first: its batch is the one confirmation.
+    if (connection.length > 0) setConfirming({ action: "set", key: connection[0], value: values[connection[0]] });
+    else if (Object.keys(landed).length === keys.length) setMessage({ tone: "ok", text: t("polyforge.settings.configSaved") });
   };
   const renderNotice = (key: string) => {
     const entry = notices[key];
@@ -2007,7 +2051,6 @@ function HostSettingsRegion({ title }: { title: string }) {
         <div key={key} className="polyforge-config-region-row" data-pf-region-key={key} style={REGION_ROW_STYLE}>
           <span className="polyforge-config-key"><BreakableToken text={key} /></span>
           <input aria-label={`${key} (host)`} value={drafts[key] ?? regionShownValue(itemOf(key))} onChange={(event) => setDrafts((current) => ({ ...current, [key]: event.target.value }))} />
-          <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null} onClick={() => save(key)}>{t("polyforge.settings.configSave")}</ConfigButton>
           <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null || itemOf(key)?.source !== "file"} onClick={() => write({ action: "unset", key })}>{t("polyforge.cells.unset")}</ConfigButton>
           {renderNotice(key)}
         </div>
@@ -2023,7 +2066,6 @@ function HostSettingsRegion({ title }: { title: string }) {
           />
           <p className="polyforge-config-card-hint">{t("polyforge.settings.hostPatternsHint")}</p>
           <div style={{ display: "flex", gap: 6 }}>
-            <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null} onClick={() => savePatternList(key)}>{t("polyforge.settings.configSave")}</ConfigButton>
             <ConfigButton size="small" disabled={busy !== null || read === null || confirming !== null || itemOf(key)?.source !== "file"} onClick={() => write({ action: "unset", key })}>{t("polyforge.cells.unset")}</ConfigButton>
           </div>
         </div>
@@ -2049,6 +2091,16 @@ function HostSettingsRegion({ title }: { title: string }) {
         </div>
       )}
       {message && <p className={message.tone === "error" ? "config-add-source-error" : "polyforge-config-card-hint"} role="status">{message.text}</p>}
+      {/* One footer for every editable Host field (polyforge#259 T4 AC1). */}
+      <ConfigSaveFooter
+        status={dirty > 0 ? t("settings.unsavedCount", { count: dirty }) : undefined}
+        dirty={dirty}
+        saving={busy !== null || confirming !== null}
+        discardLabel={t("settings.discard")}
+        saveLabel={(count) => t("settings.saveWithCount", { count })}
+        onDiscard={() => setDrafts({})}
+        onSave={() => void saveAll()}
+      />
     </div>
   );
 }
