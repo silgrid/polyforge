@@ -1888,7 +1888,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                   processMessageCount += 1;
                   revealProcess ||= Boolean(pendingSearchScroll && entryIds[processIdx] === pendingSearchScroll.entryId && (!searchBlock || blocks.includes(searchBlock)));
                   revealProcess ||= isSubagentJumpTarget(pendingSubagentJump, entryIds[processIdx]);
-                  revealProcess ||= pendingPiSubagentJump?.entryId === entryIds[processIdx];
+                  revealProcess ||= isSubagentJumpTarget(pendingPiSubagentJump, entryIds[processIdx]);
                   processViews.push(renderMessage(processIdx, {
                     attachRef: false,
                     keyPrefix: "process",
