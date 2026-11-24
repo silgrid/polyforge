@@ -158,7 +158,7 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "json-invalid", message: "the body is not valid JSON" }, { status: 400 });
   }
-  const bad = (message: string) => NextResponse.json({ error: "invalid-request", message }, { status: 400 });
+  const bad = (message: string) => NextResponse.json({ error: "invalid-request", message, code: "invalid-request" }, { status: 400 });
   const kind = typeof body.kind === "string" ? body.kind : "";
   const shape = WRITE_KIND_KEYS[kind];
   if (!shape) return bad("kind must be one of oauth-token, api-key, gateway");
@@ -222,7 +222,11 @@ export async function POST(req: Request) {
     }
     results.push({ target, ...(await writeOne(adapter, { kind, value, baseUrl }, root)) });
   }
-  return NextResponse.json({ results });
+  // polyforge#259 T4 (owner 2A): the answers keep `results`; each refused target
+  // gains a code beside its own words, so the panel can say it in Chinese.
+  return NextResponse.json({
+    results: results.map((result) => (result.status === "written" ? result : { ...result, code: "account-write-refused" })),
+  });
 }
 
 async function writeOne(

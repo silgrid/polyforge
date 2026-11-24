@@ -45,6 +45,8 @@ export function codeFromError(message: string | null | undefined): string | null
   if (/config-cas-409|changed since (it|the file) was read|CAS/i.test(text)) return "config-cas-409";
   if (/request-denied|untrusted|forbidden/i.test(text)) return "http-403";
   if (/unauthori[sz]ed|not signed in/i.test(text)) return "http-401";
+  const http = /HTTP\s*(\d{3})/i.exec(text);
+  if (http) return `http-${http[1]}`;
   if (/not found|missing|no such/i.test(text)) return "http-404";
   if (/conflict|already exists/i.test(text)) return "http-409";
   return null;

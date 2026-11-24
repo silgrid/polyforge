@@ -102,6 +102,12 @@ function parseSwitchItem(raw: unknown): { item: SkillSwitchItem } | { error: str
  * together in one atomic write; every item is reported on its own, so one a
  * guard or the gate refuses does not stop the rest.
  */
+/** polyforge#259 T4 (owner 2A): a refused item's error keeps its words and gains a
+ *  code, so the panel can say it in Chinese and fold the original. */
+function withRefusalCodes(results: SkillApplyResult[]): (SkillApplyResult & { code?: string })[] {
+  return results.map((result) => (result.error ? { ...result, code: "skills-write-refused" } : result));
+}
+
 async function applySwitchItems(
   items: SkillSwitchItem[],
   cwd: string | null,
@@ -191,12 +197,12 @@ export async function PATCH(req: Request) {
         return NextResponse.json({ error: (parsed[malformed] as { error: string }).error }, { status: 400 });
       }
       items = (parsed as { item: SkillSwitchItem }[]).map((entry) => entry.item);
-      return NextResponse.json({ results: await applySwitchItems(items, cwd) });
+      return NextResponse.json({ results: withRefusalCodes(await applySwitchItems(items, cwd)) });
     }
 
     const single = parseSwitchItem(body);
     if ("error" in single) return NextResponse.json({ error: single.error }, { status: 400 });
-    const results = await applySwitchItems([single.item], cwd);
+    const results = withRefusalCodes(await applySwitchItems([single.item], cwd));
     const refused = results[0];
     if (refused.error) return NextResponse.json({ error: refused.error }, { status: 400 });
     return NextResponse.json({ success: true });

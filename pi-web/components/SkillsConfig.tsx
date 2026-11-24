@@ -96,7 +96,7 @@ export function rowSwitchTargets(
 
 
 /** A refusal as a result row: the Chinese line, with the server's own words folded (T4 AC2). */
-function refusalResult(t: Translate, harness: "pi" | "claude", failure: string | { message?: string; code?: string; params?: Record<string, string | number> }): HarnessApplyToResult {
+export function refusalResult(t: Translate, harness: "pi" | "claude", failure: string | { message?: string; code?: string; params?: Record<string, string | number> }): HarnessApplyToResult {
   const payload = typeof failure === "string" ? { message: failure } : failure;
   const text = serverErrorText(payload);
   return {

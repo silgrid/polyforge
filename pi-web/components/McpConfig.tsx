@@ -23,6 +23,7 @@ import { HarnessApplyTo, applyToCanSubmit, type HarnessApplyToSelection, type Ha
 import { ConfigDangerMenu, dangerConfirmAllowed, type ConfigDangerStage } from "./ConfigDangerMenu";
 import { SettingsSavedToast } from "./SettingsSavedToast";
 import { recordWriteItems, undoPlan, type SettingsWriteItems } from "@/lib/settings-undo";
+import { serverErrorText } from "@/lib/server-error";
 import { useI18n } from "@/hooks/useI18n";
 import { displayPathWithin, shortenPath } from "@/lib/display-path";
 import {
@@ -214,6 +215,8 @@ function failureText(failure: McpLoadFailure, t: Translate): string {
 
 /** The same for a change, whose timeout means it may have landed. */
 function actionFailureText(failure: McpActionFailure, t: Translate): string {
+  // A refusal split by the caller shows its Chinese line; the original stays for the fold.
+  if (failure.summaryKey) return t(failure.summaryKey, failure.summaryParams);
   if (failure.timedOut) return t("mcp.actionTimedOut");
   return failureText(failure, t);
 }
@@ -721,11 +724,16 @@ export function McpConfig({
     if (result.ok) {
       const failures = (result.data.applied?.results ?? []).filter((item) => !item.ok);
       if (failures.length > 0) {
+        // T4 AC2: the row says it in Chinese and keeps each harness's own words
+        // for the details line; a reason code still rides along.
+            const split = serverErrorText({ message: failures.map((item) => `${item.harness}: ${item.error ?? item.reason ?? ""}`).join("; ") });
         setActionError({
           key,
           failure: {
-            error: failures.map((item) => `${item.harness}: ${item.error ?? item.reason ?? ""}`).join("; "),
+            error: split.details ?? "",
             ...(failures[0].reason !== undefined ? { reason: failures[0].reason } : {}),
+            summaryKey: split.summaryKey,
+            ...(split.summaryParams ? { summaryParams: split.summaryParams } : {}),
           },
         });
       }

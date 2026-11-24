@@ -1252,6 +1252,9 @@ export interface McpActionFailure extends McpLoadFailure {
   trust?: ProjectTrustStatus;
   /** The add trusted the fresh folder and could not take that back after its write failed. */
   trustKept?: boolean;
+  /** The Chinese line to show above the fold (polyforge#259 T4 AC2); `error` stays the original. */
+  summaryKey?: string;
+  summaryParams?: Record<string, string | number>;
 }
 
 export type McpActionResult = { ok: true; data: McpActionResponse } | { ok: false; error: McpActionFailure };

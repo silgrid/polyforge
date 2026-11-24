@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { codeFromError } from "@/lib/server-error";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { readPolyforgeConfig } from "@/lib/polyforge-config";
 import { parsePolyforgeScope, type PolyforgeConfigScope } from "@/lib/polyforge-cells-pure";
@@ -58,11 +59,19 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
+  const write = body as { key?: unknown; action?: unknown };
   try {
     return NextResponse.json(await writePolyforgeConfig(body as ConfigWriteRequest));
   } catch (error) {
     if (error instanceof ConfigWriteError) {
-      return NextResponse.json({ error: error.message, ...(error.diff !== undefined ? { diff: error.diff } : {}) }, { status: error.status });
+      return NextResponse.json({
+        error: error.message,
+        // polyforge#259 T4 (owner 2A): the shape keeps `error` and the status; a
+        // code rides beside it so the client can say it in Chinese.
+        code: codeFromError(error.message),
+        params: { key: typeof write.key === "string" ? write.key : null, action: typeof write.action === "string" ? write.action : null },
+        ...(error.diff !== undefined ? { diff: error.diff } : {}),
+      }, { status: error.status });
     }
     return NextResponse.json({ error: error instanceof Error ? error.message : "polyforge is unavailable" }, { status: 400 });
   }

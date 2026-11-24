@@ -51,6 +51,7 @@ import type { PolyforgeCellsRead } from "@/lib/polyforge-cells";
 import { ConfigDangerMenu } from "./ConfigDangerMenu";
 import { shortenPath } from "@/lib/display-path";
 import { dirtyCount, dirtyPatch, settleDraft } from "@/lib/settings-dirty";
+import { serverErrorText } from "@/lib/server-error";
 import {
   POLYFORGE_POLL_INTERVAL,
   POLYFORGE_TITLE_LENGTH,
@@ -299,6 +300,16 @@ function formValue(key: string, raw: string): unknown {
 type Translate = (key: string, params?: TranslationParams) => string;
 
 /** pf's reload class, localized (an unknown class keeps pf's own name). */
+/** A failed read or write as the page shows it (polyforge#259 T4 AC2): the Chinese
+ *  line first, the server's own words kept for the details fold. */
+function failureLine(t: Translate, error: unknown, withDetails = true): { text: string; details?: string } {
+  const split = serverErrorText(error instanceof Error ? error.message : String(error));
+  return {
+    text: t(split.summaryKey, split.summaryParams),
+    ...(withDetails && split.details ? { details: split.details } : {}),
+  };
+}
+
 function reloadClassLabelOf(t: Translate, reloadClass: string): string {
   const key = RELOAD_CLASS_KEYS[reloadClass];
   return key ? t(key) : t("polyforge.settings.classUnknown", { class: reloadClass });
@@ -1877,7 +1888,7 @@ function HostSettingsRegion({ title }: { title: string }) {
   const [read, setRead] = useState<PolyforgeConfigRead | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string; details?: string } | null>(null);
   ///#348: a connection-key write (daemon_socket) waits here for
   // its confirmation — nothing is posted until then — and a saved one keeps
   // its history entry for the row's notice and one-click rollback.
@@ -1891,7 +1902,7 @@ function HostSettingsRegion({ title }: { title: string }) {
       if (!response.ok || body.error) throw new Error(body.error ?? `HTTP ${response.status}`);
       setRead(body);
     } catch (error) {
-      setMessage({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      setMessage({ tone: "error", ...failureLine(t, error) });
     }
   }, []);
 
@@ -1912,7 +1923,7 @@ function HostSettingsRegion({ title }: { title: string }) {
       if (CONNECTION_KEYS.includes(key) && entry) setNotices((current) => ({ ...current, [key]: entry }));
       return true;
     } catch (error) {
-      setMessage({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      setMessage({ tone: "error", ...failureLine(t, error) });
       return false;
     }
   };
@@ -1952,7 +1963,7 @@ function HostSettingsRegion({ title }: { title: string }) {
       setDrafts((current) => { const next = { ...current }; delete next[entry.key]; return next; });
       await runRead();
     } catch (error) {
-      setMessage({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+      setMessage({ tone: "error", ...failureLine(t, error) });
     } finally {
       setBusy(null);
     }
@@ -2096,7 +2107,17 @@ function HostSettingsRegion({ title }: { title: string }) {
           </div>
         </div>
       )}
-      {message && <p className={message.tone === "error" ? "config-add-source-error" : "polyforge-config-card-hint"} role="status">{message.text}</p>}
+      {message && (
+        <p className={message.tone === "error" ? "config-add-source-error" : "polyforge-config-card-hint"} role="status">
+          {message.text}
+          {message.details && (
+            <details className="settings-reason-details">
+              <summary>{t("i18n.detailsLabel")}</summary>
+              <span className="settings-reason-original">{message.details}</span>
+            </details>
+          )}
+        </p>
+      )}
       {/* One footer for every editable Host field (polyforge#259 T4 AC1). */}
       <ConfigSaveFooter
         status={dirty > 0 ? t("settings.unsavedCount", { count: dirty }) : undefined}
