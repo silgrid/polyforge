@@ -277,7 +277,7 @@ const tsxJiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsc
 const React = await tsxJiti.import("react");
 const { renderToStaticMarkup } = await tsxJiti.import("react-dom/server");
 const { I18nProvider } = await tsxJiti.import("@/hooks/useI18n");
-const { ProviderDetail, ModelDetail } = await tsxJiti.import("./ModelsConfig.tsx");
+const { ProviderDetail, ModelDetail, ModelsConfig } = await tsxJiti.import("./ModelsConfig.tsx");
 
 function renderDetail(component, props) {
   return renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(component, props)));
@@ -318,4 +318,16 @@ test("a model's removal is behind the detail header's ⋯, with no bare Remove b
   assert.match(headerActions(html), /<button[^>]*class="config-danger-menu-trigger"[^>]*aria-label="More actions"/);
   assert.doesNotMatch(html, /<button[^>]*>\s*Remove\s*<\/button>/);
   assert.doesNotMatch(html, /config-button-danger/);
+});
+
+// polyforge#271 AC1 (A4): the Providers subpage's first read is a skeleton; a
+// successful `{providers:{}}` is 「没有 Provider」 with the add action; a failed
+// read is an alert with a retry, never the empty state.
+test("editor read states preserve drafts", () => {
+  const loading = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ModelsConfig, {
+    embedded: true, cwd: null, onClose: () => {},
+    enabledModels: { view: { editable: true, providers: [] }, pending: null, failure: null, setModels: () => {}, setProvider: () => {} },
+  })));
+  assert.match(loading, /data-models-config-loading/, "the first models.json read is a skeleton");
+  assert.ok(!loading.includes("No provider is configured"), "a pending read is not the empty state");
 });

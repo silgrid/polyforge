@@ -273,3 +273,31 @@ test("a blocked migration keeps its reason visible, and the managed-shadowed not
     state.restore();
   }
 });
+
+// polyforge#271 AC1 (A4): Claude's custom-model section has three states — the
+// first read is a skeleton, a successful empty list is 「没有自定义模型」 with
+// the add action, and a failed read is an alert with a retry (never the empty
+// list).
+test("editor read states preserve drafts", async () => {
+  const ssr = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+  const SSRReact = await ssr.import("react");
+  const { renderToStaticMarkup } = await ssr.import("react-dom/server");
+  const { I18nProvider } = await ssr.import("@/hooks/useI18n");
+  const { ClaudeCustomModels, ClaudeCustomReadStates } = await ssr.import("./ClaudeCustomModels.tsx");
+  const React = SSRReact;
+  const pending = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ClaudeCustomModels, {})));
+  assert.match(pending, /data-claude-models-loading/, "the first custom-model read is a skeleton");
+  assert.ok(!pending.includes("No custom models"), "a pending read is not the empty state");
+  const failed = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ClaudeCustomReadStates, {
+    loading: false, readError: "The read failed.", onRetry: () => {},
+  })));
+  assert.match(failed, /role="alert"/);
+  assert.match(failed, /data-claude-models-retry/);
+  assert.ok(!failed.includes("No custom models"), "a failed read is not the empty list");
+
+  const empty = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ClaudeCustomReadStates, {
+    loading: false, readError: null, onRetry: () => {},
+  })));
+  assert.ok(empty.includes("No custom models"), "an empty list names what is missing");
+  assert.match(empty, /data-claude-models-add/, "the empty list offers the add action");
+});

@@ -219,3 +219,32 @@ test("the step-tier drawer edits the tier and keeps 应用到 inside it", () => 
   assert.ok(!table.includes("<select"), "no tier select in the cell");
   assert.ok(!table.includes("Apply to"), "no apply-to in the cell");
 });
+
+// polyforge#271 AC1 (A3/A4, Q5 A): the model page's first read is a skeleton;
+// a successful empty read is 「没有模型」 with its actions; a failure is an
+// alert with a retry and is never read as empty; a partial success keeps the
+// rows that answered and shows the failure beside them.
+test("model subpages expose loading empty and partial failure", async () => {
+  const { readView } = await jiti.import("@/lib/settings-read-states.ts");
+  assert.deepEqual(readView({ loading: true, error: false, count: 0 }), { kind: "loading", staleError: false });
+  assert.deepEqual(readView({ loading: false, error: true, count: 0 }), { kind: "error", staleError: false }, "a failed read is never the empty state");
+  assert.deepEqual(readView({ loading: false, error: false, count: 0 }), { kind: "empty", staleError: false });
+  assert.deepEqual(readView({ loading: false, error: true, count: 1 }), { kind: "ready", staleError: true }, "a partial read keeps its rows and shows the failure");
+  assert.deepEqual(readView({ loading: false, error: false, count: 1 }), { kind: "ready", staleError: false });
+
+  // SSR runs no effects, so the page's initial state is its first read.
+  const pending = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
+  assert.match(pending, /data-model-skeleton/, "the default subpage's first read is a skeleton");
+  assert.ok(!pending.includes("No model is available"), "a pending read is not the empty state");
+
+  const pendingList = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null, initialSubpage: "list" })));
+  assert.match(pendingList, /data-model-skeleton/, "the list subpage's first read is a skeleton");
+
+  const { ModelEmptyState } = await jiti.import("./HarnessModelSettings.tsx");
+  const empty = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ModelEmptyState, {
+    onOpenAccount: () => {}, onOpenProviders: () => {},
+  })));
+  assert.ok(empty.includes("No model is available"), "an empty model set names what is missing");
+  assert.match(empty, /data-model-action="open-account"/, "the empty model set offers the account action");
+  assert.match(empty, /data-model-action="open-providers"/, "the empty model set offers the Providers action");
+});
