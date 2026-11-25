@@ -304,6 +304,27 @@ func (d *w113Daemon) start() {
 	}
 }
 
+// processEnv is the daemon process's whole environment: its own HOME
+// and XDG root, the fakepi watchdog's pid, a git identity, the fakepi
+// plans and the test's extra entries.
+func (d *w113Daemon) processEnv() []string {
+	env := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + d.home,
+		"XDG_CONFIG_HOME=" + d.xdg,
+		// the fakepi orphan watchdog's pid (see proc_hygiene_test.go)
+		fakepiTestPIDEnv + "=" + os.Getenv(fakepiTestPIDEnv),
+		"GIT_AUTHOR_NAME=pf-e2e",
+		"GIT_AUTHOR_EMAIL=pf-e2e@invalid",
+		"GIT_COMMITTER_NAME=pf-e2e",
+		"GIT_COMMITTER_EMAIL=pf-e2e@invalid",
+	}
+	if d.planDir != "" {
+		env = append(env, "FAKEPI_PLANS="+d.planDir)
+	}
+	return append(env, d.extraEnv...)
+}
+
 // boot launches the daemon process and waits up to bound for EITHER its
 // UDS face to answer (served=true; the process keeps running under the
 // registered cleanup) or the process to exit (served=false, with the
@@ -334,22 +355,7 @@ func (d *w113Daemon) boot(bound time.Duration) (served bool, output string, code
 	}
 	args = append(args, d.extraArgs...)
 	cmd := exec.Command(d.pfPath, args...)
-	env := []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + d.home,
-		"XDG_CONFIG_HOME=" + d.xdg,
-		// the fakepi orphan watchdog's pid (see proc_hygiene_test.go)
-		fakepiTestPIDEnv + "=" + os.Getenv(fakepiTestPIDEnv),
-		"GIT_AUTHOR_NAME=pf-e2e",
-		"GIT_AUTHOR_EMAIL=pf-e2e@invalid",
-		"GIT_COMMITTER_NAME=pf-e2e",
-		"GIT_COMMITTER_EMAIL=pf-e2e@invalid",
-	}
-	if d.planDir != "" {
-		env = append(env, "FAKEPI_PLANS="+d.planDir)
-	}
-	env = append(env, d.extraEnv...)
-	cmd.Env = env
+	cmd.Env = d.processEnv()
 	cmd.Dir = d.dataDir
 	cmd.Stdout, cmd.Stderr = logf, logf
 	ownGroup(cmd)
