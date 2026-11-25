@@ -31,6 +31,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/common/secretpat"
 	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
@@ -1164,7 +1165,7 @@ func eventReason(h *stepcall.Handoff) string {
 	if h == nil {
 		return ""
 	}
-	line := strings.TrimSpace(h.Reason)
+	line := secretpat.Mask(strings.TrimSpace(h.Reason))
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = strings.TrimSpace(line[:i])
 	}
