@@ -374,6 +374,10 @@ type Daemon struct {
 
 	rt  *runtime.Runtime
 	obs *observe.Observe
+	// drainRuntime waits for the runtime actors' accepted operations
+	// (rt.Drain); New binds it, and a test wraps it to see the drain
+	// start or to inject a shorter deadline.
+	drainRuntime func(context.Context) error
 	// modelHealth is the durable model-health tracker: the
 	// read-side consumer of the events stream, the writer of
 	// <DataDir>/model-health.json and the source of GET /models + the
@@ -954,6 +958,7 @@ func New(cfg Config) (*Daemon, error) {
 		return nil, err
 	}
 	d.rt = rt
+	d.drainRuntime = rt.Drain
 	d.obs = obs
 	// the model-health tracker is opened by Run once the
 	// data-dir flock is held. Its rebuild writes <DataDir>/model-health.json,
@@ -983,6 +988,11 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	return d, nil
 }
+
+// errRuntimeDrainTimeout reports a shutdown whose runtime drain ran out
+// of the shutdown deadline: an accepted actor operation may still write
+// the data dir, so its lock stays held.
+var errRuntimeDrainTimeout = errors.New("daemon: shutdown: the runtime's actors did not stop within the shutdown deadline; the data-dir lock is kept until they do or the process exits")
 
 // Run drives the daemon until a shutdown completes (or the caller's
 // context ends, which triggers the same shutdown).
