@@ -2938,5 +2938,6 @@ export const zhCNLocale: LocalePlugin = {
     "polyforge.settings.packageStatusUnknown": "状态不可用",
     "polyforge.settings.packageStatusUnknownHint": "无法读取软件包状态。",
     "polyforge.settings.packageUnavailable": "此 Cell 没有可用的 pi。",
+    "models.claudeCustomEmptyAdd": "添加模型",
   },
 };

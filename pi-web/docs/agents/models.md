@@ -25,6 +25,10 @@ options 非数组、行缺字符串 model）拒写且文件字节不变，未知
 携带 `shadowed`，分区显示「已保存、未生效」，绝不写上层。迁移后台与路由在
 [claude-sessions.md](claude-sessions.md)，写入闸门在 [harness-adapters.md](harness-adapters.md)。
 
+## Model page read states (polyforge#271)
+- `lib/settings-read-states.ts`'s `readView()` is the one projection of a page read: a first read with no value is a skeleton (`ConfigSkeleton`, `data-model-skeleton`), a successful empty set is `ModelEmptyState` (「没有模型」 plus 去账号连接/去 Providers 配置), a failed read with no rows is `ConfigErrorNotice` with a retry, and a failed read that still has rows is a partial success — rows kept, the failure beside them. A failed read is never shown as empty; a refresh keeps the last good rows.
+- The Providers subpage (`ModelsConfig`) shows its skeleton while `models.json` is pending, 「没有 Provider」 with Add provider on a successful empty file, and an alert with a retry on a failed read (saving stays disabled then, because a save would replace the whole file). Claude's custom-model section shows the same three states through `ClaudeCustomReadStates`; a failed read leaves its list unknown rather than empty.
+
 ## 统一模型设置（85a3-2）
 
 设置中的「模型」页是四个子页：默认模型、模型清单、pi Providers、Claude 自定义模型。只有相同 provider 的精确 id 合并。聊天可用只在模型清单一处：pi 沿用 enabledModels 最小编辑，Claude 行显示「始终可用」并用 tooltip 说明 claude 会话不支持按模型停用（不再显示「不支持」）。pi 的推理下拉首项是「跟随全局（<全局值>）」并去掉旁边重复的值 span，Claude 行的推理是只读 pill。默认模型与推理的改动进入草稿，由「保存（N）」显式提交（polyforge#258 T3，owner 计划审补充 1 A），组合默认模型沿用 /api/models/default。

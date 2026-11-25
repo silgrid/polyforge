@@ -2939,5 +2939,6 @@ export const enLocale: LocalePlugin = {
     "polyforge.settings.packageStatusUnknown": "Status unavailable",
     "polyforge.settings.packageStatusUnknownHint": "The package status could not be read.",
     "polyforge.settings.packageUnavailable": "pi is not available for this Cell.",
+    "models.claudeCustomEmptyAdd": "Add a model",
   },
 };

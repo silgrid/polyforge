@@ -26,7 +26,7 @@ test("four model subpages: the sidebar nav carries only the pages, and only the 
 
   const list = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null, initialSubpage: "list" })));
   assert.match(list, /data-model-page-pane="list"/);
-  assert.match(list, /Chat availability/, "the model table lives on the list subpage");
+  assert.match(list, /data-model-skeleton/, "the list subpage's first read is a skeleton, not a table");
 });
 
 test("the Provider subpage is flat: no second split view, only its own form footer", () => {
