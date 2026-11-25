@@ -1178,6 +1178,20 @@ def event_body(e):
     return e['body'] or {}
 
 
+# ---- landing lock (polyforge#245 epic 3/3, polyforge#249) ----
+
+def landing_lock_stats(events):
+    """stub: the per-run landing-lock metrics (see the module docstring)."""
+    return {'state': 'unknown', 'wait_ms': None, 'closed_ms': 0,
+            'open_intervals': 0, 'key_intervals': 0, 'lost': None,
+            'moved_base': None, 'moved_base_identified': 0, 'key_wait_ms': []}
+
+
+def landing_block(caps_dir, rows, events_dir, out=sys.stdout):
+    """stub: the landing-lock section of the --events report."""
+    return
+
+
 def merge_intervals(iv):
     out = []
     for a, b in sorted(iv):
