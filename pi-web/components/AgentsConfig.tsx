@@ -232,6 +232,10 @@ export function AgentFeatureSettings({ builtInEnabled, maxConcurrent, settingsLo
   onReload: () => void;
 }) {
   const { t } = useI18n();
+  // The field is controlled: a value read back after the panel mounted (or
+  // clamped by the server) replaces what it shows (polyforge#271 r3#1).
+  const [draft, setDraft] = useState(String(maxConcurrent));
+  useEffect(() => { setDraft(String(maxConcurrent)); }, [maxConcurrent]);
   return (
     <ConfigDetailStack data-agents-settings-pane="">
       <ConfigDetailHeader>
@@ -258,11 +262,11 @@ export function AgentFeatureSettings({ builtInEnabled, maxConcurrent, settingsLo
               type="number"
               min={1}
               max={32}
-              key={maxConcurrent}
-              defaultValue={maxConcurrent}
+              value={draft}
               disabled={settingsLoading || settingsSaving}
-              onBlur={(event) => {
-                const next = concurrencyCommit(event.target.value, maxConcurrent);
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={() => {
+                const next = concurrencyCommit(draft, maxConcurrent);
                 if (next !== null) onMaxConcurrent(next);
               }}
             />
