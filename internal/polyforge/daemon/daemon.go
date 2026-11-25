@@ -562,7 +562,8 @@ type Daemon struct {
 	// on the queue (or failed to land).
 	admitting atomic.Int32
 	// claiming counts the dispatch's claim goroutines still running
-	// (startEntry); the shutdown does not wait for them.
+	// (startEntry); the shutdown does not wait for them, but it drains the
+	// actor work they started (drainRuntime).
 	claiming atomic.Int32
 	// submitWaitMu guards submitWaits only (no I/O under it): the
 	// submit answers waiting on their entry's dispatch outcome,
@@ -1003,9 +1004,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// TOCTOU: two daemons started in the same window can both observe a
 	// dead socket and both bind it; the flock is the kernel-serialized
 	// half (LOCK_EX|LOCK_NB on DataDir/daemon.lock), held for Run's
-	// lifetime and released when Run returns. Both come before any lane
-	// starts: a refused start has nothing to unwind, and only the lock
-	// holder ever writes the data dir (see ownsDataDir).
+	// lifetime and released when Run returns — after the shutdown drained
+	// the runtime actors and persisted, so no actor of this process
+	// writes runtime-state.json once the next holder can take the lock.
+	// Both come before any lane starts: a refused start has nothing to
+	// unwind, and only the lock holder ever writes the data dir (see
+	// ownsDataDir).
 	lock, err := acquireDataDirLock(d.cfg.DataDir)
 	if err != nil {
 		return err
