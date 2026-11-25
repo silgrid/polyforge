@@ -8,6 +8,8 @@ package protocol
 //
 // The machine's decision feed is decisions.go.
 
+import "github.com/silgrid/polyforge/internal/common/api"
+
 // WatchSnapshot is one WI's authoritative state plus the events after a
 // cursor. Execution (execution.json) is the authority; Job is the daemon's
 // local bookkeeping; Events carry only what happened after `after`.
@@ -54,7 +56,18 @@ type WatchSnapshot struct {
 	// SummaryCapped is present and true only while the per-attempt cap
 	// (20 calls per dispatch) is reached: the last summary stays and the
 	// panel can display the cap honestly.
-	SummaryCapped *bool        `json:"summary_capped,omitempty"`
+	SummaryCapped *bool `json:"summary_capped,omitempty"`
+	// LandingLock is the ticket's read-only landing-lock projection
+	// (polyforge#245 epic 3/3): this ticket's own queue state only, with
+	// no holder, token or other ticket. Omitted when no evidence exists;
+	// a reader that predates the field ignores it.
+	LandingLock *api.LandingLock `json:"landing_lock,omitempty"`
+	// LockOnly is true on the partial snapshot a remote relay serves when
+	// the remote progress is stale/upstream but the hub record (and its
+	// landing lock) is still readable (Q3). It never fabricates known=true
+	// or an execution block; ProgressError names the controlled failure.
+	LockOnly      bool         `json:"lock_only,omitempty"`
+	ProgressError string       `json:"progress_error,omitempty"`
 	Events        []EventEntry `json:"events"`
 	// LastSeq is the highest event seq the daemon retains for the WI (0 =
 	// none): a cursor above it means the numbering restarted.
