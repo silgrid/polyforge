@@ -20,6 +20,7 @@ package core
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -570,8 +571,46 @@ type leaseStmt interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-// LandingSnapshot answers one ticket's read-only landing-lock projection.
+// LandingSnapshot answers one ticket's read-only landing-lock projection
+// (polyforge#245 epic 3/3, Q11): the live queue entries the ticket itself
+// holds, each with its 1-based position among the live waiters of that key.
+// The holder is not a position and other tickets never appear. The read
+// only SELECTs: GET never cleans an expired waiter, grants a lease or
+// changes the queue. A ticket with no live entry answers State none.
 func (m *LeaseManager) LandingSnapshot(workItemID string) (*api.LandingLock, error) {
+	cfg, err := m.config("landing")
+	if err != nil {
+		return nil, err
+	}
 	now := m.now().UnixNano()
-	return &api.LandingLock{State: api.LandingLockNone, ObservedAt: stamp(now), AsOf: stamp(now)}, nil
+	cutoff := now - int64(cfg.WaiterTTL)
+	rows, err := m.db.Query(`SELECT w.key, w.requested_at_ns,
+		(SELECT COUNT(*) FROM lease_waiters p
+		 WHERE p.kind='landing' AND p.key=w.key AND p.seq<=w.seq AND p.last_poll_at_ns>?1)
+		FROM lease_waiters w
+		WHERE w.kind='landing' AND w.work_item=?2 AND w.last_poll_at_ns>?1
+		ORDER BY w.key, w.seq`, cutoff, workItemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := &api.LandingLock{State: api.LandingLockNone, ObservedAt: stamp(now), AsOf: stamp(now)}
+	for rows.Next() {
+		var key string
+		var requested, position int64
+		if err := rows.Scan(&key, &requested, &position); err != nil {
+			return nil, err
+		}
+		repo, branch, _ := strings.Cut(key, "\n")
+		out.Keys = append(out.Keys, api.LandingLockKey{
+			Repo: repo, Branch: branch, Position: int(position), Since: stamp(requested),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out.Keys) > 0 {
+		out.State = api.LandingLockWaiting
+	}
+	return out, nil
 }
