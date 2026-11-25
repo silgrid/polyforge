@@ -298,7 +298,11 @@ func (l *leaseManager) acquire(ctx context.Context, c *leaseCycle, branch, repo 
 			_ = l.withdraw(rid, c.wi, g.Key)
 			return fmt.Errorf("the landing lock of %s/%s was granted without its token (a lost answer): the cycle is void and re-queues", repo, branch)
 		case coreStatusQueued:
-			position = g.Position
+			// The event's position is the first queue position (the original
+			// semantics); a later poll does not move the ticket in the display.
+			if position == 0 {
+				position = g.Position
+			}
 			if queued != nil {
 				// The queued answer carries no server time; the granted
 				// answer supplies it. Omit a local stamp (Q15).
