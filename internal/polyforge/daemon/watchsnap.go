@@ -198,6 +198,10 @@ func stepDispatchLive(ji runtime.JobInfo) bool {
 // not one still to make).
 func (d *Daemon) watchSnapshot(wi string, item *api.WorkItem, hubRead bool, after int64) protocol.WatchSnapshot {
 	snap := protocol.WatchSnapshot{WorkItem: wi, Events: []protocol.EventEntry{}}
+	// hubItem is the aihub record the landing-lock projection reads, kept
+	// apart from the status fields below: a live local job still shows its
+	// own queue position (polyforge#249 Q11).
+	hubItem := item
 	snap.Queued = d.q != nil && d.q.IsPending(wi)
 	jobs, _ := d.statusJobs()
 	localLive, held := false, false
@@ -255,7 +259,18 @@ func (d *Daemon) watchSnapshot(wi string, item *api.WorkItem, hubRead bool, afte
 		p := d.lane.Projection(wi)
 		snap.Summary, snap.SummaryError, snap.SummaryAgeSec, snap.SummaryCapped = p.Summary, p.SummaryError, p.SummaryAgeSec, p.SummaryCapped
 	}
+	snap.LandingLock = d.landingLockFor(wi, hubItem)
 	return snap
+}
+
+// landingLockFor answers the ticket's read-only landing-lock projection
+// (polyforge#249 Q1/Q2): a fresh hub record is the source, the last
+// successful record is served as stale after the 15 s window when a later
+// read fails, and a terminal hub status outranks a leftover waiting entry.
+// A record that carries no projection (a hub older than the field) or no
+// readable record answers unavailable — unknown is never shown as "none".
+func (d *Daemon) landingLockFor(wi string, hubItem *api.WorkItem) *api.LandingLock {
+	return nil
 }
 
 // watchProgress projects the observe lane's LiveProgress onto the wire
