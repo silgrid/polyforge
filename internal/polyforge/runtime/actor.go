@@ -8,6 +8,10 @@ package runtime
 // List, persist's snapshot) take only the job-table lock and the job's
 // own mutex, so status and watch never wait on an actor.
 //
+// The shutdown closes the entry: once the actors' context is cancelled a
+// mailbox takes no new operation (a call answers errStopped), while the
+// operations already accepted run to their end; Drain waits for them.
+//
 // Lock order: the I/O leaf locks (gitops' per-work-item lock, claimMu,
 // manualMu, pendingMu, persistMu — none nested in another), then the job-table lock
 // mu, then a job's mu. Neither of the last two is held across hub, git or
@@ -28,18 +32,28 @@ import (
 type mailbox struct{ q []func() }
 
 // post queues fn on wi's mailbox, starting the work item's goroutine when
-// the mailbox was empty. It never blocks.
-func (r *Runtime) post(wi string, fn func()) {
+// the mailbox was empty, and reports true. It never blocks. Once the
+// actors' context is cancelled (the shutdown) it refuses fn and reports
+// false. The refusal and a new goroutine's registration in r.actors
+// happen under the one hold of mu, so Drain — which cancels, then passes
+// mu — waits for every goroutine ever accepted and no Add races its Wait.
+func (r *Runtime) post(wi string, fn func()) bool {
 	r.mu.Lock()
+	if r.ctx.Err() != nil {
+		r.mu.Unlock()
+		return false
+	}
 	if mb := r.boxes[wi]; mb != nil {
 		mb.q = append(mb.q, fn)
 		r.mu.Unlock()
-		return
+		return true
 	}
 	mb := &mailbox{q: []func(){fn}}
 	r.boxes[wi] = mb
+	r.actors.Add(1)
 	r.mu.Unlock()
 	go func() {
+		defer r.actors.Done()
 		for {
 			r.mu.Lock()
 			if len(mb.q) == 0 {
@@ -53,20 +67,24 @@ func (r *Runtime) post(wi string, fn func()) {
 			next()
 		}
 	}()
+	return true
 }
 
 // call posts fn on wi's mailbox and waits for its answer: a door gets the
 // final answer once the operations queued before it settled. A caller
 // whose ctx ends while fn still waits its turn gets errAbandoned and fn
-// never runs; once fn runs, call waits for it.
+// never runs; once fn runs, call waits for it. After the shutdown the
+// mailbox refuses fn: call answers errStopped at once and fn never runs.
 func (r *Runtime) call(ctx context.Context, wi string, fn func() error) error {
 	done := make(chan error, 1)
 	var turn atomic.Int32 // 0 waiting, 1 running, 2 abandoned
-	r.post(wi, func() {
+	if !r.post(wi, func() {
 		if turn.CompareAndSwap(0, 1) {
 			done <- fn()
 		}
-	})
+	}) {
+		return errStopped
+	}
 	select {
 	case err := <-done:
 		return err
@@ -81,12 +99,32 @@ func (r *Runtime) call(ctx context.Context, wi string, fn func() error) error {
 // errAbandoned answers a call whose caller gave up before its turn.
 var errAbandoned = errors.New("runtime: the caller gave up before the work item's queued operations settled; nothing was done")
 
-// errStopped answers a call the shutdown refused: the actors' context is
-// cancelled, so the work item's mailbox takes no new operation.
+// errStopped answers a call the shutdown refused (DAEMON-410): the
+// actors' context is cancelled, so the work item's mailbox takes no new
+// operation. Start maps it to the shutdown deferral, like errAbandoned.
 var errStopped = &api.Error{Code: api.ErrDaemonGone, Detail: "runtime: the daemon is shutting down — the work item's actor takes no new operation; nothing was done"}
 
-// Drain waits until every accepted actor operation has finished.
-func (r *Runtime) Drain(ctx context.Context) error { return nil }
+// Drain closes the actors' entry (it cancels their context, as Close
+// does) and waits until every operation accepted before that has run to
+// its end — its persist included. It answers nil once no actor goroutine
+// is left, or ctx's error when ctx ends first (the goroutines keep
+// running; a later Drain waits for them again). Concurrent and repeated
+// calls are safe.
+func (r *Runtime) Drain(ctx context.Context) error {
+	r.cancel()
+	// barrier: a post that saw the context live registered its goroutine
+	// under mu before releasing it; every later post sees it cancelled
+	r.mu.Lock()
+	r.mu.Unlock()
+	done := make(chan struct{})
+	go func() { r.actors.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // retry reconciles j's work item again after a backoff — the one retry
 // every pending hub step (a close, a verify, a claim replay) shares: the
@@ -179,7 +217,7 @@ func (j *job) retryOutstanding() bool {
 }
 
 // Idle reports whether no work item has an operation queued or running
-// (after Close: every actor has finished its last message).
+// (once Drain answered nil it stays true: the entry is closed).
 func (r *Runtime) Idle() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
