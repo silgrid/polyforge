@@ -25,11 +25,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/common/secretpat"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -120,6 +123,15 @@ const (
 	// as skipped instead of dispatching it: no derivation,
 	// no position move; it emits step_skipped.
 	TransStepSkipped TransitionKind = "step_skipped"
+	// TransLeaseReentry lands a landing-lock release as a rewind to the
+	// interval's declared enter step (polyforge#245, Q8): an ask's answer,
+	// a lost lease or a step failure re-enters there, charged to no
+	// rewind budget.
+	TransLeaseReentry TransitionKind = "lease_reentry"
+	// TransLeaseMark writes or clears the persisted landing-lock re-entry
+	// intent (execution.LeaseReentry): a release that must re-queue for a
+	// restart/blocked resume, and its clearance once consumed.
+	TransLeaseMark TransitionKind = "lease_mark"
 )
 
 // TransitionRequest is one submitted execution.json mutation. SpawnN is
@@ -164,7 +176,9 @@ type TransitionRequest struct {
 	// starts, read before the transition takes the driver's lock: recorded
 	// as the step's round start commits when this dispatch opens its round.
 	StartHeads map[string]string
-	SpawnN     int64
+	// LeaseReentry (lease_mark) is the persisted re-entry step: "" clears.
+	LeaseReentry string
+	SpawnN       int64
 }
 
 // GateVerdict is one business gate FAIL judgment (01 §6.2): the policy
@@ -284,6 +298,11 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		return d.applyStepSkippedLocked(req)
 	case TransEpicResume:
 		return d.applyEpicResumeLocked(req, info)
+	case TransLeaseReentry:
+		return d.applyLeaseReentryLocked(req, info)
+	case TransLeaseMark:
+		d.exec.LeaseReentry = req.LeaseReentry
+		return nil
 	case TransBlocked:
 		if isTerminalStatus(d.exec.WorkflowStatus) {
 			return fmt.Errorf("driver: workflow is terminal (%s)", d.exec.WorkflowStatus)
@@ -744,6 +763,23 @@ func (d *Driver) applyRewindRangeLocked(from, to int, target, rewindGate, target
 	info.target = target
 }
 
+// applyLeaseReentryLocked rewinds the steps of the landing interval from
+// its enter step through the current one: a released lock re-enters at the
+// declared enter (Q8), its records charged to nothing.
+func (d *Driver) applyLeaseReentryLocked(req TransitionRequest, info *appliedInfo) error {
+	enter, exit, ok := d.leaseInterval()
+	if !ok {
+		return fmt.Errorf("driver: the lane declares no lease_interval interval")
+	}
+	cur, ok := d.workflow.indexOf(req.StepID)
+	if !ok || cur < enter || cur > exit {
+		return fmt.Errorf("driver: step %q is outside the landing-lock interval", req.StepID)
+	}
+	d.applyRewindRangeLocked(enter, cur+1, d.workflow.Steps[enter].ID, "lock_interval", CauseGateFailRewind, capsule.RewindLockCycle, info)
+	d.exec.LeaseReentry = ""
+	return nil
+}
+
 // applyTerminalLocked lands a terminal workflow_status. completed is
 // reserved for the all-done path (01 §6.5 step 6: the loop must prove
 // every step done — or skipped, — before writing it — an
@@ -946,9 +982,13 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 			case req.Result.Intent != nil:
 				// the waive's own events ride info.extra (intent.go)
 			default:
-				info.extra = append(info.extra, appliedEvent{"rewind", map[string]any{
+				rewind := map[string]any{
 					"spawn_n": d.spawnN, "gate": req.StepID, "target": info.target, "archived": info.archived,
-				}})
+				}
+				if reason := eventReason(req.Result.Handoff); reason != "" {
+					rewind["reason"] = reason
+				}
+				info.extra = append(info.extra, appliedEvent{"rewind", rewind})
 			}
 		case OutcomeIncomplete:
 			kind = "incomplete"
@@ -1115,4 +1155,22 @@ func nextAttemptSeq(st *capsule.Step) int {
 		}
 	}
 	return seq + 1
+}
+
+// eventReason is the automatic rewind event's sanitized reason (Q5): the
+// hand-off's one-line reason, first line only, capped at 200 runes. It
+// changes no rewind decision, budget or lane behavior; the merge step's
+// stable substring (`branch moved since verification`) is what C1 matches.
+func eventReason(h *stepcall.Handoff) string {
+	if h == nil {
+		return ""
+	}
+	line := secretpat.Mask(strings.TrimSpace(h.Reason))
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	if r := []rune(line); len(r) > 200 {
+		line = string(r[:200])
+	}
+	return line
 }

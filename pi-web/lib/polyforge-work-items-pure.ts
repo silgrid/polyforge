@@ -8,12 +8,14 @@
  * here, so both the server module and the client surface can use it.
  */
 
+import type { PolyforgeLandingLock } from "./polyforge-landing-lock";
+
 /** One merged `pf --json queue` row, exactly the eight keys the list
- *  passport forwards, plus the one conditional ninth key
- *  `acceptance_missing` (present only when pf sends `true`: a queued
- *  execution ticket with no acceptance section). Nullable
- *  fields stay null when pf sends null or a wrong-typed value (never
- *  coerced). */
+ *  passport forwards, plus the conditional `acceptance_missing` (present
+ *  only when pf sends `true`) and `landing_lock` (present only when the
+ *  server answers the read-only projection, polyforge#245 epic 3/3).
+ *  Nullable fields stay null when pf sends null or a wrong-typed value
+ *  (never coerced). */
 export interface PolyforgeWorkItemRow {
   id: string;
   slug: string;
@@ -24,6 +26,7 @@ export interface PolyforgeWorkItemRow {
   goal: string | null;
   created_at: string | null;
   acceptance_missing?: true;
+  landing_lock?: PolyforgeLandingLock;
 }
 
 /** One unfinished blocker of a queued work item, as pf derives it. */

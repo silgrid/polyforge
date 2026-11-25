@@ -6,7 +6,9 @@ description: Merge the published PRs at the heads the {{verifying_gate}} step ra
 # merge
 
 The lane's last step: the published PRs merged into the default branch at the heads the
-`{{verifying_gate}}` step ran over, under the daemon's per-repo merge lock, by one
+`{{verifying_gate}}` step ran over, under the ticket's server landing lease (the lane's
+`landing_lock` interval, or the step's single-dispatch lease) and with `pf step lock-check`
+before each real merge, by one
 pre-written command — or, when the capsule's frozen step modes
 (`runtime-state/step-modes.json`, `steps.<project>.merge.by: human`, polyforge#36) name
 this step `human`, the person's merge taken by the human landing rules: the step asks the

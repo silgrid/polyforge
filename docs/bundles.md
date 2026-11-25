@@ -66,7 +66,8 @@ sync agent resolves a real conflict in place) → `verification` (`verify.py`,
 the tier the work item's attrs decide: the light tier, or the full bar on an
 integration batch's fix ticket; the lane's one waivable gate) → `publish`, which opens the
 PR → `merge` (`merge.py` merges it into the default branch under the
-per-repo merge lock; a project may skip it, `steps.<project>.merge.skip:
+server landing lease the lane's `landing_lock` interval holds across sync →
+merge, `pf step lock-check` before each real merge; a project may skip it, `steps.<project>.merge.skip:
 true`, and its work items then end after `publish`, wrapped `published`
 with the PRs awaiting a human review; a project may also declare the
 merge done by a person, `steps.<project>.merge.by: human`, and its work

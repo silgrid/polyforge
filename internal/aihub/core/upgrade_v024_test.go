@@ -239,8 +239,11 @@ func TestW174SplitAttrsMigration(t *testing.T) {
 	if w174TableExists(t, raw, w174BackupTable) {
 		t.Fatalf("the %s before-image table survives the rollback — it is this window's record only", w174BackupTable)
 	}
-	if v := w174ProbeValue(t, raw); v != 4 {
-		t.Fatalf("probe after the rollback = %d, want 4 (the old shape is back)", v)
+	// The v0.2.4 probe sums both halves of the window: the four flat split
+	// rows AND the three lock tables the rollback dropped (polyforge#245;
+	// the pre-#247 assertion read 4 — only the split half).
+	if v := w174ProbeValue(t, raw); v != 7 {
+		t.Fatalf("probe after the rollback = %d, want 7 (four flat rows + three missing lock tables)", v)
 	}
 	if err := w174ApplyTx(t, raw, loadSQLFileOf(t, w174SQLVer, "upgrade.sql")); err != nil {
 		t.Fatalf("upgrade after the rollback failed (the round trip must work): %v", err)

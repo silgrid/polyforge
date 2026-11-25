@@ -254,3 +254,21 @@ test("a pf without the multi-Cell protocol keeps today's unflagged work-item rea
     assert.equal(argv.includes("--profile"), false, `no flag on a pre-Cell pf: ${JSON.stringify(argv)}`);
   }
 });
+
+test("the landing-lock projection is one conditional tenth key, never a passthrough", () => {
+  const lock = {
+    state: "waiting", observed_at: "2026-11-25T00:00:00Z", as_of: "2026-11-25T00:00:01Z",
+    keys: [{ repo: "github.com/o/app", branch: "epic/245", position: 3 }],
+    holder: "HOLDER_SENTINEL", token: "TOKEN_SENTINEL", machine_id: "MACHINE_SENTINEL",
+  };
+  const row = lib.sanitizeWorkItemRow({ ...REAL_ROW, landing_lock: lock });
+  assert.deepEqual(Object.keys(row).sort(), [...LIST_KEYS, "landing_lock"].sort());
+  assert.deepEqual(row.landing_lock, {
+    state: "waiting", observedAt: "2026-11-25T00:00:00Z", asOf: "2026-11-25T00:00:01Z",
+    keys: [{ repo: "github.com/o/app", branch: "epic/245", position: 3 }],
+  });
+  assert.ok(!JSON.stringify(row).includes("HOLDER_SENTINEL"), "no holder crosses the passport");
+  assert.ok(!Object.hasOwn(lib.sanitizeWorkItemRow(REAL_ROW), "landing_lock"), "an old row keeps its old shape");
+  const detail = lib.sanitizeWorkItemDetail({ ...REAL_ROW, landing_lock: lock });
+  assert.equal(detail.landing_lock.keys[0].position, 3);
+});

@@ -115,6 +115,8 @@ state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hub.json"
 with open(state_path) as f:
     state = json.load(f)
 args = sys.argv[1:]
+if args[:2] == ["step", "lock-check"]:
+    sys.exit(0)  # the landing lock's before-merge check answers held
 if args[:3] != ["--json", "step", "hub"]:
     sys.stderr.write("fake pf: only --json step hub, got %r\n" % args)
     sys.exit(2)

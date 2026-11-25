@@ -36,6 +36,13 @@ type Server struct {
 	Git      *git.Manager
 	DataDir  string
 
+	// Leases is the generic server-side lease base (polyforge#245): the
+	// signed lease routes are its only network face.
+	Leases *core.LeaseManager
+	// Repos normalizes a landing repository through the trusted project
+	// declaration and the explicit alias table (已定 Q2).
+	Repos *core.RepoIdentities
+
 	// StaleAfter is the machines liveness threshold used by the machines
 	// read face: a machine whose last_heartbeat_at is older than this is
 	// reported stale. Zero keeps the default (5× the 60s heartbeat
@@ -71,6 +78,8 @@ func New(db *core.DB, dataDir string, gitMgr *git.Manager) *Server {
 		Mems:     memory.NewStore(db, dataDir),
 		Git:      gitMgr,
 		DataDir:  dataDir,
+		Leases:   core.NewLeaseManager(db),
+		Repos:    core.NewRepoIdentities(db),
 		pending:  newQueryRegistry(),
 		relay:    newRelayBudget(relayHolderQuota, relayMemberQuota, relayWindow),
 		replay:   machinesign.NewReplayCache(),
@@ -137,6 +146,13 @@ func (s *Server) routes() {
 	// daemon proxy, as a pending `pf step hub attrs` write the daemon makes
 	// when the step round hands off done.
 	m.HandleFunc("PATCH /api/v1/work-items/{id}/attrs", s.signedMachine(laneAttrs, s.hWriteAttrs))
+	// The generic lease base (polyforge#245). Signed machine routes only:
+	// the machine's operator must write the ticket's project and the
+	// machine must hold the ticket's current session (server/landinglock.go).
+	m.HandleFunc("POST /api/v1/leases/{kind}/acquire", s.signedMachineScoped(laneLeasePoll, leaseBodyScope, s.hLeaseAcquire))
+	m.HandleFunc("POST /api/v1/leases/{kind}/renew", s.signedMachineScoped(laneLeaseManage, leaseBodyScope, s.hLeaseRenew))
+	m.HandleFunc("POST /api/v1/leases/{kind}/release", s.signedMachineScoped(laneLeaseManage, leaseBodyScope, s.hLeaseRelease))
+	m.HandleFunc("GET /api/v1/leases/requests/{rid}", s.signedMachine(laneLeaseManage, s.hLeaseLookup))
 	// messaging: Bearer-auth user-to-user conversations with
 	// permanent history. Reachability: a step agent cannot reach them
 	// (`pf msg` is refused inside a step; step processes hold no key).
@@ -701,6 +717,7 @@ func (s *Server) hListWIs(w http.ResponseWriter, r *http.Request, idn *identity)
 	if err != nil {
 		return err
 	}
+	s.decorateLeaseProjections(items)
 	return reply(w, http.StatusOK, struct {
 		Items []core.WIView `json:"items"`
 		Total int           `json:"total"`
@@ -729,6 +746,9 @@ func (s *Server) hGetWI(w http.ResponseWriter, r *http.Request, idn *identity) e
 	if err != nil {
 		return err
 	}
+	one := []core.WIView{*wi}
+	s.decorateLeaseProjections(one)
+	wi.LeaseProjection = one[0].LeaseProjection
 	return reply(w, http.StatusOK, wi)
 }
 
@@ -1151,6 +1171,9 @@ func (s *Server) hReadyQueue(w http.ResponseWriter, r *http.Request, idn *identi
 	if err != nil {
 		return err
 	}
+	s.decorateLeaseProjections(q.Items)
+	s.decorateLeaseProjections(q.Running)
+	s.decorateLeaseProjections(q.Paused)
 	return reply(w, http.StatusOK, q)
 }
 

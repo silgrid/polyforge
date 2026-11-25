@@ -704,9 +704,11 @@ rewind — and reads no content, and no agent merges by hand:
   head), and never merges and re-runs no test.
 - **merge** (gate; `merge.py --publish artifacts/publish.json --verified
   artifacts/verify/result.json --json --out artifacts/merge/result.json`,
-  under the daemon's merge lock — in memory, one per repository
-  (`host/owner/repo` lower-cased: https and ssh clones of one repository
-  share it), every repo of the item locked in one order) verifies first that
+  under the ticket's server landing lease — one per repository and target
+  branch, normalized by AIHub so https and ssh clones of one repository
+  share it, every repo of the item locked in one order and the lane's
+  declared interval (`landing_lock`) holding it across sync → merge; a step
+  inside the interval takes no separate single-step merge lock) verifies first that
   every published repo's `head` is its entry in the verification result's
   `heads`, then runs the command, which judges every PR before anything
   merges — a PR already merged (a resume) counts only by the landing rules:
@@ -870,13 +872,14 @@ with its own credentials (a step agent holds none) once the step hands off
   fix that weakens a test to pass it. Findings land in
   `artifacts/review.md`; a blocking finding rewinds to the repair step
   charged.
-- `revert` (`revert.py`, the cheap tier; the merge lock) — carries out the
+- `revert` (`revert.py`, the cheap tier; the single-dispatch landing lease) — carries out the
   reverts the owner ruled, collect's and a red gate's (the ones its
   decision file names), and lands the batch's repair branches the same
   way: each item and its landed fix tickets reverted per repo, newest
   first, on a revert PR opened and merged under the
-  repo's merge lock — the one develop's `merge` step holds, so nothing
-  else merges meanwhile — each repair branch pushed, its PR merged onto
+  repo's landing lease — the same key develop's `merge` step holds, so
+  nothing else merges meanwhile; every real merge is preceded by
+  `pf step lock-check` — each repair branch pushed, its PR merged onto
   the default branch matching the pushed head (a fix whose blamed item
   the same run reverts is never landed) — the gate's pins following both,
   and the reverted item's record moved to `reverted` (an `attrs` write).

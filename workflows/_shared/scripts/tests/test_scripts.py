@@ -66,6 +66,7 @@ class World:
         for d in (self.origins, self.gh, self.bin):
             os.makedirs(d)
         install(os.path.join(HERE, "fakegh.sh"), os.path.join(self.bin, "gh"))
+        install(os.path.join(HERE, "fakepf.sh"), os.path.join(self.bin, "pf"))
         install(os.path.join(HERE, "fakedocker.sh"), os.path.join(self.bin, "docker"))
         self.seeds: Dict[str, str] = {}
         for r in repos:
@@ -317,6 +318,23 @@ class MergeScriptTest(unittest.TestCase):
                 {"repo": "app", "pr": r["pr_url"], "head": head, "light_verified_head": head, "merge_commit": r["merge_commit"]}],
                 "merge_commits": {"app": [{"sha": r["merge_commit"], "merge": True}]}})
 
+    def test_a_refused_landing_check_never_merges(self) -> None:
+        """Q6 (polyforge#245): merge.py arms the landing gate, and the
+        daemon's lock-check refusal stops every real gh merge — the PR
+        stays open and no landing record is written."""
+        w = World(self, "app")
+        w.change("app", {"feature.txt": "f\n"}, "app-section")
+        publish, verified, out = self.inputs(w, w.publish("app"))
+        landing = os.path.join(w.capsule, "artifacts", "merge", "landing.json")
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified, "--landing-out", landing,
+                               "--capsule", w.capsule, "--json", "--out", out, FAKE_PF_REFUSE="app")
+        assert res is not None
+        self.assertNotEqual(code, 0, err)
+        self.assertIn("landing lock", res["summary"] + err)
+        self.assertFalse(os.path.exists(landing))
+        self.assertEqual(read(os.path.join(w.gh, "app", "prs", "1"), "state").strip(), "OPEN")
+        self.assertFalse(os.path.exists(os.path.join(w.gh, "app", "prs", "1", "merge")))
+
     def test_default_branch_freshness_controls_merge(self) -> None:
         w = World(self, "app")
         head = w.change("app", {"feature.txt": "f\n"}, "app-section")
@@ -362,10 +380,18 @@ class MergeScriptTest(unittest.TestCase):
 
 
 # FAKE_PF answers `pf --json step hub get <ref>` from FAKE_PF_ITEMS (a
-# JSON list of work items), as the step's hub would.
+# JSON list of work items), as the step's hub would, and `pf step
+# lock-check --repo <name>` as the daemon's held lease does.
 FAKE_PF = """#!/usr/bin/env python3
 import json, os, sys
 a = sys.argv[1:]
+if a[:2] == ["step", "lock-check"]:
+    repo = a[a.index("--repo") + 1] if "--repo" in a else ""
+    if os.environ.get("FAKE_PF_REFUSE") == repo:
+        sys.stderr.write("pf step lock-check --repo %s: the landing lock was lost\\n" % repo)
+        sys.exit(1)
+    print("lock-check: held")
+    sys.exit(0)
 with open(os.environ["FAKE_PF_ITEMS"]) as f:
     items = json.load(f)
 if a[:4] == ["--json", "step", "hub", "get"]:
@@ -380,6 +406,32 @@ sys.exit(1)
 
 @unittest.skipUnless(HAVE_GIT, "git or bash not installed")
 class RevertScriptTest(unittest.TestCase):
+    def test_a_refused_landing_check_never_merges(self) -> None:
+        """Q6 (polyforge#245): revert.py arms the gate too; a refused
+        lock-check leaves the revert PR unmerged and the run fails."""
+        w = World(self, "app")
+        with open(os.path.join(w.bin, "pf"), "w", encoding="utf-8") as f:
+            f.write(FAKE_PF)
+        os.chmod(os.path.join(w.bin, "pf"), 0o755)
+        m = w.land("app", "p1", {"pkg/code.go": "package pkg\n\nfunc F() int { return 2 }\n"})
+        items = os.path.join(w.root, "items.json")
+        with open(items, "w", encoding="utf-8") as f:
+            json.dump([{"id": "wi_1", "slug": "p#1", "status": "wrapped", "attrs": {"integration": {"state": "landed", "merge_commits": {"app": [m]}}}}], f)
+        w.land("app", "p2", {"other.txt": "o\n"})
+        pins = {"app": w.git(w.seeds["app"], "rev-parse", "HEAD")}
+        batch = os.path.join(w.capsule, "artifacts", "integrate", "batch.json")
+        write(w.capsule, "artifacts/integrate/batch.json", json.dumps({
+            "schema": "pf-step-result/1", "heads": pins,
+            "details": {"items": [{"id": "wi_1", "slug": "p#1", "merge_commits": {"app": [m]}, "fix_tickets": []}], "gated": ["app"]}}))
+        out = os.path.join(w.capsule, "artifacts", "integrate", "revert.json")
+        ops = os.path.join(w.capsule, "artifacts", "integrate", "revert-ops.json")
+        code, res, err = w.run("revert.py", "--batch", batch, "--item", "wi_1", "--ops-out", ops, "--capsule", w.capsule,
+                               "--json", "--out", out, PF_WI_ID="wi_batch", FAKE_PF_ITEMS=items, FAKE_PF_REFUSE="app")
+        assert res is not None
+        self.assertEqual(code, 1, err)
+        self.assertIn("landing lock", res["summary"] + err)
+        self.assertFalse(os.path.exists(ops))
+
     def test_reverts_an_item_and_writes_its_move(self) -> None:
         w = World(self, "app")
         with open(os.path.join(w.bin, "pf"), "w", encoding="utf-8") as f:

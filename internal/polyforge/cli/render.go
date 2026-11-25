@@ -16,6 +16,7 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 	"github.com/silgrid/polyforge/internal/polyforge/modelhealth"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
+	"github.com/silgrid/polyforge/internal/polyforge/watcher"
 )
 
 // Rendering rules:
@@ -368,25 +369,37 @@ func wiRow(it WIView) []string {
 // unfinished blocker (polyforge#161 waiting_for), a WAITING-FOR column
 // is inserted before GOAL; otherwise the table keeps its usual shape.
 func renderWITable(w io.Writer, items []WIView) {
-	waiting := false
+	waiting, landing := false, false
 	for _, it := range items {
 		if len(it.WaitingFor) > 0 {
 			waiting = true
-			break
+		}
+		if watcher.LeaseProjectionLine(it.LeaseProjection) != "" {
+			landing = true
 		}
 	}
 	rows := make([][]string, 0, len(items))
 	for _, it := range items {
 		row := wiRow(it)
+		last := len(row) - 1
+		insert := make([]string, 0, 2)
+		if landing {
+			insert = append(insert, orDash(watcher.LeaseProjectionLine(it.LeaseProjection)))
+		}
 		if waiting {
-			last := len(row) - 1
-			row = append(row[:last:last], orDash(waitingText(it.WaitingFor)), row[last])
+			insert = append(insert, orDash(waitingText(it.WaitingFor)))
+		}
+		if len(insert) > 0 {
+			row = append(append(row[:last:last], insert...), row[last])
 		}
 		rows = append(rows, row)
 	}
 	headers := []string{"SLUG", "PROJECT", "STATUS", "SESSION", "PRIORITY", "BUNDLE", "GOAL"}
+	if landing {
+		headers = append(headers[:len(headers)-1], "LANDING", "GOAL")
+	}
 	if waiting {
-		headers = []string{"SLUG", "PROJECT", "STATUS", "SESSION", "PRIORITY", "BUNDLE", "WAITING-FOR", "GOAL"}
+		headers = append(headers[:len(headers)-1], "WAITING-FOR", "GOAL")
 	}
 	printTable(w, headers, rows)
 }
@@ -415,6 +428,13 @@ func renderWIDetail(w io.Writer, wi *WIView) {
 	}
 	if wi.WaitingOn != nil {
 		fmt.Fprintf(w, "  waiting:  %s\n", *wi.WaitingOn)
+	}
+	if line := watcher.LeaseProjectionLine(wi.LeaseProjection); line != "" {
+		fmt.Fprintf(w, "  landing:  %s", line)
+		if keys := watcher.LeaseKeysText(wi.LeaseProjection); keys != "" {
+			fmt.Fprintf(w, " — %s", keys)
+		}
+		fmt.Fprintln(w)
 	}
 	if len(wi.WaitingFor) > 0 {
 		edges, children := waitingSplit(wi.WaitingFor)

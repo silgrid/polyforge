@@ -54,6 +54,12 @@ const (
 	laneAnswer    replayLane = "answer"    // POST /queries/{qid}/answer
 	laneQuery     replayLane = "query"     // POST /work-items/{id}/progress-query, /artifact-query
 	laneAttrs     replayLane = "attrs"     // PATCH /work-items/{id}/attrs
+	// The lease base's two lanes (polyforge#245 Q12): a waiter's poll
+	// and the holder's renew/release are separate buckets, and both are
+	// scoped by work item (replayBucketScoped), so one ticket's poll
+	// traffic never refuses another ticket or its holder.
+	laneLeasePoll   replayLane = "lease-poll"   // POST /leases/{kind}/acquire
+	laneLeaseManage replayLane = "lease-manage" // POST /leases/{kind}/renew|release, GET /leases/requests/{rid}
 )
 
 // replayBucket is the cache key of one machine's lane. Lanes carry no
@@ -62,6 +68,20 @@ func replayBucket(machineID string, lane replayLane) string {
 	return machineID + "\n" + string(lane)
 }
 
+// replayBucketScoped is replayBucket for a lane whose quota is per
+// (machine, ticket): an empty scope keeps the machine-wide bucket, a
+// non-empty one separates every ticket's traffic (the lease lanes).
+func replayBucketScoped(machineID string, lane replayLane, scope string) string {
+	if scope == "" {
+		return replayBucket(machineID, lane)
+	}
+	return machineID + "\n" + string(lane) + "\n" + scope
+}
+
+// replayScope names the per-request bucket scope of a scoped signed
+// lane; nil keeps the machine-wide bucket every existing lane uses.
+type replayScope func(*http.Request, []byte) string
+
 // signedMachine authenticates the Bearer, verifies the machine signature,
 // requires the caller to speak for the machine's operator, records the
 // signature in the route's replay lane, and exposes the verified machine
@@ -69,11 +89,18 @@ func replayBucket(machineID string, lane replayLane) string {
 // processes hold no aihub key at all, and the daemon's aihub face
 // forwards no machine-face route.
 func (s *Server) signedMachine(lane replayLane, next machineHandler) http.HandlerFunc {
+	return s.signedMachineScoped(lane, nil, next)
+}
+
+// signedMachineScoped is signedMachine for a lane whose replay bucket is
+// scoped per request (the lease lanes): scope reads the bucket's scope
+// from the verified bytes, nil keeps the machine-wide bucket.
+func (s *Server) signedMachineScoped(lane replayLane, scope replayScope, next machineHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		idn, err := s.authenticate(r)
 		if err == nil {
 			var m machineAuth
-			m, err = s.verifyMachine(r, idn, lane)
+			m, err = s.verifyMachine(r, idn, lane, scope)
 			if err == nil {
 				err = next(w, r, idn, m)
 			}
@@ -84,7 +111,7 @@ func (s *Server) signedMachine(lane replayLane, next machineHandler) http.Handle
 	}
 }
 
-func (s *Server) verifyMachine(r *http.Request, idn *identity, lane replayLane) (machineAuth, error) {
+func (s *Server) verifyMachine(r *http.Request, idn *identity, lane replayLane, scope replayScope) (machineAuth, error) {
 	machineID := strings.TrimSpace(r.Header.Get(machinesign.HeaderMachineID))
 	tsRaw := strings.TrimSpace(r.Header.Get(machinesign.HeaderTimestamp))
 	sig := strings.TrimSpace(r.Header.Get(machinesign.HeaderSignature))
@@ -128,7 +155,11 @@ func (s *Server) verifyMachine(r *http.Request, idn *identity, lane replayLane) 
 	// The cache's verdict, mapped: a verbatim replay stays AUTH-401; a
 	// machine over its lane's quota is CORE-429 (only that
 	// machine's lane is refused, and its own entries expire to recover).
-	if err := replayVerdict(s.replay.Check(time.Now(), replayBucket(machineID, lane), sig), machineID, lane, "machine signature replayed"); err != nil {
+	bucketScope := ""
+	if scope != nil {
+		bucketScope = scope(r, body)
+	}
+	if err := replayVerdict(s.replay.Check(time.Now(), replayBucketScoped(machineID, lane, bucketScope), sig), machineID, lane, "machine signature replayed"); err != nil {
 		return machineAuth{}, err
 	}
 	return machineAuth{MachineID: machineID, OperatorID: operatorID}, nil

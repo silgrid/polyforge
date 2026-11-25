@@ -62,7 +62,16 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   (`progress`, per-step `startedAt`, chat `origin`) and the pi#119 additions
   (the four summarize-lane fields) are sanitized, additive fields: each is
   absent when missing or malformed on the wire, and every existing field is
-  unchanged.
+  unchanged. `landingLock` is the ticket's read-only landing-lock projection
+  (`{state: waiting|none|stale|unavailable, observedAt?, asOf?, ageMs?,
+  keys:[{repo, branch, position, since?}]}`), forwarded only through
+  `lib/polyforge-landing-lock.ts`; `lockOnly` (Q3) marks a remote-progress
+  partial snapshot, where `progressError` carries the controlled code and the
+  client keeps its last execution. The work-item list row gains the same
+  projection as one conditional `landing_lock` key; a row from an older
+  server keeps its old shape. The list and the selected job card show
+  `等待合入锁 #N` (stale marked, unavailable with no position) and never a
+  holder, token or other ticket.
 - `POST /api/polyforge/answer` `{wi, profile?, text}` → the job card's one input
   box: `pf [--profile p] --json answer <wi> --text=<words>` — no question
   id, no option — the owner's words to the work item's current step agent

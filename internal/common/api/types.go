@@ -40,6 +40,10 @@ type WorkItem struct {
 	CreatedAt   string         `json:"created_at"`
 	UpdatedAt   string         `json:"updated_at"`
 	ClosedAt    *string        `json:"closed_at"`
+	// LeaseProjection is the read-only landing-lock projection (polyforge#245
+	// epic 3/3): this ticket's own queue state only. Omitted when a reader
+	// or a hub that predates it has no evidence; never a hub main status.
+	LeaseProjection *LeaseProjection `json:"landing_lock,omitempty"`
 }
 
 // DisplayName answers the human-facing name of a work item: its slug

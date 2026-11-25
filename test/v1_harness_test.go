@@ -17,6 +17,7 @@ package test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -253,6 +254,7 @@ func newV1InstallTaskRepo(t *testing.T) (*v1Install, taskRemote) {
 // on the e2e project (nil = none).
 func newV1InstallRepos(t *testing.T, repos []api.ProjectRepo) *v1Install {
 	t.Helper()
+	repos = leaseableProjectRepos(t, repos)
 	bins := v1Bins(t)
 	inst := &v1Install{
 		t:          t,
@@ -312,6 +314,51 @@ func newV1InstallRepos(t *testing.T, repos []api.ProjectRepo) *v1Install {
 		t.Fatalf("create project: %v", err)
 	}
 	return inst
+}
+
+// leaseableProjectRepos gives the e2e project forge-shaped repository
+// URLs (owner ruling 2026-11-24, 2A: the fixtures use a normalizable URL,
+// not a production exception): a local origin is declared as
+// `https://forge.invalid/e2e-<n>/<name>.git` and a `url.<local>.insteadOf`
+// line in the test HOME rewrites that prefix back to the local bare
+// repository, so git clones and pushes while the lease server normalizes a
+// real forge identity. A URL that is already normalizable is kept.
+func leaseableProjectRepos(t *testing.T, repos []api.ProjectRepo) []api.ProjectRepo {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("test HOME: %v", err)
+	}
+	cfgPath := filepath.Join(home, ".gitconfig")
+	out := make([]api.ProjectRepo, 0, len(repos))
+	var add strings.Builder
+	for _, r := range repos {
+		local := strings.TrimSpace(r.URL)
+		abs := strings.TrimPrefix(local, "file://")
+		if !strings.HasPrefix(local, "file://") && !strings.HasPrefix(local, "/") {
+			out = append(out, r)
+			continue
+		}
+		sum := sha256.Sum256([]byte(filepath.Dir(abs)))
+		host := fmt.Sprintf("https://forge.invalid/%s/", hex.EncodeToString(sum[:6]))
+		dir := filepath.Dir(abs) + "/"
+		add.WriteString(fmt.Sprintf("[url \"file://%s\"]\n\tinsteadOf = %s\n", dir, host))
+		out = append(out, api.ProjectRepo{Name: r.Name, URL: host + filepath.Base(abs)})
+	}
+	if add.Len() > 0 {
+		f, err := os.OpenFile(cfgPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatalf("write git config: %v", err)
+		}
+		if _, err := f.WriteString(add.String()); err != nil {
+			f.Close()
+			t.Fatalf("write git config: %v", err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("write git config: %v", err)
+		}
+	}
+	return out
 }
 
 // startAihubProc starts one `pf aihub` process in its own process group and
@@ -2273,4 +2320,40 @@ func v1CellStateDir(dataDir string) string {
 		return cell
 	}
 	return dataDir
+}
+
+// TestLeaseableProjectReposMapPerCall pins the fixture's own rule (review
+// r3#2): every install's local origin gets a UNIQUE forge-shaped host, so
+// two tests of one process never share a git url.insteadOf mapping. The
+// first mapping wins on an equal-length tie, so a shared host would send
+// the second test to the first one's deleted directory.
+func TestLeaseableProjectReposMapPerCall(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dirs := []string{t.TempDir(), t.TempDir()}
+	var repos []api.ProjectRepo
+	for _, d := range dirs {
+		bare := filepath.Join(d, "demo.git")
+		cmd := exec.Command("git", "init", "-q", "--bare", "-b", "main", bare)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git init --bare: %v\n%s", err, out)
+		}
+		repos = append(repos, api.ProjectRepo{Name: "demo", URL: "file://" + bare})
+	}
+	for round := 0; round < 2; round++ {
+		got := leaseableProjectRepos(t, repos)
+		for i, r := range got {
+			if !strings.HasPrefix(r.URL, "https://forge.invalid/") {
+				t.Fatalf("round %d repo %d URL %q, want a forge-shaped URL", round, i, r.URL)
+			}
+			out, err := exec.Command("git", "ls-remote", "--get-url", r.URL).Output()
+			if err != nil {
+				t.Fatalf("git ls-remote --get-url %s: %v", r.URL, err)
+			}
+			if want := "file://" + filepath.Join(dirs[i], "demo.git"); strings.TrimSpace(string(out)) != want {
+				t.Fatalf("round %d repo %d resolves to %q, want %q (a shared insteadOf host across calls)", round, i, strings.TrimSpace(string(out)), want)
+			}
+		}
+	}
 }

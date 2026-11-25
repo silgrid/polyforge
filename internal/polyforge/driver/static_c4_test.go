@@ -43,6 +43,7 @@ var laneVocab = []string{"pool", "effects", "fix_tickets", "integration_moves", 
 // else (file:literal → what it is).
 var laneVocabCoincidences = map[string]string{
 	"driver/supervision.go:pool": "a model error's infrastructure noun (modelInfraNouns: \"model pool not found\")",
+	"daemon/landing.go:landing":  "the generic lease base's wire kind (kind: landing), a protocol value, not the lane's vocabulary",
 }
 
 // identWords splits an identifier into its lower-case words (camelCase,

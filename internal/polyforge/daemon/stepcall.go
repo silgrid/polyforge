@@ -27,6 +27,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -155,6 +156,8 @@ func (sc *stepCall) serve(w http.ResponseWriter, req stepCallRequest) {
 			return
 		}
 		sc.d.forwardMemoryRead(w, a.ID, sc.j.project)
+	case req.Verb == stepcall.VerbLockCheck:
+		sc.lockCheckVerb(w, req.Args)
 	case req.Verb == stepcall.VerbRemember:
 		var a stepRememberRequest
 		if !decodeArgs(w, req.Args, &a) {
@@ -206,6 +209,30 @@ func (sc *stepCall) askVerb(w http.ResponseWriter, raw json.RawMessage) {
 		return
 	}
 	writeJSON(w, http.StatusOK, line)
+}
+
+// lockCheckVerb is `pf step lock-check --repo <claim repo name>`: the
+// daemon renews the ticket's landing lease of that repository and answers
+// ok only while it still holds it. Every refusal — no lease, a lost lease,
+// a token the server rejects, a transport failure — means the caller must
+// not merge (decided Q6). The answer carries no token.
+func (sc *stepCall) lockCheckVerb(w http.ResponseWriter, raw json.RawMessage) {
+	var a struct {
+		Repo string `json:"repo"`
+	}
+	if !decodeArgs(w, raw, &a) {
+		return
+	}
+	repo := strings.TrimSpace(a.Repo)
+	if repo == "" {
+		writeErr(w, api.ErrDaemonBadInput, "lock-check: --repo <claim repo name> is required")
+		return
+	}
+	if err := sc.d.leases.Check(context.Background(), sc.j.wi, repo); err != nil {
+		writeErr(w, api.ErrDaemonConflict, "lock-check refused: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "status": "held"})
 }
 
 // recallVerb is `pf step recall`: one search of the calling step's

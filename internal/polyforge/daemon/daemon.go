@@ -389,6 +389,11 @@ type Daemon struct {
 	// (A3; progresslookup.go). Memory-only.
 	remoteSnaps *remoteSnapCache
 
+	// leaseSnaps caches the last successful landing-lock projection per
+	// WI, served as stale (never renewed) when a later hub read fails
+	// (polyforge#249, landingcache.go). Memory-only.
+	leaseSnaps *leaseSnapCache
+
 	// lane is the demand-gated summarize lane (polyforge#224): per-WI
 	// memory-only state, the gates, the background dispatch — wired into
 	// the watch route (the demand=1 marker on GET /jobs/{wi}/watch). The
@@ -460,9 +465,10 @@ type Daemon struct {
 	// monitors.
 	sup *supervise.Registry
 
-	// merges is the per-repo merge lock (mergelock.go): the merge-pr
-	// step's check-then-merge and a lane's revert step.
-	merges *mergeLocks
+	// landing is the daemon's landing-lease manager (landing.go): the
+	// lane-declared interval held across steps, the single-dispatch merge
+	// lock, the private request journal and the restart recovery.
+	leases *leaseManager
 	// verifyQ is the heavy-run admission of daemon-run verification bars
 	// (verifyqueue.go): the Host's shared queue, or this
 	// daemon's own; re-evaluated on the dispatch tick.
@@ -800,8 +806,10 @@ func New(cfg Config) (*Daemon, error) {
 				// step round makes when it hands off done
 				HubWrites: stepHubSink{d},
 				// the forge binding: git and gh as the daemon, and the
-				// per-repo merge lock (mergelock.go)
-				Forge: cellForge{d},
+				// single-dispatch merge lock through the landing leases
+				Forge: cellForge{d: d, wi: in.WI, capsuleDir: in.CapsuleDir},
+				// the lane-declared landing-lock interval (polyforge#245)
+				IntervalLeases: d.leases,
 				// a step waiting on the owner (`pf ask`) holds no running
 				// slot (occupiedSlots reads the runtime's flag)
 				OwnerWait: in.OwnerWait,
@@ -851,7 +859,7 @@ func New(cfg Config) (*Daemon, error) {
 		obsDone:      make(chan struct{}),
 		ready:        make(chan struct{}),
 		sup:          supervise.NewRegistry(),
-		merges:       newMergeLocks(),
+		leases:       newLeaseManagerIf(leaseHubOf(cfg.Hub), filepath.Join(cfg.DataDir, leaseJournalFile)),
 		verifyQ:      cfg.SharedAdmission,
 		upgradeDrain: cfg.UpgradeDrain,
 		// the Cell's own command_path (a reload moves it)
@@ -859,6 +867,7 @@ func New(cfg Config) (*Daemon, error) {
 		pfDir:       selfDir(),
 		lane:        summarize.New(laneDispatcher),
 		remoteSnaps: newRemoteSnapCache(remoteSnapTTL, remoteSnapCap),
+		leaseSnaps:  newLeaseSnapCache(),
 		face:        initialFace(cfg),
 		// the file-only baseline the reload compares against until the
 		// first successful reload moves it
@@ -883,6 +892,9 @@ func New(cfg Config) (*Daemon, error) {
 		d.verifyQ = newVerifyQueue(cfg.StartupFile.Daemon.MaxConcurrentBars, cfg.StartupFile.Daemon.BarLoadThreshold)
 	}
 	d.runCtx, d.cancelRun = context.WithCancel(context.Background())
+	if d.leases != nil {
+		d.leases.runCtx = d.runCtx
+	}
 	if cfg.HostSlots == nil {
 		// unhosted: this daemon owns the task lane's bound itself, starting
 		// from its file's value (0 = the default) — a hosted Cell gets the

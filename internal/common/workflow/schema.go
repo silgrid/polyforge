@@ -89,5 +89,6 @@ func laneFileKeySets() map[string]map[string]keySpec {
 		"facts_proof":      fastCheckProofKeys,
 		"on_fail":          onFailKeys, "budget": budgetKeys, "resources": resourcesKeys,
 		"hub": hubKeys, "uncounted_rewinds": uncountedRewindsKeys,
+		"landing_lock": landingLockKeys,
 	}
 }

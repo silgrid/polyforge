@@ -198,10 +198,11 @@ The complete variable table is in [the workflow contract's Scripts environment s
   `pf step hub wrap-attrs integration @artifacts/publish/integration.json` — and writes the
   wrap summary (below, **Skipping merge**).
 - **merge** (gate, `skippable: true`, `human_mergeable: true`; skill `merge`, `merge.py`,
-  the per-repo merge lock,
+  the end of the lane's landing interval,
   tool window 10 minutes; wrap attrs `integration`) — checks publish's heads against the verified heads, then
   merges each PR with `gh pr merge --merge --match-head-commit <verified head>` under the
-  daemon's merge lock (one per repository, every repo of the item locked in one order). A
+  ticket's server landing lease (below, **The landing interval**), each real merge preceded
+  by `pf step lock-check` — a refused check merges nothing. A
   PR that moved, the default branch gained commits after verification, closed, was retargeted, merged elsewhere off the verified head or refused
   by the forge FAILs back to `sync`; sync merges the new default branch and verification runs again. On a pass the command writes the landing record
   (`artifacts/merge/landing.json`: `{state: landed, repos, merge_commits}`) and the step
@@ -211,6 +212,23 @@ The complete variable table is in [the workflow contract's Scripts environment s
   `wrap_attrs: [integration]`: `pf step handoff --status done` is refused until that
   record is registered. As the lane's last
   step it writes the work item's wrap summary.
+
+## The landing interval
+
+The lane declares `landing_lock: {enter: sync, exit: merge}` (polyforge#248; the
+[workflow contract](../../docs/reference/workflow-contract.md#landing_lock-keys)'s key):
+before `sync` first dispatches, the daemon takes the server landing lease of every task
+repo at its target branch — one lease per repository and target branch on AIHub, shared
+by every daemon, granted first come first served, every repo of the item taken in one
+order — and holds it, renewing it on the server clock, across sync → verification →
+publish → merge; it releases it when merge is done or the workflow leaves the interval.
+While it waits the work item shows 「等待合入锁」 (`merge_lock_queued`): never a failure, no
+rewind spent, never a stall. A lost lease, or an ask of a non-gate step inside the
+interval, releases the lease and re-enters at `sync`, charged to no rewind budget; a
+gate's ask (the verification waiver, the human merge) resumes that gate in place. The
+merge script calls `pf step lock-check --repo <name>` before every real `gh pr merge`:
+the daemon renews the lease at once and a refused or failed check merges nothing. No step
+inside the interval takes a single-step merge lock of its own.
 
 ## Human stops
 

@@ -172,6 +172,10 @@ type Config struct {
 	// machine's own credentials) and the per-repo merge lock; nil = none,
 	// and a step declaring the merge lock blocks naming it.
 	Forge Forge
+	// IntervalLeases is the daemon's landing-lease manager (landing.go): a
+	// lane declaring a `lease_interval` interval holds it across the
+	// interval's dispatches; nil = none, and such a lane blocks naming it.
+	IntervalLeases IntervalLeases
 	// OwnerWait tells the runtime whether this work item's step waits on
 	// the owner (`pf ask`, ask.go): true while an ask of the current
 	// dispatch is open — the daemon's slot accounting then counts no
@@ -299,6 +303,15 @@ type Driver struct {
 	liveStep      string
 	liveSpawn     int64
 	messageResume string
+	// leaseHold is the landing-lock interval's held lease group (nil =
+	// none); leaseReentry orders a rewind to the interval's enter step
+	// after a release (an ask, a lost lease). The driver is one actor, so
+	// no lock guards them.
+	leaseHold    IntervalLease
+	leaseReentry bool
+	// leaseHolds counts the interval's hold cycles this driver made; the
+	// events' requeue_count is one less (memory-only across a restart).
+	leaseHolds int
 }
 
 // New builds a Driver: it resolves paths, loads the workflow graph from
@@ -469,6 +482,9 @@ func (d *Driver) Run(ctx context.Context) error {
 	// when it awaits the owner; the plan pass parks on it (lifecycle (i)).
 	d.refreshParkedAsk()
 	defer d.ownerWait(false)
+	// the landing-lock interval never outlives this run (a completed,
+	// blocked or failed workflow releases it; Q8/Q14)
+	defer d.releaseLease("driver run ended")
 	if collected == nil && d.cfg.Interrupted == nil && d.hasUnsettledDispatch() {
 		// A claim over a dispatch that never settled — an operator pause
 		// cancelled it, or a shutdown or crash ended it before this claim:
@@ -531,6 +547,9 @@ func (d *Driver) Run(ctx context.Context) error {
 			// paused period are not counted (the D6 lifecycle ruling).
 			d.bookCollectedWall(res)
 			if stop, err := d.settle(ctx, res.StepID, collectedN, res, nil); stop {
+				if d.Snapshot().WorkflowStatus == StatusBlocked {
+					d.markLeaseReentry()
+				}
 				return err
 			}
 			continue
@@ -540,7 +559,28 @@ func (d *Driver) Run(ctx context.Context) error {
 			return err
 		}
 		if stop {
+			if d.Snapshot().WorkflowStatus == StatusBlocked {
+				d.markLeaseReentry()
+			}
 			return nil
+		}
+
+		// the lane-declared landing-lock interval (landing.go,
+		// polyforge#245): take the lease before the enter step's first
+		// dispatch, release it when the plan leaves the interval, and land
+		// a lock-loss or ask re-entry as a rewind to its enter step
+		if handled, err := d.ensureLease(ctx, stepID); err != nil {
+			if ctx.Err() != nil {
+				return err
+			}
+			reason := fmt.Sprintf("step %s could not take the lane's landing lock: %v; fix the cause, then resume the work item (`pf resume %s`)", stepID, err, d.wi.ID)
+			if terr := d.transition(TransitionRequest{Kind: TransBlocked, StepID: stepID, Reason: reason, SpawnN: d.currentSpawnN()}); terr != nil {
+				return fmt.Errorf("driver: landing-lock park write failed: %w", terr)
+			}
+			d.emit("blocked", map[string]any{"step": stepID, "reason": reason, "report": false})
+			continue
+		} else if handled {
+			continue
 		}
 
 		// the epic's running re-check (epicguard.go, polyforge#117):
@@ -636,8 +676,24 @@ func (d *Driver) Run(ctx context.Context) error {
 			continue
 		}
 		announced := d.announceStart(spawn, run, dispatchedAt)
+		stopWatch := make(chan struct{})
+		heldLease := d.leaseHold
+		if heldLease != nil {
+			go d.watchLease(run, heldLease, stopWatch)
+		}
 		res, werr, verdict := d.awaitDispatch(ctx, run, stepID, n)
+		close(stopWatch)
 		releaseResources() // the dispatch's process is gone: what it held is free
+		if heldLease != nil && heldLease.Err() != nil {
+			// Q7: the lease was lost while this dispatch ran. Drop its
+			// result, release and re-queue at the declared enter step.
+			d.emitLeaseLoss(stepID)
+			d.markLeaseReentry()
+			d.releaseLease("lost")
+			d.leaseReentry = true
+			d.announceEnd(stepID, n, supervise.OutcomeExitedWithoutResult, -1, "landing lease lost")
+			continue
+		}
 		// The dispatch's wall ends when its process is known gone. The
 		// step-end hooks below are cleanup: charging their cost to T would
 		// turn a step-end /proc scan into the next dispatch's timeout.
@@ -731,6 +787,9 @@ func (d *Driver) Run(ctx context.Context) error {
 		d.addUnbookedUntil(stepID, bookedFrom, endedAt)
 		crashpoint.At("driver.collected:" + stepID)
 		if stop, err := d.settle(ctx, stepID, n, res, run); stop {
+			if d.Snapshot().WorkflowStatus == StatusBlocked {
+				d.markLeaseReentry()
+			}
 			return err
 		}
 	}
@@ -975,6 +1034,14 @@ func (d *Driver) plan(ctx context.Context) (stop bool, stepID string, err error)
 			}
 			continue // re-plan: the reset moved the position
 		}
+		// A persisted landing-lock re-entry (an ask of a non-gate step, a
+		// lost lease, a blocked workflow) lands now that no ask is open:
+		// the interval's steps from enter re-run, charged to no budget.
+		if handled, err := d.consumeLeaseReentry(); err != nil {
+			return false, "", fmt.Errorf("driver: landing-lock re-entry failed: %w", err)
+		} else if handled {
+			continue
+		}
 		// The overlay's skip switch may change between steps (polyforge#25,
 		// the daemon's override route): every plan pass re-reads the
 		// effective set — file reads, outside the mutex — and re-derives
@@ -1019,7 +1086,9 @@ func (d *Driver) plan(ctx context.Context) (stop bool, stepID string, err error)
 		if ask := d.parkedAsk(); ask != nil {
 			// the current dispatch asked the owner (`pf ask`, ask.go) and
 			// the ask is open: the step awaits the owner — no dispatch, no
-			// stall clock, the slot released; a restart lands here too
+			// stall clock, the slot released; a restart lands here too.
+			// The landing lock is released while a person decides.
+			d.releaseLeaseForAsk(ask.Step)
 			d.announceParkedAsk(ask)
 			if err := d.awaitParkedAsk(ctx, ask); err != nil {
 				return false, "", err
@@ -1039,6 +1108,7 @@ func (d *Driver) plan(ctx context.Context) (stop bool, stepID string, err error)
 		if next == "" {
 			// §6.5 step 6: not a failure terminal (that exits above),
 			// so an empty selection means every step is done or skipped.
+			d.releaseLease("workflow completed")
 			if err := d.transition(TransitionRequest{
 				Kind:   TransTerminal,
 				Status: StatusCompleted,

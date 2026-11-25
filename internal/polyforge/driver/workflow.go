@@ -33,6 +33,8 @@ type Workflow struct {
 	// one-line hand-off reason contains ReasonContains — counted on its
 	// own toward Max (nil when the lane declares none).
 	UncountedRewinds *workflow.UncountedRewinds
+	// LockInterval is the lane's `landing_lock` interval (nil = none).
+	LockInterval *workflow.LeaseInterval
 }
 
 // StepSpec is one workflow step: identity and order, gate policy and the
@@ -463,7 +465,7 @@ func LoadWorkflowGraph(bundleDir string) (*Workflow, error) {
 
 // workflowOf maps a loaded lane onto the execution graph.
 func workflowOf(lane *workflow.Lane) *Workflow {
-	wf := &Workflow{Name: lane.Name, MaxRewinds: lane.MaxRewinds, UncountedRewinds: lane.UncountedRewinds}
+	wf := &Workflow{Name: lane.Name, MaxRewinds: lane.MaxRewinds, UncountedRewinds: lane.UncountedRewinds, LockInterval: lane.LeaseInterval}
 	for _, s := range lane.Steps {
 		step := StepSpec{
 			ID:             s.ID,

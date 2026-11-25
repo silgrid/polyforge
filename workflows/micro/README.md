@@ -107,9 +107,12 @@ change, nothing more, and changes no behavior.
   feature branch, opens or updates the PR, writes `artifacts/publish.json` and
   `artifacts/delivery.md`, and holds for the owner's 「过目通过」 when fix's hand-off
   declares an `owner-review:` line.
-- **merge** (gate; skill `merge`, `merge.py`, the per-repo merge lock, tool window 10
+- **merge** (gate; skill `merge`, `merge.py`, the single-dispatch server landing lease
+  (`resources: {locks: [merge]}`), tool window 10
   minutes; wrap attrs `integration`) — checks publish's heads against the evidence's heads, merges
-  each PR at its verified head under the daemon's merge lock, and on a pass registers the
+  each PR at its verified head under the single-dispatch server landing lease — the same
+  AIHub key develop's landing interval holds — each real merge preceded by
+  `pf step lock-check`, and on a pass registers the
   landing record the script wrote (`pf step hub wrap-attrs integration
   @artifacts/merge/landing.json`); a PR that moved, closed, was retargeted or was refused
   FAILs back to `sync`. As the lane's last step it writes the work item's wrap summary.

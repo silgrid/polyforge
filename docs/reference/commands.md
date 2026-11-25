@@ -197,6 +197,27 @@ detaching the child, `pf file edit <child> --parent ""` (a running child is
 refused `CHILD_RUNNING`); a refused `pf submit` of such a parent names the
 same command beside `pf file dep rm` for an edge.
 
+### The landing-lock projection (`pf queue` / `pf watch`)
+
+A ticket that waits for the server landing lock (polyforge#245 epic 3/3)
+carries the read-only `landing_lock` field on its aihub record:
+`{state, observed_at, as_of, age_ms?, keys:[{repo, branch, position,
+since}]}`. `state` is `waiting` (a live queue entry), `none` (a fresh
+snapshot with no entry), `stale` (a cached snapshot older than the 15 s
+window) or `unavailable` (no readable evidence). `position` is the 1-based
+rank among the live waiters of that key; the holder is not a position, and
+each key this ticket actually queued on is listed. `pf queue` renders the
+LANDING column with `等待合入锁 #N` (several keys: `#1,#3`), a stale row
+keeps its last position marked `（陈旧）`, and an unavailable snapshot shows
+`锁状态不可用` with no position. `pf watch --once` renders the same words
+on its `landing:` line with the keys (`repo (branch)`), and a stale value
+with no key shows no landing line (never a fabricated `#?`); a lock-only
+remote snapshot adds `progress:   不可用（<code>）`. Only this ticket's
+queue state is projected: the holding 持有者 (holder), a token, a machine
+id, a request id and other tickets never appear. `landing_lock` is optional on the wire, so
+an old reader ignores it and keeps its old shape; a terminal hub status
+outranks a leftover waiting projection.
+
 ## `pf file create` / `pf queue` — one `--attr` shape
 
 `pf file create --attr <path>=json-value` writes a dotted path nested
@@ -770,6 +791,7 @@ pf step ask "<question>" | pf step ask - (stdin)
 pf step recall [--type T] [--tags a,b] [--limit N] [--any] <query>
 pf step memory show <id>
 pf step remember --type experience.wrap --title S [--tags a,b] <content | - | @file>
+pf step lock-check --repo <claim repo name>
 pf step hub get <wi>
 pf step hub list [--status S] [--bundle L] [--attr <path>=<value>]... [--limit N]
 pf step hub file --key K --lane L --goal G --content <text | @file> [--priority P] [--label X]...
@@ -777,6 +799,13 @@ pf step hub attrs <wi | key:K> --set <key> <json | @file> [--if <path>=<value>].
 pf step hub wrap-attrs <name> <json | @file>
 pf step hub batch <@ops.json | ->
 ```
+
+`pf step lock-check --repo <name>` is the one before-merge check: the
+daemon renews the calling ticket's landing lease of that claim repository
+and answers 0 only while it still holds it. Every refusal — no lease, a
+lost lease, a token the server rejects, a missing command or a network
+error — means no merge may run; the answer carries no token.
+`merge.py` and `revert.py` run it before every real `gh pr merge`.
 
 Inside a workflow step only: the step's one way to
 reach the daemon, and through it aihub. Outside a step (no `PF_WI_ID` +

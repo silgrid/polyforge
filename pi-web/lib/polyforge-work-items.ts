@@ -11,6 +11,7 @@ import {
   type PolyforgeWorkItemDetail,
   type PolyforgeWorkItemRow,
 } from "./polyforge-work-items-pure";
+import { sanitizeLandingLock } from "./polyforge-landing-lock";
 
 /**
  * Server-side reads for the Work panel's read-only 工单列表 sub-tab.
@@ -96,6 +97,7 @@ function text(value: unknown): string | null {
 export function sanitizeWorkItemRow(raw: unknown): PolyforgeWorkItemRow | null {
   const row = asRow(raw);
   if (!row || !isPolyforgeWorkItemId(row.id) || typeof row.slug !== "string" || row.slug === "") return null;
+  const landing = sanitizeLandingLock(row.landing_lock);
   return {
     id: row.id,
     slug: row.slug,
@@ -106,6 +108,7 @@ export function sanitizeWorkItemRow(raw: unknown): PolyforgeWorkItemRow | null {
     goal: text(row.goal),
     created_at: text(row.created_at),
     ...(row.acceptance_missing === true ? { acceptance_missing: true as const } : {}),
+    ...(landing ? { landing_lock: landing } : {}),
   };
 }
 

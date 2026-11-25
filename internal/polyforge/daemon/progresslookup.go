@@ -148,7 +148,17 @@ func (d *Daemon) maybeRemoteSnapshot(item *api.WorkItem, local protocol.WatchSna
 		var ae *api.Error
 		if errors.As(err, &ae) {
 			switch ae.Code {
-			case api.ErrCoreStaleHolder, api.ErrCoreGone, api.ErrCoreUnsupported, api.ErrCoreUpstream:
+			case api.ErrCoreStaleHolder, api.ErrCoreUpstream:
+				// Q3: the remote progress is unavailable, but the hub record
+				// (and its landing lock) is readable. Answer the lock-only
+				// partial snapshot with a controlled error, never a fabricated
+				// known=true or an execution block; no lock evidence keeps the
+				// typed error.
+				if ll := leaseLockOf(local, item); ll != nil {
+					return lockOnlySnapshot(local, item, ae.Code), nil
+				}
+				return local, ae
+			case api.ErrCoreGone, api.ErrCoreUnsupported:
 				return local, ae
 			}
 		}
@@ -233,4 +243,41 @@ func (d *Daemon) artifactRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ans.Artifact)
+}
+
+// leaseLockOf answers the freshest landing-lock evidence a partial watch
+// may keep: the local snapshot's own projection (built from the same hub
+// read) or the hub item's.
+func leaseLockOf(local protocol.WatchSnapshot, item *api.WorkItem) *api.LeaseProjection {
+	if local.LeaseProjection != nil && (local.LeaseProjection.Waiting() || local.LeaseProjection.State == api.LeaseNone) {
+		return local.LeaseProjection
+	}
+	if item != nil && item.LeaseProjection != nil {
+		return item.LeaseProjection
+	}
+	return nil
+}
+
+// lockOnlySnapshot is the partial watch answer of Q3: the ticket's identity
+// and its independently readable landing lock, with a controlled
+// progress_error and no execution/known fabrication.
+func lockOnlySnapshot(local protocol.WatchSnapshot, item *api.WorkItem, code string) protocol.WatchSnapshot {
+	snap := protocol.WatchSnapshot{
+		WorkItem:        local.WorkItem,
+		Slug:            local.Slug,
+		LeaseProjection: leaseLockOf(local, item),
+		LockOnly:        true,
+		ProgressError:   code,
+		Events:          []protocol.EventEntry{},
+	}
+	if item != nil {
+		if snap.WorkItem == "" {
+			snap.WorkItem = item.ID
+		}
+		if snap.Slug == "" {
+			snap.Slug = item.Slug
+		}
+		snap.HubStatus = item.Status
+	}
+	return snap
 }
