@@ -739,7 +739,7 @@ var cmdOps = &Command{
 		"pf ops auto [on|off]    # off = only explicit pf submit; on = the daemon also pulls the ready queue itself (bare = show)\n" +
 		"pf ops max [N]          # max concurrent jobs on this machine, N >= 1; lasts until the daemon restarts, and a `pf config set`/`pf config reload` that changes [daemon] max_concurrent_jobs overrides it (last action wins); bare = show\n" +
 		"pf ops role [interactive|runner] [--force|--if-unset]  # the machine role the heartbeat negotiates: interactive (the operator's machine; --force takes it over from the machine holding it) or runner; --if-unset applies only while no operator chose a role on this Cell (the choice is kept across restarts) (the session-start adapters use it); bare = show; the Cell resolves like every Cell-scoped command (--profile, else PF_PROFILE, else the cwd's workspace, else default)\n" +
-		"pf ops shutdown         # graceful shutdown (quiesce); the restart loop ends with it — start again with `pf daemon ensure`\n" +
+		"pf ops shutdown         # graceful shutdown (quiesce); the restart loop ends with it (unless its runtime drain runs out: exit 1, restarted) — start again with `pf daemon ensure`\n" +
 		"pf ops drain --upgrade [--force]  # the Host-level upgrade drain (polyforge#160): from here on new submits, automatic claims and task spawns are refused (DAEMON-409) while running work goes on; an idle Host answers and it is safe to upgrade, a busy one refuses until --force (in-flight sessions are interrupted and resume after the restart); the refusal ends with the daemon restart — Host-level, takes no --profile\n" +
 		"pf ops end-session <wi> --reason <text>  # admin/maintainer: force-end a stuck holder's session (WI -> queued; then `pf submit <wi>` anywhere)",
 	Setup: func(fs *flag.FlagSet) {},
@@ -1045,7 +1045,9 @@ the next daemon start. A reload that changes max_concurrent_jobs
 overrides pf ops max (last action wins). A machine whose no Cell
 carries a [workspace] mapping is refused (pf daemon ensure starts the
 daemon only once at least one Cell has one). pf ops shutdown
-stops the daemon for good: the loop ends with the clean exit.
+stops the daemon for good: the loop ends with the clean exit (a
+shutdown whose runtime drain runs out of its 30s deadline exits 1 and
+is restarted; a second pf ops shutdown then stops it for good).
 
 pf daemon [--flag value] ... runs the local polyforge daemon in the
 foreground (a UDS server hosting the runtime and observe projections). The real entry is assembled: cmd/pf/main.go

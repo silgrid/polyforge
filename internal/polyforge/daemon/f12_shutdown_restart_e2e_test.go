@@ -147,6 +147,52 @@ func waitFor(t *testing.T, what string, bound time.Duration, probe func() bool) 
 	t.Fatalf("%s never happened within %v", what, bound)
 }
 
+// stateSnapshot is runtime-state.json as one Run left it: its bytes and
+// its mtime.
+type stateSnapshot struct {
+	raw   []byte
+	mtime time.Time
+}
+
+// assertStateQuiescent checks the data dir right after who's Run returned
+// (polyforge#278: the shutdown drains the actors and persists before Run
+// returns): runtime-state.json parses and no temp file of its atomic
+// write is left. The snapshot it returns lets assertStateUnchanged prove
+// that no write landed after Run returned.
+func assertStateQuiescent(t *testing.T, dataDir, who string) stateSnapshot {
+	t.Helper()
+	path := filepath.Join(dataDir, "runtime-state.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("runtime-state.json after %s's Run returned: %v", who, err)
+	}
+	if !json.Valid(raw) {
+		t.Fatalf("runtime-state.json unparsable after %s's Run returned:\n%s", who, raw)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmps, err := filepath.Glob(filepath.Join(dataDir, ".runtime-state.json.*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tmps) != 0 {
+		t.Fatalf("temp files of the state write left after %s's Run returned: %v", who, tmps)
+	}
+	return stateSnapshot{raw: raw, mtime: fi.ModTime()}
+}
+
+// assertStateUnchanged checks that runtime-state.json still holds the
+// bytes and mtime of want, and that no temp file of its write appeared.
+func assertStateUnchanged(t *testing.T, dataDir, who string, want stateSnapshot) {
+	t.Helper()
+	got := assertStateQuiescent(t, dataDir, who)
+	if string(got.raw) != string(want.raw) || !got.mtime.Equal(want.mtime) {
+		t.Fatalf("runtime-state.json was written after %s's Run returned (mtime %s → %s):\nthen:\n%s\nnow:\n%s", who, want.mtime, got.mtime, want.raw, got.raw)
+	}
+}
+
 func e2eConfig(sock, ws, data, hubBase string, hub *fakeHub, sp runtime.Spawner) Config {
 	return Config{
 		MachineID:     "m-e2e",
@@ -270,8 +316,9 @@ func TestShutdownRestartFullChainPushIdempotency(t *testing.T) {
 	})
 	// ...and wi_e2e_push's commit-dirty commit stands locally: its
 	// reconciliation step (the push now parked in the hook, then the
-	// relaunch) is in flight. The shutdown below does not wait for that
-	// step: its push lands on its own, and its relaunch meets the latch
+	// relaunch) is in flight. That step is its actor's accepted
+	// operation: the shutdown below drains it before its persist
+	// (polyforge#278), its push lands, and its relaunch meets the latch
 	// and starts nothing — without this wait the latch could come down
 	// before the lane reached wi_e2e_push at all.
 	waitFor(t, "old daemon's commit-dirty commit of "+wiPush, 10*time.Second, func() bool {
@@ -357,6 +404,7 @@ func TestShutdownRestartFullChainPushIdempotency(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("old daemon Run never returned")
 	}
+	assertStateQuiescent(t, data, "the old daemon")
 
 	pushedHead := gitHead(t, gitPush, "HEAD")
 	if got := gitHead(t, barePush, "refs/heads/main"); got != pushedHead {
@@ -390,6 +438,7 @@ func TestShutdownRestartFullChainPushIdempotency(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("third daemon Run never returned")
 	}
+	afterD3 := assertStateQuiescent(t, data, "the third daemon")
 
 	// The chain ends consistent and rejection-free: the server ref and
 	// the capsule agree (the fresh process's commit-dirty may have
@@ -412,6 +461,10 @@ func TestShutdownRestartFullChainPushIdempotency(t *testing.T) {
 	if strings.Contains(string(body), "commit-dirty-on-recover push failed") {
 		t.Fatalf("the shutdown+restart chain logged a failed commit-dirty push:\n%s", body)
 	}
+
+	// No late write: the state file is byte for byte, mtime included, the
+	// one the third daemon's Run left, and no temp file appeared since.
+	assertStateUnchanged(t, data, "the third daemon", afterD3)
 }
 
 // ctxSpawner spawns plain (immediately-acking) fake agents while the
@@ -510,10 +563,11 @@ func TestShutdownDuringStartupReconciliationNeverServesFace(t *testing.T) {
 		t.Fatal("the face still accepts connections after a shutdown that closed it mid-reconciliation")
 	}
 
-	// The in-flight push was the only lane: the shutdown does not wait
-	// for it (it starts no agent behind the latch), and it lands — the
-	// server ref and the capsule agree, the same idempotent end state the
-	// full-chain test asserts.
+	// The in-flight push was the only lane, and it ran in the work item's
+	// actor: the shutdown drained it before its persist (polyforge#278;
+	// it starts no agent behind the latch), so it lands — the server ref
+	// and the capsule agree, the same idempotent end state the full-chain
+	// test asserts.
 	waitFor(t, "the in-flight push to land", 15*time.Second, func() bool {
 		return gitHead(t, bare, "refs/heads/main") == gitHead(t, gitDir, "HEAD")
 	})

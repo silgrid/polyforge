@@ -1,12 +1,15 @@
 package daemon
 
 // shutdown_late_start_test.go — an agent start still binding when the
-// shutdown latches (the shutdown does not wait for it) leaves no agent
-// process behind: whether it binds shortly after or only once Run
-// returned, its binder tears it down.
+// shutdown latches leaves no agent process behind: whether it binds
+// during the sequence (the runtime drain waits for it) or only once Run
+// returned (the drain ran out of its deadline: the shutdown and Run
+// report errRuntimeDrainTimeout and the data-dir lock stays held until
+// the start ended), its binder tears it down.
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -69,6 +72,8 @@ func TestShutdownLateAgentStartLeavesNoProcess(t *testing.T) {
 			proceed := make(chan struct{})
 			bound := make(chan *procAgent, 1)
 			var once sync.Once
+			var proceedOnce sync.Once
+			release := func() { proceedOnce.Do(func() { close(proceed) }) }
 			td := newTestDaemon(t, func(c *Config) {
 				c.AgentStarter = func(ctx context.Context, in runtime.AgentStartInput) (Agent, error) {
 					once.Do(func() { close(entered) })
@@ -82,6 +87,19 @@ func TestShutdownLateAgentStartLeavesNoProcess(t *testing.T) {
 					return a, nil
 				}
 			})
+			// registered after newTestDaemon's cleanup, so it runs first:
+			// a red run never leaves the start parked behind the settle
+			t.Cleanup(release)
+			if delay < 0 {
+				// the start binds only once Run returned: a short drain
+				// deadline runs out while it is parked
+				drain := td.drainRuntime
+				td.drainRuntime = func(ctx context.Context) error {
+					ctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+					defer cancel()
+					return drain(ctx)
+				}
+			}
 			const wi = "wi_late_start"
 			mkBare(t, td.cfg.GitRemoteBase, wi)
 			if _, err := td.client.ClaimWithModels(wi, "normal", nil); err != nil {
@@ -92,15 +110,26 @@ func TestShutdownLateAgentStartLeavesNoProcess(t *testing.T) {
 			case <-time.After(20 * time.Second):
 				t.Fatal("the agent start never began")
 			}
-			if err := td.Shutdown(context.Background(), DirectShutdownCause()); err != nil {
-				t.Fatalf("shutdown: %v", err)
+			err := td.Shutdown(context.Background(), DirectShutdownCause())
+			if delay >= 0 {
+				if err != nil {
+					t.Fatalf("shutdown: %v", err)
+				}
+			} else if !errors.Is(err, errRuntimeDrainTimeout) {
+				t.Fatalf("shutdown = %v, want an error matching errRuntimeDrainTimeout", err)
 			}
 			select {
-			case <-td.runDone:
+			case runErr := <-td.runDone:
+				if delay < 0 && !errors.Is(runErr, errRuntimeDrainTimeout) {
+					t.Fatalf("Run = %v, want an error matching errRuntimeDrainTimeout", runErr)
+				}
 			case <-time.After(20 * time.Second):
 				t.Fatal("Run did not return")
 			}
-			close(proceed)
+			if delay < 0 && dataDirLockFree(td.cfg.DataDir) {
+				t.Fatal("the data-dir lock was free after Run returned while the agent start was still parked")
+			}
+			release()
 			var a *procAgent
 			select {
 			case a = <-bound:
@@ -113,6 +142,11 @@ func TestShutdownLateAgentStartLeavesNoProcess(t *testing.T) {
 					t.Fatal("the late-bound agent process outlived the shutdown")
 				}
 				time.Sleep(20 * time.Millisecond)
+			}
+			if delay < 0 {
+				waitFor(t, "the data-dir lock to come free after the agent start returned", 15*time.Second, func() bool {
+					return dataDirLockFree(td.cfg.DataDir)
+				})
 			}
 		})
 	}

@@ -5,10 +5,17 @@ package daemon
 // restart path cannot recover — so the shutdown only stops the work and
 // saves what exists nowhere else: cancel the actors and the loops → terminate
 // each live agent tree → push each job's task-repo WIP to refs/pf-wip
-// (all jobs in parallel) → persist state.json once → close the face.
-// The waiting shares one wipLimit deadline. Running work
-// items are not session-ended: they stay running at aihub with their
-// session, and the next start attaches them.
+// (all jobs in parallel) → drain the runtime actors (their accepted
+// operations, each with its state persist, run to the end; the entry
+// takes no new one) → persist state.json once → close the face. The WIP
+// step and the drain share one wipLimit deadline, so Run (which returns
+// after the shutdown) releases the data-dir lock only once no actor
+// writes runtime-state.json any more. A drain that runs out of the
+// deadline makes the shutdown's result errRuntimeDrainTimeout (every
+// caller and Run return it) and Run keeps the lock until the actors
+// really stopped or the process exits. Running work items are not
+// session-ended: they stay running at aihub with their session, and the
+// next start attaches them.
 
 import (
 	"context"
@@ -21,31 +28,34 @@ import (
 )
 
 // wipLimit bounds the waiting part of the shutdown: terminating the
-// agent trees (10s each) and the parallel WIP pushes.
+// agent trees (10s each), the parallel WIP pushes and the runtime drain,
+// counted from the cancel.
 const wipLimit = 30 * time.Second
 
-// Shutdown runs the shutdown once; concurrent callers wait for the first
-// run (or their ctx). cause names the trigger for the log.
 // obsDrainLimit bounds the shutdown's wait for the observe lane.
 const obsDrainLimit = 10 * time.Second
 
+// Shutdown runs the shutdown once; concurrent callers wait for the first
+// run (or their ctx) and get its result. cause names the trigger for the
+// log.
 func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 	first := false
 	d.shutOnce.Do(func() { first = true })
 	if !first {
 		select {
 		case <-d.shutDone:
-			return nil
+			return d.shutErr
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
 	fmt.Fprintf(os.Stderr, "daemon: shutdown: cause=%s\n", cause)
 	d.modes.SetShuttingDown()
-	// Cancel the runtime actors' context, then the loops: no actor starts
-	// an agent or a retry any more, an in-flight claim defers itself (its
-	// journal entry replays at the next start), and every driver — its
-	// context is the run context — terminates its step process.
+	// Cancel the runtime actors' context, then the loops: the actors'
+	// entry closes, no actor starts an agent or a retry any more, an
+	// in-flight claim defers itself (its journal entry replays at the
+	// next start), and every driver — its context is the run context —
+	// terminates its step process.
 	d.rt.Close()
 	d.cancelRun()
 	d.tasks.Close()
@@ -70,6 +80,19 @@ func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 		}(ji)
 	}
 	wg.Wait()
+	// The runtime drain, on the same deadline (the WIP step's time counts
+	// against it): every operation an actor accepted before the cancel —
+	// a close parked in a hub call, a reconcile mid-push — runs to its
+	// end, its state persist included, before the final persist below and
+	// before Run releases the data-dir lock. No lock is held while it
+	// waits. Running out is the shutdown's result; the final persist
+	// still runs (its generation guard keeps an older snapshot from
+	// landing last).
+	var shutErr error
+	if err := d.drainRuntime(wctx); err != nil {
+		shutErr = fmt.Errorf("%w: %v", errRuntimeDrainTimeout, err)
+		fmt.Fprintf(os.Stderr, "daemon: shutdown: the runtime's actors did not stop within %s: %v — the data-dir lock is kept until they do\n", wipLimit, err)
+	}
 	// the observe lane drains (its context is the run context): its last
 	// event and decision-feed writes land before the shutdown returns
 	if d.obsStarted.Load() {
@@ -91,6 +114,7 @@ func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 		_ = mh.Close()
 	}
 	d.closeFace()
+	d.shutErr = shutErr
 	close(d.shutDone)
-	return nil
+	return shutErr
 }

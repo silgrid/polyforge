@@ -1791,9 +1791,10 @@ direct child, so `pf supervise` is what forwards it to every child.
   signal is forwarded ONCE to every child (a second daemon signal would
   hard-abort its shutdown and lose the checkpoint), and the daemon gets
   the `--grace` (default 60s, floor 45s) to finish its shutdown — its
-  WIP pushes can take up to 30s — before anything still running is
+  WIP pushes and its runtime drain share one 30s deadline — before anything still running is
   SIGKILLed. The outer container's stop timeout must be that grace plus
-  a margin. Exit status: the daemon's own when it ended the run (0/78);
+  a margin. Exit status: the daemon's own when it ended the run (0/78, or 1 when
+  its shutdown's runtime drain ran out of that deadline);
   0 when a forwarded stop finished inside the grace; 1 when the grace
   ran out; 2 usage.
 
