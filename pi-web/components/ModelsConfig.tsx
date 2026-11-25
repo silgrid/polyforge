@@ -1738,7 +1738,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
         action={<ConfigButton size="small" data-models-config-retry="" onClick={retry}>{t("i18n.retry")}</ConfigButton>}
       />
     ) : options.length === 0 ? (
-      <ConfigEmptyState action={<ConfigButton data-models-config-add="" onClick={addProvider}>{t("i18n.addProvider")}</ConfigButton>}>
+      <ConfigEmptyState action={<ConfigButton data-models-config-add="" onClick={addProvider}>{t("models.configAddFirstProvider")}</ConfigButton>}>
         {t("models.configNoProviders")} {t("models.configNoProvidersHint")}
       </ConfigEmptyState>
     ) : detailContent ?? (

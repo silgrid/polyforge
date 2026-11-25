@@ -455,6 +455,9 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   };
   const invalidTiers = tierColumn?.capable ? stepTierInvalidReferences(tierColumn.tiers, defined) : [];
   const view = readView({ loading, error: Boolean(error || saveError), count: models.length });
+  // A kept draft (or the last good default) is data: a reload keeps the select
+  // on screen instead of replacing it with a skeleton (Q5 A).
+  const defaultView = readView({ loading: loading && !shownDefault, error: Boolean(error || saveError), count: models.length + (shownDefault ? 1 : 0) });
   return (
     <div className="settings-section settings-models" data-model-page="unified">
       {(error || saveError || enabled.failure) && (
@@ -466,18 +469,18 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
       <ConfigSplitView>
         <ModelPageNav page={page} onSelect={changePage} />
         <ConfigDetail>
-          {page === "default" && view.kind === "loading" && (
+          {page === "default" && defaultView.kind === "loading" && (
             <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
               <div data-model-skeleton=""><ConfigSkeleton label={t("i18n.loading")} lines={3} /></div>
               <ModelSaveBar count={0} saving={saving} onSave={() => void saveDraft()} />
             </section>
           )}
-          {page === "default" && view.kind === "empty" && (
+          {page === "default" && defaultView.kind === "empty" && (
             <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
               <ModelEmptyState onOpenAccount={onOpenAccount} onOpenProviders={() => setPage("providers")} />
             </section>
           )}
-          {page === "default" && view.kind === "ready" && (
+          {page === "default" && defaultView.kind === "ready" && (
             <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
               <h3>{t("models.defaultHeading")}</h3>
               <select className="settings-model-default-select" aria-label={t("models.defaultHeading")} disabled={saving} value={selected}

@@ -26,7 +26,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { chromium } from "playwright";
-import { COLD_MS, NAV_MS } from "./timeouts.mjs";
+import { ACTION_MS, COLD_MS, NAV_MS } from "./timeouts.mjs";
 import { assertNoDevServer, createCheck, createHarness, reportTitled, root, writeFileAtomic, writeHostSession } from "./harness.mjs";
 
 assertNoDevServer();
@@ -255,6 +255,8 @@ const clipboard = (page) => page.evaluate(() => navigator.clipboard?.readText().
 // page opens on the Host pane, the install command's home).
 async function copiesNeedle(page, dialog, needle) {
   for (const button of await dialog.locator("main .config-detail").getByRole("button").all()) {
+    // polyforge#271: the package card's link leaves the section; it is not a copy control.
+    if (await button.getAttribute("data-package-manage") !== null) continue;
     await button.click({ timeout: 2000 }).catch(() => {});
     if (String(await clipboard(page)).includes(needle)) return true;
   }
