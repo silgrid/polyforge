@@ -114,3 +114,20 @@ test("agents settings is a sidebar destination", async () => {
   assert.match(settings, /type="number"/, "the concurrency field lives in the settings pane");
   assert.match(settings, /data-agents-reload/, "the reload notice and action move with the settings");
 });
+
+// polyforge#271 round 2 (review r2#2): the concurrency field shows the value
+// read back from the server and a blur that changes nothing sends no write.
+test("the concurrency field shows the read-back value and an unchanged blur sends no write", async () => {
+  const { AgentFeatureSettings, concurrencyCommit } = await jiti.import("./AgentsConfig.tsx");
+  const render = (maxConcurrent) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(AgentFeatureSettings, {
+    builtInEnabled: true, maxConcurrent, settingsLoading: false, settingsSaving: false,
+    reloadNeeded: false, reloading: false, sessionId: null,
+    onToggle: () => {}, onMaxConcurrent: () => {}, onReload: () => {},
+  })));
+  assert.match(render(4), /value="4"/, "the input shows the value read back, not the initial default");
+  assert.match(render(6), /value="6"/, "a later read-back remounts the input with the new value");
+  assert.equal(concurrencyCommit("4", 4), null, "an unchanged blur writes nothing");
+  assert.equal(concurrencyCommit("6", 4), 6, "a changed value is committed");
+  assert.equal(concurrencyCommit("0", 4), null, "an out-of-range value is not written");
+  assert.equal(concurrencyCommit("", 4), null, "an empty value is not written");
+});

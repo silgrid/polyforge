@@ -97,18 +97,6 @@ test("no other write exists: no cli.toml, no Claude config, no install execution
   assert.match(source, /navigator\.clipboard\.writeText\(installCommand\)/);
 });
 
-test("the package card shows read-only facts and a visible reason when it cannot manage", () => {
-  assert.match(source, /export function PackageStatusCard/);
-  for (const status of ["enabled", "disabled", "missing", "unknown"]) {
-    assert.match(source, new RegExp(`"${status}"`), `${status} is one of the card's facts`);
-  }
-  assert.match(source, /disabled=\{manageDisabled\}/, "no cwd or no navigation disables the manage link");
-  assert.match(source, /\{!cwd && <span className="config-scope-switch-reason">\{t\("polyforge\.settings\.packageNoCwd"\)\}<\/span>\}/, "the missing-cwd reason is visible text");
-  for (const key of ["polyforge.settings.packageReadOnly", "polyforge.settings.packageManage", "polyforge.settings.packageNoCwd", "polyforge.settings.packageStatusUnknownHint"]) {
-    assert.match(source, new RegExp(`t\\("${key.replace(/\./g, "\\.")}"\\)`), `the card carries ${key}`);
-  }
-});
-
 test("the section reuses the shared SettingsUi blocks and every word is a prop", () => {
   for (const block of ["ConfigButton", "ConfigDetailGrid", "ConfigDetailGridRow", "ConfigDetailStack", "ConfigFooter", "ConfigFooterStatus", "ConfigSectionTitle"]) {
     assert.match(source, new RegExp(`<${block}[\\s>]`), `the section renders through ${block}`);

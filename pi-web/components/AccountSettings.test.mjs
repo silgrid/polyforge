@@ -417,3 +417,23 @@ test("account states: skeleton, empty action, alert notice and stale data", () =
   assert.match(claudePending, /data-claude-status="loading"/);
   assert.match(claudePending, /data-config-skeleton/, "the claude card's first read is a skeleton too");
 });
+
+// polyforge#271 round 2 (review r2#5): the retry control is wired to the
+// page's read again — clicking it calls the retry the page passed in.
+test("account retry control issues the read again", () => {
+  const t = (key) => key;
+  let retries = 0;
+  const tree = AccountReadStatus({ loading: false, readError: "settings.accountReadFailed", hasData: false, t, onRetry: () => { retries += 1; } });
+  const walk = (node, out = []) => {
+    if (Array.isArray(node)) { for (const child of node) walk(child, out); return out; }
+    if (!node || typeof node !== "object" || !("props" in node)) return out;
+    if (typeof node.type === "function") return walk(node.type(node.props), out);
+    out.push(node);
+    walk(node.props.children, out);
+    return out;
+  };
+  const retry = walk(tree).find((node) => node.props?.["data-account-retry"] !== undefined);
+  assert.ok(retry, "the retry control is rendered");
+  retry.props.onClick();
+  assert.equal(retries, 1, "the retry control did not call the read again");
+});

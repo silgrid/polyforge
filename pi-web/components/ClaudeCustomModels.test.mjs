@@ -300,3 +300,18 @@ test("editor read states preserve drafts", async () => {
   assert.ok(texts(empty).some((text) => text.includes("models.claudeCustomEmpty")), "an empty list names what is missing");
   assert.ok(keys(empty).includes("data-claude-models-add"), "the empty list offers the add action");
 });
+
+// polyforge#271 round 2 (review r2#8): the real component's first read is the
+// section's skeleton — the wiring the state block alone cannot prove.
+test("the real section's first read is its skeleton", async () => {
+  const state = setup();
+  try {
+    const attributes = byAttr(state.hook, "data-claude-models-loading");
+    assert.ok(attributes.length > 0, "the real component's first read is not its skeleton");
+    const text = textOf(state.hook).join("\n");
+    assert.ok(text.includes("models.claudeCustomLoading"), "the loading label is missing");
+    assert.ok(!text.includes("models.claudeCustomEmpty"), "a pending read is the empty state");
+  } finally {
+    state.restore();
+  }
+});

@@ -138,3 +138,30 @@ test("connected providers and add choices stay disjoint", async () => {
   })));
   assert.ok(emptyPicker.includes("No provider can be added"), "an empty picker says so");
 });
+
+// polyforge#271 round 2 (review r2#4): a refresh keeps the last good rows;
+// a failure shows its alert beside them, and a skeleton only appears before
+// the first successful read (Q5 A).
+test("provider refresh keeps the last good rows", async () => {
+  const { ProviderAccountView } = await jiti.import("./PiAccountLogin.tsx");
+  const { accountProviderRows } = await jiti.import("@/lib/provider-listing.ts");
+  const rows = accountProviderRows(
+    [{ id: "alpha", name: "Alpha", loggedIn: true }],
+    [{ id: "gamma", displayName: "Gamma", configured: true, modelCount: 2 }],
+  );
+  const args = { rows, onRetry: noop, onAdd: noop, onSelect: noop, onOpenModels: noop };
+  const stale = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, { ...args, loading: false, readError: "settings.accountReadFailed", hasData: true })));
+  assert.match(stale, /data-connected-provider="alpha"/, "a failed refresh hid the last good rows");
+  assert.match(stale, /data-connected-provider="gamma"/);
+  assert.match(stale, /role="alert"/, "the failure is announced beside the rows");
+  assert.ok(stale.includes("settings.accountStale"), "the rows are named as the last good read");
+  assert.ok(!stale.includes("data-config-skeleton"), "a failed refresh with data is not a skeleton");
+
+  const refreshing = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, { ...args, loading: true, readError: null, hasData: true })));
+  assert.match(refreshing, /data-connected-provider="alpha"/, "a refresh hid the rows behind a skeleton");
+  assert.ok(!refreshing.includes("data-config-skeleton"));
+
+  const first = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, { ...args, rows: accountProviderRows([], []), loading: true, readError: null, hasData: false })));
+  assert.match(first, /data-config-skeleton/, "the first read is still a skeleton");
+  assert.ok(!first.includes("data-connected-provider"));
+});

@@ -248,3 +248,27 @@ test("model subpages expose loading empty and partial failure", async () => {
   assert.match(empty, /data-model-action="open-account"/, "the empty model set offers the account action");
   assert.match(empty, /data-model-action="open-providers"/, "the empty model set offers the Providers action");
 });
+
+// polyforge#271 round 2 (review r2#3/#5): a refresh with rows keeps them (no
+// skeleton), and the page's failure block is an alert with a working retry.
+test("model page failure renders an alert with a working retry", async () => {
+  const { ModelPageError } = await jiti.import("./HarnessModelSettings.tsx");
+  const { readView } = await jiti.import("@/lib/settings-read-states.ts");
+  assert.equal(readView({ loading: true, error: false, count: 1 }).kind, "ready", "a refresh with rows keeps them on screen");
+  let retries = 0;
+  const tree = ModelPageError({ summary: "The read failed.", onRetry: () => { retries += 1; } });
+  const walk = (node, out = []) => {
+    if (Array.isArray(node)) { for (const child of node) walk(child, out); return out; }
+    if (!node || typeof node !== "object" || !("props" in node)) return out;
+    if (typeof node.type === "function") return walk(node.type(node.props), out);
+    out.push(node);
+    walk(node.props.children, out);
+    return out;
+  };
+  const nodes = walk(tree);
+  assert.ok(nodes.some((node) => node.props?.role === "alert"), "the failure is an alert");
+  const retry = nodes.find((node) => node.props?.["data-model-retry"] !== undefined);
+  assert.ok(retry, "the retry control is rendered");
+  retry.props.onClick();
+  assert.equal(retries, 1, "the retry control did not call the read again");
+});

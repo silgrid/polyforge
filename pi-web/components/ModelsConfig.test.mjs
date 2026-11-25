@@ -331,3 +331,43 @@ test("editor read states preserve drafts", () => {
   assert.match(loading, /data-models-config-loading/, "the first models.json read is a skeleton");
   assert.ok(!loading.includes("No provider is configured"), "a pending read is not the empty state");
 });
+
+// polyforge#271 round 2 (review r2#5): the Providers subpage's three states
+// render as shared blocks: skeleton, 「没有 Provider」 with Add, and an alert
+// with a retry that calls the page's reload.
+test("providers read states render skeleton empty and retry", async () => {
+  const { ProvidersReadStates } = await tsxJiti.import("./ModelsConfig.tsx");
+  const t = (key) => key;
+  let retries = 0;
+  const walk = (node, out = []) => {
+    if (Array.isArray(node)) { for (const child of node) walk(child, out); return out; }
+    if (!node || typeof node !== "object" || !("props" in node)) return out;
+    if (typeof node.type === "function") return walk(node.type(node.props), out);
+    out.push(node);
+    walk(node.props.children, out);
+    return out;
+  };
+  const loading = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ProvidersReadStates, {
+    loading: true, loadError: null, providerCount: 0, t, onRetry: () => {}, onAdd: () => {},
+  })));
+  assert.match(loading, /data-models-config-loading/);
+  assert.ok(!loading.includes("models.configNoProviders"), "a pending read is not the empty state");
+
+  const empty = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ProvidersReadStates, {
+    loading: false, loadError: null, providerCount: 0, t, onRetry: () => {}, onAdd: () => {},
+  })));
+  assert.match(empty, /data-models-config-add=""/);
+  assert.ok(empty.includes("models.configNoProviders"));
+
+  const failedTree = ProvidersReadStates({ loading: false, loadError: "boom", providerCount: 0, t, onRetry: () => { retries += 1; }, onAdd: () => {} });
+  const failed = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ProvidersReadStates, {
+    loading: false, loadError: "boom", providerCount: 0, t, onRetry: () => { retries += 1; }, onAdd: () => {},
+  })));
+  assert.match(failed, /role="alert"/);
+  assert.match(failed, /data-models-config-retry=""/);
+  assert.ok(!failed.includes("models.configNoProviders"), "a failed read is not the empty state");
+  const retry = walk(failedTree).find((node) => node.props?.["data-models-config-retry"] !== undefined);
+  assert.ok(retry, "the retry control is rendered");
+  retry.props.onClick();
+  assert.equal(retries, 1, "the retry control did not call the reload");
+});

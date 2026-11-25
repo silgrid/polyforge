@@ -1,5 +1,5 @@
 // carries: components/PolyforgeConfig*, components/polyforge-config-helpers*, components/PolyforgeInstallCard*, lib/polyforge-install-pure*, app/api/polyforge/detect/*
-// carries: components/SettingsPanel*, components/SettingsUi*, components/settings-ui-helpers*, lib/settings-navigation*, lib/package-settings*, app/api/plugins/*
+// carries: components/SettingsPanel*, components/SettingsUi*, components/settings-ui-helpers*, components/AgentsConfig*, lib/settings-navigation*, lib/package-settings*, app/api/plugins/*
 // pi#122 (wi_Gvm8wRZcr88O) — Settings Polyforge section: end-to-end acceptance pass.
 //
 // Authored pre-code against artifacts/spec.md (AC1–AC12, AC14; AC13 is this file
@@ -147,6 +147,7 @@ const T = {
   S9: "S9: The detect response discloses no credentials, home paths or env values",
   S10: "S10: The pi package switch writes only through /api/plugins and auto re-detects",
   S11: "S11: Detection runs once per open, never polls, and 重新检测 bypasses the 60 s presence cache",
+  S13: "S13: The sub-agents settings are a sidebar destination and navigating them writes nothing (polyforge#271)",
   S12: "S12: Docs change with the code (polyforge-panel.md and settings-ui.md describe the section)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
@@ -419,8 +420,14 @@ try {
       (url.pathname === "/api/plugins" ? posts : otherWrites).push(entry);
     });
     await dialog.locator("main").getByRole("button", { name: "Manage on the Plugins page" }).click();
-    await dialog.getByRole("button", { name: "Plugins", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
-    await delay(1200);
+    // polyforge#271 round 2 (review r2#6): poll for the Plugins section host
+    // actually becoming visible — the always-present tab button proves nothing.
+    const pluginsShown = async () => (await dialog.locator('.settings-section-host[data-settings-section="plugins"]:not([hidden])').count()) > 0;
+    for (const deadline = Date.now() + ACTION_MS; Date.now() < deadline;) {
+      if (await pluginsShown()) break;
+      await delay(100);
+    }
+    assert.ok(await pluginsShown(), "the manage link did not open the Plugins section");
     assert.equal(posts.length, 0, `browsing the package card issued ${posts.length} /api/plugins writes`);
     assert.deepEqual(otherWrites, [], "a write path other than /api/plugins was used");
     assert.equal(readFileSync(cliToml, "utf8"), cliBefore, "cli.toml was written");
@@ -428,6 +435,41 @@ try {
     await pfTab(dialog).click();
     await dialog.locator("main [data-package-status]").first().waitFor({ state: "visible", timeout: ACTION_MS });
   });
+  // S13 — polyforge#271 AC2 (B1, Q7 A): the sub-agents' settings are a
+  // sidebar destination; opening it and switching the selection writes nothing.
+  await checkPage(T.S13, "sub-agents settings is a sidebar destination", {}, async (page) => {
+    const writes = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.startsWith("/api/subagents") && request.method() !== "GET") {
+        writes.push({ path: url.pathname, method: request.method(), body: request.postData() ?? "" });
+      }
+    });
+    await page.context().route(/\/api\/subagents\/profiles\?/, (route) => route.fulfill({ json: { profiles: [{
+      name: "fixture-agent", displayName: "Fixture Agent", scope: "global", filePath: "/fixture/agents/fixture-agent.md",
+      description: "", systemPrompt: "", tools: ["read"], loadSkills: false, loadExtensions: false,
+      codemode: "off", mcp: "off", promptMode: "append", inheritContext: false, runInBackground: false, enabled: true,
+    }] } }));
+    await page.context().route(/\/api\/subagents\/settings$/, (route) => route.fulfill({ json: { enabled: true, maxConcurrent: 4 } }));
+    const dialog = await openSettings(page);
+    const subAgents = dialog.getByRole("button", { name: "Sub-agents", exact: true });
+    await subAgents.click({ timeout: ACTION_MS });
+    const settingsNav = dialog.locator('[data-agents-nav="settings"]');
+    await settingsNav.waitFor({ state: "visible", timeout: ACTION_MS });
+    const pane = dialog.locator('[data-agents-settings-pane]');
+    for (const deadline = Date.now() + ACTION_MS; Date.now() < deadline;) {
+      if (await pane.count()) break;
+      await delay(100);
+    }
+    assert.ok(await pane.count(), "the sidebar settings destination did not open its detail");
+    assert.equal(await pane.getByRole("switch").count(), 1, "the built-in sub-agent switch is not in the settings detail");
+    assert.equal(await pane.locator('input[type="number"]').count(), 1, "the concurrency field is not in the settings detail");
+    await dialog.getByRole("button", { name: "Fixture Agent", exact: true }).click({ timeout: ACTION_MS });
+    await settingsNav.click({ timeout: ACTION_MS });
+    await pane.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.deepEqual(writes, [], "navigating the sub-agent settings wrote to the server");
+  });
+
   // S11 — cadence: one detect per open, no polling, and the manual re-detect
   // control bypasses the 60 s presence cache (the stub version flips within the
   // cache window and the section must show the new value). Fixture: no global
