@@ -406,7 +406,7 @@ try {
     await pfTab(dialog).click();
     const card = dialog.locator("main [data-package-status]").first();
     await card.waitFor({ state: "visible", timeout: COLD_MS });
-    for (const deadline = Date.now() + NAV_MS; Date.now() < deadline && (await card.getAttribute("data-package-status")) === "pending";) await delay(100);
+    for (const deadline = Date.now() + COLD_MS; Date.now() < deadline && (await card.getAttribute("data-package-status")) === "pending";) await delay(100);
     assert.notEqual(await card.getAttribute("data-package-status"), "pending", "the package status settles");
     assert.equal(await dialog.locator("main").getByRole("switch", { name: "Polyforge package (global)" }).count(), 0,
       "the package switch is gone (the Plugins page is the write path)");
