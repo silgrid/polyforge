@@ -155,6 +155,17 @@ the exported event file:
                output_tokens and pi's output are both read, claude's
                records deduped by message.id (stepcall/usage.go).
 
+The landing-lock section (polyforge#249, after the delivery block) reads
+each capsule's `merge_lock_queued|granted|renew_failed|lost|released` events
+and its automatic `rewind` reasons: wait is the union of the closed
+per-key intervals (server since + granted queued_ms), lost counts distinct
+cycles once (renew_failed adds nothing), and moved-base counts rewinds whose
+reason carries `branch moved since verification`. Open intervals, a missing
+queued/granted pair, a conflicting duplicate and an old log with no
+landing-lock events are reported unknown (with the closed subtotal and the
+identified lower bound kept apart), never 0. CSV gains the landing_* tail
+columns; the old columns keep their order.
+
 With --events the report also gains the blocking-findings block
 (polyforge#242), over the same run set:
 
@@ -233,7 +244,7 @@ blocks.
 """
 import argparse
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 import glob
 import json
 import math
@@ -1129,7 +1140,9 @@ REPO_LINE = re.compile(r'^- `([^`]+)`: `([^`]*)` → `([^`]*)`')
 RECEIPT_KEYS = ('approved_files', 'wall_min', 'owner_wait_min', 'effective_min',
                 'build_wall_min', 'build_rounds', 'review_rejections',
                 'verification_rejections', 'rework_min', 'failed_dispatches',
-                'out_tok_s', 'estimate_files', 'estimate_ratio')
+                'out_tok_s', 'estimate_files', 'estimate_ratio',
+                'landing_wait_ms', 'landing_lost_cycles', 'landing_moved_base',
+                'landing_open_intervals', 'landing_state')
 
 
 def iso_ts(s):
@@ -1181,15 +1194,182 @@ def event_body(e):
 # ---- landing lock (polyforge#245 epic 3/3, polyforge#249) ----
 
 def landing_lock_stats(events):
-    """stub: the per-run landing-lock metrics (see the module docstring)."""
-    return {'state': 'unknown', 'wait_ms': None, 'closed_ms': 0,
-            'open_intervals': 0, 'key_intervals': 0, 'lost': None,
-            'moved_base': None, 'moved_base_identified': 0, 'key_wait_ms': []}
+    """One run's landing-lock metrics from its merge_lock_* and rewind
+    events (polyforge#249 Q4-Q8):
+
+      wait_ms          the ticket's wall wait: the union of every closed
+                       per-key interval (server since + granted queued_ms),
+                       never the sum of overlapping keys; a cycle with no
+                       closed interval, a duplicate with conflicting facts
+                       or a granted key without its queued entry is
+                       incomplete, and wait_ms stays None.
+      closed_ms        the closed subtotal even when the run is incomplete.
+      open_intervals   queued keys with no closing fact (a lost cycle is
+                       open: the server gave no end stamp).
+      lost             distinct cycles with a merge_lock_lost; renew_failed
+                       alone adds nothing and a duplicate lost counts once.
+      moved_base       automatic rewinds whose reason carries the stable
+                       substring `branch moved since verification`; a rewind
+                       with no reason leaves it unknown (an identified lower
+                       bound is kept apart), and an old log with no
+                       landing-lock events is unknown, never 0.
+      state            complete | incomplete | unknown.
+    """
+    st = {'state': 'unknown', 'wait_ms': None, 'closed_ms': 0,
+          'open_intervals': 0, 'key_intervals': 0, 'lost': None,
+          'moved_base': None, 'moved_base_identified': 0, 'key_wait_ms': []}
+    if events is None:
+        return st
+    landing = [e for e in events if (e.get('kind') or '').startswith('merge_lock_')]
+    if not landing:
+        # No new event at all is an old/absent log: unknown, never 0.
+        return st
+
+    rewinds = [e for e in events if e.get('kind') == 'rewind']
+    lower, missing_reason = 0, False
+    for e in rewinds:
+        reason = event_body(e).get('reason')
+        if not isinstance(reason, str) or not reason.strip():
+            missing_reason = True
+            continue
+        if 'branch moved since verification' in reason:
+            lower += 1
+    st['moved_base_identified'] = lower
+    st['moved_base'] = None if missing_reason else lower
+
+    keys = {}
+    cycles = {}
+    lost_cycles = set()
+    invalid = False
+
+    def one_key(cid, row):
+        repo = row.get('repo') if isinstance(row, dict) else None
+        branch = row.get('branch') if isinstance(row, dict) else None
+        if not isinstance(repo, str) or not repo or not isinstance(branch, str):
+            return None
+        return (cid, repo, branch)
+
+    for e in landing:
+        body = event_body(e)
+        cid = body.get('cycle_id')
+        if not isinstance(cid, str) or not cid:
+            invalid = True
+            continue
+        cycles.setdefault(cid, set())
+        if e.get('kind') == 'merge_lock_lost':
+            lost_cycles.add(cid)
+            continue
+        if e.get('kind') not in ('merge_lock_queued', 'merge_lock_granted', 'merge_lock_released'):
+            continue
+        rows = body.get('keys')
+        if not isinstance(rows, list):
+            invalid = True
+            continue
+        for row in rows:
+            kk = one_key(cid, row)
+            if kk is None:
+                invalid = True
+                continue
+            cycles[cid].add(kk)
+            cur = keys.setdefault(kk, {'start': None, 'ms': None, 'canceled': False, 'queued': False})
+            kind = e.get('kind')
+            if kind == 'merge_lock_queued':
+                if cur['queued']:
+                    # The same cycle/key queued again is one wait (Q4): the
+                    # consumer defense drops the repeat, never counts it.
+                    continue
+                cur['queued'] = True
+                cur['start'] = iso_ts(body.get('since')) or e.get('at')
+                if cur['start'] is None:
+                    invalid = True
+            elif kind == 'merge_lock_granted':
+                if not cur['queued']:
+                    invalid = True
+                if cur['start'] is None:
+                    cur['start'] = iso_ts(body.get('since')) or e.get('at')
+                ms = row.get('queued_ms')
+                if not isinstance(ms, int) or isinstance(ms, bool) or ms < 0:
+                    ms = body.get('queued_ms')
+                if not isinstance(ms, int) or isinstance(ms, bool) or ms < 0:
+                    invalid = True
+                    continue
+                if cur['ms'] is not None and cur['ms'] != ms:
+                    invalid = True
+                    continue
+                cur['ms'] = ms
+            elif kind == 'merge_lock_released':
+                if body.get('reason') == 'waiting_canceled':
+                    cur['canceled'] = True
+    st['key_intervals'] = len(keys)
+    intervals = []
+    open_intervals = 0
+    for kk, cur in keys.items():
+        if cur['ms'] is not None and cur['start'] is not None:
+            end = cur['start'] + timedelta(milliseconds=cur['ms'])
+            intervals.append((cur['start'], end))
+            st['key_wait_ms'].append(cur['ms'])
+        elif not cur['canceled']:
+            open_intervals += 1
+        elif cur['start'] is None:
+            invalid = True
+    st['open_intervals'] = open_intervals
+    merged = merge_intervals(intervals)
+    st['closed_ms'] = sum(int((b - a).total_seconds() * 1000) for a, b in merged)
+    st['lost'] = len(lost_cycles)
+    complete = (not invalid and open_intervals == 0 and keys and
+                all(cur['ms'] is not None and cur['start'] is not None for cur in keys.values()) and
+                all(len(v) > 0 for v in cycles.values()))
+    if complete:
+        st['state'] = 'complete'
+        st['wait_ms'] = st['closed_ms']
+    else:
+        st['state'] = 'incomplete'
+    return st
 
 
-def landing_block(caps_dir, rows, events_dir, out=sys.stdout):
-    """stub: the landing-lock section of the --events report."""
-    return
+def landing_lock_line(st):
+    """One run's human landing-lock line: wait, lost, moved-base, each
+    saying unknown (with its identified lower bound) rather than 0."""
+    if st['state'] == 'unknown':
+        wait = 'wait unknown (no landing-lock events)'
+    elif st['wait_ms'] is None:
+        wait = 'wait unknown (closed %d ms, %d open interval(s))' % (st['closed_ms'], st['open_intervals'])
+    else:
+        wait = 'wait %d ms (%s)' % (st['wait_ms'], st['state'])
+    lost = 'lost unknown' if st['lost'] is None else 'lost %d' % st['lost']
+    if st['moved_base'] is None:
+        moved = 'moved-base unknown'
+        if st['moved_base_identified']:
+            moved += ' (%d identified)' % st['moved_base_identified']
+    else:
+        moved = 'moved-base %d' % st['moved_base']
+    return '%s | %s | %s' % (wait, lost, moved)
+
+
+def landing_block(caps_dir, rows, events_dir, out=None):
+    """the landing-lock section of the --events report (polyforge#249):
+    one line per capsule of every lane, then each lane's complete-sample
+    count and wait median. An absent event file, an old log and an open
+    interval are named; they never enter the complete median."""
+    out = out or sys.stdout
+    p = lambda s='': print(s, file=out)
+    p()
+    p('== landing lock (polyforge#249) ==')
+    p(f'  events: {os.path.basename(os.path.normpath(events_dir))}')
+    by_lane = {}
+    for r in rows:
+        cap = os.path.join(caps_dir, r['capsule'])
+        st = landing_lock_stats(load_events(cap, events_dir))
+        by_lane.setdefault(r['lane'], []).append(st)
+        p('  %-36s %-10s %s' % (r['capsule'], r['lane'], landing_lock_line(st)))
+    for lane in sorted(by_lane):
+        samples = [s for s in by_lane[lane] if s['state'] == 'complete']
+        waits = [s['wait_ms'] for s in samples if s['wait_ms'] is not None]
+        median = 'unknown' if not waits else '%d ms' % statistics.median(waits)
+        lost = sum(s['lost'] for s in samples if s['lost'] is not None)
+        moved = sum(s['moved_base'] for s in samples if s['moved_base'] is not None)
+        p('  %s: complete %d/%d; median wait %s (complete samples); lost %d; moved-base %d'
+          % (lane, len(samples), len(by_lane[lane]), median, lost, moved))
 
 
 def merge_intervals(iv):
@@ -1607,6 +1787,7 @@ def delivery_row(cap, row, events):
         1 for e in events if e['kind'] == 'gate_verdict' and event_body(e).get('step') == 'verification')
     d['rework'] = rework_s(events, recs)
     d['failed_dispatches'] = sum(1 for e in events if e['kind'] == 'step_failed')
+    d['landing'] = landing_lock_stats(events)
     return d
 
 
@@ -2005,6 +2186,11 @@ def receipt_fields(d):
         'out_tok_s': fmt_float(d['throughput']),
         'estimate_files': 'unknown' if d['estimate'] is None else str(d['estimate']),
         'estimate_ratio': 'unknown' if d['estimate_ratio'] is None else f"{d['estimate_ratio']:.2f}",
+        'landing_wait_ms': 'unknown' if d['landing']['wait_ms'] is None else str(d['landing']['wait_ms']),
+        'landing_lost_cycles': 'unknown' if d['landing']['lost'] is None else str(d['landing']['lost']),
+        'landing_moved_base': 'unknown' if d['landing']['moved_base'] is None else str(d['landing']['moved_base']),
+        'landing_open_intervals': str(d['landing']['open_intervals']),
+        'landing_state': d['landing']['state'],
     }
 
 
@@ -2082,6 +2268,7 @@ def main(argv):
     report(rows, quarantined)
     if a.events:
         delivery_block(a.capsules_dir, rows, a.events)
+        landing_block(a.capsules_dir, rows, a.events)
         blocking_lines(blocking)
     if manifest is not None:
         cohort_report(rows, a.capsules_dir, manifest, cohort_path)
