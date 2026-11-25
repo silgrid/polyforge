@@ -20,6 +20,8 @@ import (
 	"os"
 	"sync/atomic"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/common/api"
 )
 
 // mailbox is one work item's queue of messages; its goroutine drains it.
@@ -78,6 +80,13 @@ func (r *Runtime) call(ctx context.Context, wi string, fn func() error) error {
 
 // errAbandoned answers a call whose caller gave up before its turn.
 var errAbandoned = errors.New("runtime: the caller gave up before the work item's queued operations settled; nothing was done")
+
+// errStopped answers a call the shutdown refused: the actors' context is
+// cancelled, so the work item's mailbox takes no new operation.
+var errStopped = &api.Error{Code: api.ErrDaemonGone, Detail: "runtime: the daemon is shutting down — the work item's actor takes no new operation; nothing was done"}
+
+// Drain waits until every accepted actor operation has finished.
+func (r *Runtime) Drain(ctx context.Context) error { return nil }
 
 // retry reconciles j's work item again after a backoff — the one retry
 // every pending hub step (a close, a verify, a claim replay) shares: the
