@@ -1027,3 +1027,33 @@ test("context usage: a missing window comes from the chat header's catalog", asy
   assert.deepEqual(filled.queue, status.queue, "the rest of the snapshot is untouched");
   assert.equal(await fillPolyforgeContextWindows(null), null, "a degraded read stays degraded");
 });
+
+test("watch carries the landing-lock projection, and a lock-only snapshot keeps its identity without faking execution", async () => {
+  const { sanitizeWatch } = await loadSubject();
+  const base = {
+    known: true, work_item: "wi_lock", slug: "alpha#1",
+    execution: { workflow_status: "running", current_step: "sync", steps: { sync: { status: "in_progress" } } },
+    events: [],
+    landing_lock: { state: "waiting", observed_at: "2026-11-25T00:00:00Z", as_of: "2026-11-25T00:00:01Z",
+      keys: [{ repo: "github.com/o/app", branch: "epic/245", position: 3 }] },
+  };
+  const snap = sanitizeWatch(base);
+  assert.equal(snap.landingLock.state, "waiting");
+  assert.equal(snap.landingLock.keys[0].position, 3);
+  assert.equal(snap.lockOnly, undefined);
+  assert.equal(sanitizeWatch({ ...base, landing_lock: { state: "stale", age_ms: 20000,
+    keys: [{ repo: "r", branch: "b", position: 2 }] } }).landingLock.state, "stale");
+
+  const partial = sanitizeWatch({
+    known: false, lock_only: true, work_item: "wi_lock", slug: "alpha#1", progress_error: "CORE-504",
+    landing_lock: base.landing_lock,
+  });
+  assert.equal(partial.lockOnly, true);
+  assert.equal(partial.progressError, "CORE-504");
+  assert.equal(partial.wi, "wi_lock");
+  assert.deepEqual(partial.steps, []);
+  assert.equal(partial.workflowStatus, "");
+  assert.equal(partial.landingLock.keys[0].position, 3);
+  assert.equal(sanitizeWatch({ known: false, lock_only: true, work_item: "wi_lock", slug: "alpha#1" }), null,
+    "lock_only without a projection is no snapshot");
+});

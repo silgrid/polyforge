@@ -153,3 +153,14 @@ test("the list keeps its two GET reads; the detail's params section is the child
   const urls = [...source.matchAll(/fetch\((`[^`]+`|"[^"]+")/g)].map((m) => m[1]);
   assert.deepEqual(urls, ['"/api/polyforge/work-items"', "`/api/polyforge/work-items/${encodeURIComponent(id)}`"], "the params read and write live in the child component, not here");
 });
+
+test("landing lock badge on work items: one conditional row badge, the shared helper's words", () => {
+  assert.match(source, /row\.landing_lock && landingLockText\(row\.landing_lock, t\) !== ""/);
+  assert.match(source, /data-pf-landing-lock=""/);
+  assert.match(source, /title=\{landingLockKeysText\(row\.landing_lock\)\}/);
+  for (const locale of ["en", "zh-CN", "zh-TW"]) {
+    assert.ok(locales[locale]["polyforge.landingLock.waiting"], `${locale} waiting`);
+    assert.ok(locales[locale]["polyforge.landingLock.stale"], `${locale} stale`);
+    assert.ok(locales[locale]["polyforge.landingLock.unavailable"], `${locale} unavailable`);
+  }
+});
