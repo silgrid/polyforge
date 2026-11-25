@@ -717,6 +717,7 @@ func (s *Server) hListWIs(w http.ResponseWriter, r *http.Request, idn *identity)
 	if err != nil {
 		return err
 	}
+	s.decorateLandingLocks(items)
 	return reply(w, http.StatusOK, struct {
 		Items []core.WIView `json:"items"`
 		Total int           `json:"total"`
@@ -745,6 +746,9 @@ func (s *Server) hGetWI(w http.ResponseWriter, r *http.Request, idn *identity) e
 	if err != nil {
 		return err
 	}
+	one := []core.WIView{*wi}
+	s.decorateLandingLocks(one)
+	wi.LandingLock = one[0].LandingLock
 	return reply(w, http.StatusOK, wi)
 }
 
@@ -1167,6 +1171,9 @@ func (s *Server) hReadyQueue(w http.ResponseWriter, r *http.Request, idn *identi
 	if err != nil {
 		return err
 	}
+	s.decorateLandingLocks(q.Items)
+	s.decorateLandingLocks(q.Running)
+	s.decorateLandingLocks(q.Paused)
 	return reply(w, http.StatusOK, q)
 }
 

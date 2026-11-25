@@ -236,3 +236,17 @@ func leaseBodyScope(_ *http.Request, body []byte) string {
 	}
 	return strings.TrimSpace(req.WorkItem)
 }
+
+// decorateLandingLocks fills each work item's landing-lock projection.
+func (s *Server) decorateLandingLocks(items []core.WIView) {
+	if s.Leases == nil {
+		return
+	}
+	for i := range items {
+		ll, err := s.Leases.LandingSnapshot(items[i].ID)
+		if err != nil || ll == nil {
+			continue
+		}
+		items[i].LandingLock = ll
+	}
+}

@@ -20,6 +20,7 @@ package core
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -568,4 +569,10 @@ type leaseStmt interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	Query(query string, args ...any) (*sql.Rows, error)
 	QueryRow(query string, args ...any) *sql.Row
+}
+
+// LandingSnapshot answers one ticket's read-only landing-lock projection.
+func (m *LeaseManager) LandingSnapshot(workItemID string) (*api.LandingLock, error) {
+	now := m.now().UnixNano()
+	return &api.LandingLock{State: api.LandingLockNone, ObservedAt: stamp(now), AsOf: stamp(now)}, nil
 }
