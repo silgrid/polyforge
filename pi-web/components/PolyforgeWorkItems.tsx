@@ -15,9 +15,20 @@ import {
   type PolyforgeWorkItemRow,
 } from "@/lib/polyforge-work-items-pure";
 import { MarkdownBody } from "./MarkdownBody";
-import { landingLockKeysText, landingLockText } from "@/lib/polyforge-landing-lock";
+import { landingLockKeysText, landingLockText, type PolyforgeLandingLock } from "@/lib/polyforge-landing-lock";
 import { PolyforgeWorkItemParams } from "./PolyforgeWorkItemParams";
 import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearchBar } from "./PolyforgeSearchBar";
+
+/** One landing-lock badge (polyforge#249): the shared presentational piece
+ *  the 工单列表 row and the selected job card render, so the two faces show
+ *  the same words and title. */
+export function PolyforgeLandingLockBadge(_props: {
+  lock: PolyforgeLandingLock;
+  t: (key: string, values?: Record<string, string>) => string;
+  dim?: boolean;
+}): ReactNode {
+  return null;
+}
 
 /**
  * The Work panel's read-only 工单列表 surface: every mapped
