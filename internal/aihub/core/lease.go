@@ -20,7 +20,6 @@ package core
 import (
 	"database/sql"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
