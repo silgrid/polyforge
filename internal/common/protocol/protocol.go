@@ -122,12 +122,12 @@ const (
 )
 
 // EventEntry is one line of the daemon events file + observe output.
-// Seq is the observe ring's per-WI monotonic append ordinal, assigned at
-// Append time; served entries carry it so a client can resume with
-// ?after=<last seq>. The durable events file keeps its wire-stable shape
-// and does NOT write a seq (Seq is a live-ring concept that a daemon
-// restart legitimately renumbers from 1), so Seq marshals away there
-// via omitempty.
+// Seq is the per-WI monotonic append ordinal, assigned at Append time and
+// persisted in the events file; served entries carry it so a client can
+// resume with ?after=<last seq>. A missing or replaced file renumbers from
+// 1, and an append failure consumes no seq, so seq is a resume cursor, not
+// a cross-cycle identity: producers and consumers dedupe on a non-secret
+// semantic key (polyforge#249).
 type EventEntry struct {
 	At   string          `json:"at"`
 	Kind string          `json:"kind"`

@@ -15,6 +15,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
@@ -23,20 +24,26 @@ import (
 // IntervalLeases is the daemon's landing-lease manager (daemon/landing.go).
 type IntervalLeases interface {
 	// Hold takes the lease of every repository at the ticket's target
-	// branch, waiting in the server's FIFO queue; queued reports the queue
-	// position while it waits.
+	// branch, waiting in the server's FIFO queue; queued reports one
+	// repository's queue position while it waits.
 	Hold(ctx context.Context, wi, capsuleDir string, repos []string, queued func(LandingQueue)) (IntervalLease, error)
 }
 
-// LandingQueue is one repository's queue observation during Hold.
+// LandingQueue is one repository's queue observation during Hold: the
+// normalized repository and target branch, the 1-based position and the
+// server's first-seen stamp. It is non-secret.
 type LandingQueue struct {
 	Repo, Branch string
 	Position     int
 	Since        time.Time
-	Cycle        string
+	// Cycle is the manager's non-secret cycle id; empty on a fake that
+	// does not expose one, where the driver's local id stands in.
+	Cycle string
 }
 
-// LandingKey is one held lock key of a group.
+// LandingKey is one held lock key of a group, with the queue facts the
+// events carry. A manager may expose them through Keys; a test fake
+// without the method simply emits no key list.
 type LandingKey struct {
 	Repo, Branch string
 	Position     int
@@ -65,6 +72,38 @@ const (
 	EvLeaseReleased    = "merge_lock_released"
 	EvLeaseLost        = "merge_lock_lost"
 )
+
+// leaseCycleInfo is the optional manager face the events read: a non-secret
+// cycle id and the held keys. A fake in a unit test need not implement it.
+type leaseCycleInfo interface {
+	Cycle() string
+	Keys() []LandingKey
+}
+
+// leaseInfo answers the group's cycle id and keys, or a driver-local id and
+// no key list for a manager that does not expose them.
+func leaseInfo(hold IntervalLease, fallbackCycle string) (string, []LandingKey) {
+	if info, ok := hold.(leaseCycleInfo); ok {
+		if c := info.Cycle(); c != "" {
+			return c, info.Keys()
+		}
+		return fallbackCycle, info.Keys()
+	}
+	return fallbackCycle, nil
+}
+
+// leaseEventKeys maps landing keys onto the event body's non-secret list.
+func leaseEventKeys(keys []LandingKey) []map[string]any {
+	out := make([]map[string]any, 0, len(keys))
+	for _, k := range keys {
+		row := map[string]any{"repo": k.Repo, "branch": k.Branch, "position": k.Position, "queued_ms": k.QueuedMS}
+		if !k.Since.IsZero() {
+			row["since"] = k.Since.UTC().Format(time.RFC3339Nano)
+		}
+		out = append(out, row)
+	}
+	return out
+}
 
 // leaseInterval answers the lane's landing interval as step indexes.
 func (d *Driver) leaseInterval() (enter, exit int, ok bool) {
@@ -96,9 +135,57 @@ func (d *Driver) releaseLease(reason string) {
 	if d.leaseHold == nil {
 		return
 	}
-	d.leaseHold.Release()
+	hold := d.leaseHold
+	cycle, keys := leaseInfo(hold, "")
+	hold.Release()
 	d.leaseHold = nil
-	d.emit(EvLeaseReleased, map[string]any{"reason": reason})
+	body := map[string]any{"reason": reason, "requeue_count": d.leaseRequeues()}
+	if cycle != "" {
+		body["cycle_id"] = cycle
+	}
+	if len(keys) > 0 {
+		body["keys"] = leaseEventKeys(keys)
+	}
+	d.emit(EvLeaseReleased, body)
+}
+
+// emitLeaseLoss writes the pair a renewal failure produces (Q15): a
+// renew_failed fact, then one lost for the whole group. Both name the cycle
+// and keys and a controlled reason; the raw server error never rides them.
+func (d *Driver) emitLeaseLoss(stepID string) {
+	if d.leaseHold == nil {
+		return
+	}
+	cycle, keys := leaseInfo(d.leaseHold, "")
+	body := map[string]any{"step": stepID, "requeue_count": d.leaseRequeues()}
+	if cycle != "" {
+		body["cycle_id"] = cycle
+	}
+	if len(keys) > 0 {
+		body["keys"] = leaseEventKeys(keys)
+	}
+	renew := map[string]any{}
+	for k, v := range body {
+		renew[k] = v
+	}
+	renew["reason"] = "renew_failed"
+	d.emit(EvLeaseRenewFailed, renew)
+	lost := map[string]any{}
+	for k, v := range body {
+		lost[k] = v
+	}
+	lost["reason"] = "lost"
+	d.emit(EvLeaseLost, lost)
+}
+
+// leaseRequeues is the number of times this driver re-entered the interval
+// after a release: 0 on the first cycle. It is memory-only (a restart
+// starts a new cycle, and the events stay honest about that).
+func (d *Driver) leaseRequeues() int {
+	if d.leaseHolds <= 1 {
+		return 0
+	}
+	return d.leaseHolds - 1
 }
 
 // releaseLeaseForAsk releases the interval's lease before the driver
@@ -204,7 +291,7 @@ func (d *Driver) ensureLease(ctx context.Context, stepID string) (bool, error) {
 		if err := d.leaseHold.Err(); err == nil {
 			return false, nil
 		} else {
-			d.emit(EvLeaseLost, map[string]any{"step": stepID, "error": err.Error()})
+			d.emitLeaseLoss(stepID)
 			d.markLeaseReentry()
 			d.releaseLease("lost")
 			d.leaseReentry = true
@@ -236,26 +323,73 @@ func (d *Driver) ensureLease(ctx context.Context, stepID string) (bool, error) {
 		return false, nil
 	}
 	repos := append([]string(nil), d.claimRepos...)
-	since := d.now()
+	next := d.leaseHolds + 1
+	cycleID := d.wi.ID + "#" + strconv.Itoa(next)
+	announced := map[string]bool{}
+	announcedAny := false
 	position := 0
-	announced := false
-	hold, err := d.cfg.IntervalLeases.Hold(ctx, d.wi.ID, d.wi.CapsuleDir, repos, func(q LandingQueue) {
-		position = q.Position
-		if !announced {
-			announced = true
-			since = q.Since
-			d.emit(EvLeaseQueued, map[string]any{"step": stepID, "position": q.Position, "since": q.Since.UTC().Format(time.RFC3339Nano)})
+	var since time.Time
+	queued := func(q LandingQueue) {
+		id := q.Repo + "\n" + q.Branch
+		if announced[id] {
+			return
+		}
+		announced[id] = true
+		if q.Cycle != "" {
+			cycleID = q.Cycle
+		}
+		position, since = q.Position, q.Since
+		body := map[string]any{"step": stepID, "cycle_id": cycleID, "position": q.Position,
+			"requeue_count": next - 1, "reason": "waiting"}
+		if !q.Since.IsZero() {
+			body["since"] = q.Since.UTC().Format(time.RFC3339Nano)
+		}
+		body["keys"] = []map[string]any{{"repo": q.Repo, "branch": q.Branch, "position": q.Position, "queued_ms": 0}}
+		d.emit(EvLeaseQueued, body)
+		if !announcedAny {
+			announcedAny = true
 			d.fact(supervise.StepQueued{Step: stepID, Reason: "waiting for the landing lock"})
 		}
-	})
+	}
+	hold, err := d.cfg.IntervalLeases.Hold(ctx, d.wi.ID, d.wi.CapsuleDir, repos, queued)
 	if err != nil {
 		return false, fmt.Errorf("taking the landing lock: %w", err)
 	}
+	d.leaseHolds = next
 	d.leaseHold = hold
-	body := map[string]any{"step": stepID}
-	if announced {
+	cycle, keys := leaseInfo(hold, cycleID)
+	// An immediately granted key still formed a 0 ms queued→granted pair
+	// (Q4); announce each key this cycle did not see queue.
+	for _, k := range keys {
+		id := k.Repo + "\n" + k.Branch
+		if announced[id] {
+			continue
+		}
+		announced[id] = true
+		body := map[string]any{"step": stepID, "cycle_id": cycle, "requeue_count": next - 1,
+			"reason": "waiting", "position": k.Position, "queued_ms": 0,
+			"keys": []map[string]any{{"repo": k.Repo, "branch": k.Branch, "position": k.Position, "queued_ms": 0}}}
+		if !k.Since.IsZero() {
+			body["since"] = k.Since.UTC().Format(time.RFC3339Nano)
+		}
+		d.emit(EvLeaseQueued, body)
+	}
+	body := map[string]any{"step": stepID, "cycle_id": cycle, "reason": "granted", "requeue_count": next - 1}
+	if len(keys) > 0 {
+		body["keys"] = leaseEventKeys(keys)
+		body["position"] = keys[0].Position
+		body["queued_ms"] = keys[0].QueuedMS
+		for _, k := range keys {
+			if k.QueuedMS > 0 {
+				body["queued_ms"] = k.QueuedMS
+				break
+			}
+		}
+	} else if announcedAny {
 		body["position"] = position
-		body["queued_ms"] = d.now().Sub(since).Milliseconds()
+		if !since.IsZero() {
+			body["queued_ms"] = d.now().Sub(since).Milliseconds()
+		}
 	}
 	d.emit(EvLeaseGranted, body)
 	return false, nil

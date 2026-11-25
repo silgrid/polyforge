@@ -25,11 +25,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -979,9 +981,13 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 			case req.Result.Intent != nil:
 				// the waive's own events ride info.extra (intent.go)
 			default:
-				info.extra = append(info.extra, appliedEvent{"rewind", map[string]any{
+				rewind := map[string]any{
 					"spawn_n": d.spawnN, "gate": req.StepID, "target": info.target, "archived": info.archived,
-				}})
+				}
+				if reason := eventReason(req.Result.Handoff); reason != "" {
+					rewind["reason"] = reason
+				}
+				info.extra = append(info.extra, appliedEvent{"rewind", rewind})
 			}
 		case OutcomeIncomplete:
 			kind = "incomplete"
@@ -1148,4 +1154,22 @@ func nextAttemptSeq(st *capsule.Step) int {
 		}
 	}
 	return seq + 1
+}
+
+// eventReason is the automatic rewind event's sanitized reason (Q5): the
+// hand-off's one-line reason, first line only, capped at 200 runes. It
+// changes no rewind decision, budget or lane behavior; the merge step's
+// stable substring (`branch moved since verification`) is what C1 matches.
+func eventReason(h *stepcall.Handoff) string {
+	if h == nil {
+		return ""
+	}
+	line := strings.TrimSpace(h.Reason)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	if r := []rune(line); len(r) > 200 {
+		line = string(r[:200])
+	}
+	return line
 }
