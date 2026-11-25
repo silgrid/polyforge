@@ -19,16 +19,23 @@ def ev(seq, kind, at, body):
 
 class ServerSinceTest(unittest.TestCase):
     def test_granted_server_since_wins_over_a_local_queued_stamp(self):
-        key = {'repo': 'github.com/o/app', 'branch': 'epic/245'}
+        a = {'repo': 'github.com/o/a', 'branch': 'epic/245'}
+        b = {'repo': 'github.com/o/b', 'branch': 'epic/245'}
         events = [
-            ev(1, 'merge_lock_queued', '2026-11-25T00:00:05Z',
-               {'cycle_id': 'c-a', 'reason': 'waiting', 'keys': [{**key, 'position': 1}]}),
-            ev(2, 'merge_lock_granted', '2026-11-25T00:00:12Z',
-               {'cycle_id': 'c-a', 'reason': 'granted', 'keys': [{**key, 'position': 1,
-                                                                 'since': '2026-11-25T00:00:00Z', 'queued_ms': 12000}]}),
+            # The daemon's queued stamps are local and differ; both grants
+            # answer the same server since. Only the server start makes the
+            # two intervals coincide.
+            ev(1, 'merge_lock_queued', '2026-11-25T00:00:07Z',
+               {'cycle_id': 'c-a', 'reason': 'waiting', 'keys': [{**a, 'position': 1}]}),
+            ev(2, 'merge_lock_queued', '2026-11-25T00:00:05Z',
+               {'cycle_id': 'c-a', 'reason': 'waiting', 'keys': [{**b, 'position': 1}]}),
+            ev(3, 'merge_lock_granted', '2026-11-25T00:00:12Z',
+               {'cycle_id': 'c-a', 'reason': 'granted', 'keys': [
+                   {**a, 'position': 1, 'since': '2026-11-25T00:00:00Z', 'queued_ms': 12000},
+                   {**b, 'position': 1, 'since': '2026-11-25T00:00:00Z', 'queued_ms': 12000}]}),
         ]
         st = rf.landing_lock_stats(events)
-        self.assertEqual(st['wait_ms'], 12000, 'the granted key carries the server start')
+        self.assertEqual(st['wait_ms'], 12000, 'the granted keys carry the server start')
         self.assertEqual(st['open_intervals'], 0)
 
 
