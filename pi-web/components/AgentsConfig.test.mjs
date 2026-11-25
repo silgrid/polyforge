@@ -136,13 +136,15 @@ test("the concurrency field shows the read-back value and an unchanged blur send
 // concurrency field follows the value read back from the server — a 10 shown
 // before the read must become 4 once the read answers 4 — and a blur that
 // leaves the read-back value alone writes nothing; an edit writes once.
-test("the concurrency field follows the read-back value through a re-render", async () => {
-  const { mkdtempSync, writeFileSync } = await import("node:fs");
+test("the concurrency field follows the read-back value through a re-render", async (t) => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { tmpdir } = await import("node:os");
   const fixture = (name) => new URL(`../hooks/__fixtures__/${name}`, import.meta.url).pathname;
   const lib = (name) => new URL(`../lib/${name}`, import.meta.url).pathname;
-  const stubs = join(mkdtempSync(join(tmpdir(), "pf271-agents-stub-")), "stubs.mjs");
+  const stubDir = mkdtempSync(join(tmpdir(), "pf271-agents-stub-"));
+  t.after(() => rmSync(stubDir, { recursive: true, force: true }));
+  const stubs = join(stubDir, "stubs.mjs");
   writeFileSync(stubs, `const t = (key) => key;
 const i18n = { t, locale: "en" };
 export function useI18n() { return i18n; }
