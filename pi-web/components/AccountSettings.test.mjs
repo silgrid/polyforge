@@ -373,3 +373,47 @@ test("the refusal's own words stay folded, the row reads in Chinese by its code 
   assert.ok(outside.includes("拒写"), "the refused status line is missing");
   assert.ok(outside.includes("服务端拒绝了这次改动，原文在「详情」里。"), "the row does not read by its code");
 });
+
+// polyforge#271 AC1 (A1, Q5 A): a first read with no value shows the shared
+// skeleton with a readable loading label; a failed read is a styled alert
+// notice with a retry action (never the empty state), and a refresh failure
+// keeps the last good read and says it is stale; a successful empty Cell list
+// offers its refresh action.
+test("account states: skeleton, empty action, alert notice and stale data", () => {
+  const t = (key, params) => params ? `${key} ${JSON.stringify(params)}` : key;
+
+  const pending = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, {
+    loading: true, readError: null, hasData: false, t, onRetry: noop,
+  })));
+  assert.match(pending, /data-account-loading/);
+  assert.match(pending, /data-config-skeleton/, "the first read is a shared skeleton");
+  assert.match(pending, /role="status"/);
+  assert.ok(pending.includes("settings.accountLoading"), "the loading label stays readable");
+  assert.ok(!pending.includes("settings.accountNoCells"), "a pending read is never the empty state");
+
+  const failed = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, {
+    loading: false, readError: "settings.accountReadFailed", hasData: false, t, onRetry: noop,
+  })));
+  assert.match(failed, /role="alert"/, "a failed read is announced");
+  assert.match(failed, /data-account-read-error/);
+  assert.ok(failed.includes("settings.accountReadFailed"));
+  assert.ok(failed.includes(">i18n.retry<"), "the error carries the retry action");
+  assert.ok(!failed.includes("settings.accountNoCells"), "a failed read is never the empty state");
+
+  const stale = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, {
+    loading: false, readError: "settings.accountReadFailed", hasData: true, t, onRetry: noop,
+  })));
+  assert.ok(stale.includes("settings.accountStale"), "a refresh failure says the data is the last good read");
+  assert.match(stale, /role="alert"/);
+
+  const emptyCells = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
+    harness: "pi", capabilities: null, onOpenLoginTerminal: noop, onRefresh: noop,
+    read: { claude: null, cells: [], doctorError: null },
+  })));
+  assert.match(emptyCells, /No Cell is configured on this machine/);
+  assert.match(emptyCells, /data-account-action="refresh-cells"/, "the empty Cell list offers its refresh action");
+
+  const claudePending = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, { claude: null, loaded: false })));
+  assert.match(claudePending, /data-claude-status="loading"/);
+  assert.match(claudePending, /data-config-skeleton/, "the claude card's first read is a skeleton too");
+});

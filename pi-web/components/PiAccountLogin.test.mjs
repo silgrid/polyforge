@@ -74,3 +74,67 @@ test("the picker offers what the filtered route answers — no custom entry, no 
   assert.match(html, /Anthropic/);
   assert.ok(!html.includes("Custom endpoint"), "the custom provider definition is 85a3's, not the account picker's");
 });
+
+// polyforge#271 AC2 (B3, Q2 A/Q3 A): the pi pane is a connected list plus an
+// add picker. A stored credential is connected; an unconfigured one is only
+// offered by the picker; the same provider's OAuth and API-key identities stay
+// two rows; an entry with no usable boolean folds as unknown; an empty list,
+// an empty picker and a failed read are three different states.
+test("connected providers and add choices stay disjoint", async () => {
+  const { ProviderAccountView } = await jiti.import("./PiAccountLogin.tsx");
+  const { accountProviderRows } = await jiti.import("@/lib/provider-listing.ts");
+  const oauthProviders = [
+    { id: "alpha", name: "Alpha", usesCallbackServer: false, loggedIn: true },
+    { id: "beta", name: "Beta", usesCallbackServer: false, loggedIn: false },
+    { id: "mystery", name: "Mystery", usesCallbackServer: false },
+  ];
+  const apiKeyProviders = [
+    { id: "gamma", displayName: "Gamma", configured: true, modelCount: 3 },
+    { id: "delta", displayName: "Delta", configured: false, modelCount: 1 },
+    { id: "alpha", displayName: "Alpha key", configured: false, modelCount: 0 },
+  ];
+  const rows = accountProviderRows(oauthProviders, apiKeyProviders);
+  const html = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, {
+    rows, loading: false, readError: null, onRetry: noop, onAdd: noop, onSelect: noop, onOpenModels: noop,
+  })));
+  const connected = [...html.matchAll(/data-connected-provider="([^"]+)" data-provider-kind="([^"]+)"/g)].map((m) => `${m[2]}:${m[1]}`);
+  assert.deepEqual(connected, ["oauth:alpha", "apikey:gamma"], "the list is exactly the stored credentials, per auth kind");
+  assert.ok(!html.includes("data-connected-provider=\"beta\""), "an unconnected provider is not in the list");
+  assert.ok(!html.includes("data-connected-provider=\"delta\""), "an unconfigured API key is not in the list");
+  assert.match(html, /data-unknown-provider="mystery"/, "an entry without a usable boolean folds as unknown");
+  assert.match(html, /Connection status unknown/);
+  assert.ok(html.includes("settings.accountCredentialsNote"), "the page says connected means a credential is stored");
+  assert.match(html, /data-account-action="open-models"/, "the custom-source scope note navigates to Models");
+
+  const picker = renderToStaticMarkup(h(I18nProvider, null, h(AddProviderPicker, {
+    oauthProviders, apiKeyProviders, onSelectOAuth: noop, onSelectApiKey: noop, onClose: noop,
+  })));
+  const available = [...picker.matchAll(/data-provider-available="([^"]+)" data-provider-kind="([^"]+)"/g)].map((m) => `${m[2]}:${m[1]}`);
+  assert.deepEqual(available, ["oauth:beta", "apikey:delta", "apikey:alpha"], "the picker offers only what is not connected");
+  assert.ok(!picker.includes("data-provider-available=\"alpha\" data-provider-kind=\"oauth\""), "the connected OAuth identity is not offered again");
+
+  const empty = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, {
+    rows: accountProviderRows([], []), loading: false, readError: null, onRetry: noop, onAdd: noop, onSelect: noop, onOpenModels: noop,
+  })));
+  assert.ok(empty.includes("settings.accountProviderNone"), "an empty list names what is missing");
+  assert.match(empty, /data-account-action="add-provider"/, "the empty list offers the add action");
+  assert.ok(!empty.includes("settings.accountProviderSearchNone"), "an empty list is not a search miss");
+
+  const pending = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, {
+    rows: accountProviderRows([], []), loading: true, readError: null, onRetry: noop, onAdd: noop, onSelect: noop, onOpenModels: noop,
+  })));
+  assert.match(pending, /data-config-skeleton/, "the first provider read is a skeleton");
+  assert.ok(!pending.includes("settings.accountProviderNone"), "a pending read is never the empty list");
+
+  const failed = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, {
+    rows: accountProviderRows([], []), loading: false, readError: "settings.accountReadFailed", onRetry: noop, onAdd: noop, onSelect: noop, onOpenModels: noop,
+  })));
+  assert.match(failed, /role="alert"/, "a failed provider read is an alert");
+  assert.match(failed, /data-account-providers-retry/);
+  assert.ok(!failed.includes("settings.accountProviderNone"), "a failed read is never the empty list");
+
+  const emptyPicker = renderToStaticMarkup(h(I18nProvider, null, h(AddProviderPicker, {
+    oauthProviders: [], apiKeyProviders: [], onSelectOAuth: noop, onSelectApiKey: noop, onClose: noop,
+  })));
+  assert.ok(emptyPicker.includes("settings.accountProviderAvailableNone"), "an empty picker says so");
+});
