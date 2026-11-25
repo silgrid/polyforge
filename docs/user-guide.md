@@ -204,7 +204,8 @@ The order the system actually runs:
    (`run.py --plan-from`, on the host). You watch and answer; you do not drive the steps.
 6. **Deliver.** The workflow's own last steps finish the run: `publish`
    pushes the feature branch at the verified head and opens or reuses the
-   PR, and the `merge` step merges it under the repo's merge lock and lands
+   PR, and the `merge` step merges it under the server landing lease the
+   lane holds from the final sync to the merge, and lands
    the work item (its agent runs `merge.py`) — unless the project declared
    its develop merges done by a person (`steps.<project>.merge.by:
    human`): the merge step then asks the owner over the open PRs and waits

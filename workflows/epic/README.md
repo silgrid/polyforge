@@ -49,7 +49,7 @@ verify-children --> sync --> build --> review --> verification --> publish --> m
   epic branch, its PR against the default branch, the delivery note carrying
   the total acceptance, the children's PR links and the seam resolutions.
 - **merge** (gate → sync, skill `merge`) — the PRs merged at the verified
-  heads and the LANDING RECORD the epic is wrapped with: `state: landed`
+  heads, each real merge preceded by `pf step lock-check`, and the LANDING RECORD the epic is wrapped with: `state: landed`
   (the epic enters the integration lane's pool as ONE record), its
   `merge_commits` the actual default-branch landing, its `children` the
   snapshot's landing records — the children keep their own
@@ -59,6 +59,21 @@ verify-children --> sync --> build --> review --> verification --> publish --> m
   lane re-runs from there — the review and the full verification included
   (the moved-base class is uncounted; past its own cap of 2 the merge gate
   asks the owner).
+
+## The landing interval
+
+The epic takes the landing lock like develop (owner ruling 2026-11-23): the
+lane declares `landing_lock: {enter: sync, exit: merge}`, so the daemon
+takes the server landing lease of every task repo at the default branch
+before the closing `sync` first dispatches and holds it across sync →
+verification → publish → merge, releasing it when merge is done or the
+workflow leaves the interval (an ask of a non-gate step or a lost lease
+re-enters at `sync`, charged to no rewind budget). The lease is the same
+AIHub key develop's tickets hold for that repository and branch: while the
+epic's full verification runs, the develop tickets of the same repository
+and target branch queue behind it (「等待合入锁」). The children's lanes
+merge into the children branch — a different key — and never wait on the
+epic. The steps before `sync` (verify-children) run outside the interval.
 
 ## The epic's own mechanics
 
