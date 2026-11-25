@@ -140,8 +140,18 @@ func TestMaybeRemoteTypedBranches(t *testing.T) {
 		td.hub.status["wi_b"] = api.StatusRunning
 		td.hub.mu.Unlock()
 		item, _ := td.hub.GetWorkItem("wi_b")
-		local := protocol.WatchSnapshot{WorkItem: "wi_b", Events: []protocol.EventEntry{}}
-		_, err := td.Daemon.maybeRemoteSnapshot(item, local)
+		local := protocol.WatchSnapshot{WorkItem: "wi_b", Events: []protocol.EventEntry{},
+			LandingLock: &api.LandingLock{State: api.LandingLockWaiting, Keys: []api.LandingLockKey{{Repo: "github.com/o/app", Branch: "main", Position: 2}}}}
+		got, err := td.Daemon.maybeRemoteSnapshot(item, local)
+		if code == api.ErrCoreStaleHolder || code == api.ErrCoreUpstream {
+			// Q3: the progress is unavailable but the lock is readable: a
+			// lock-only partial snapshot, never a typed error and never a
+			// fabricated known=true.
+			if err != nil || !got.LockOnly || got.ProgressError != code || got.Known || got.Execution != nil {
+				t.Fatalf("%s: want the lock-only partial snapshot, got %+v (%v)", code, got, err)
+			}
+			continue
+		}
 		if err == nil {
 			t.Fatalf("%s: want the typed error, got nil", code)
 		}

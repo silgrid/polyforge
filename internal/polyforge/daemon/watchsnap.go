@@ -270,7 +270,31 @@ func (d *Daemon) watchSnapshot(wi string, item *api.WorkItem, hubRead bool, afte
 // A record that carries no projection (a hub older than the field) or no
 // readable record answers unavailable — unknown is never shown as "none".
 func (d *Daemon) landingLockFor(wi string, hubItem *api.WorkItem) *api.LandingLock {
-	return nil
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if hubItem == nil && d.hub != nil {
+		if it, err := d.hub.GetWorkItem(wi); err == nil && it != nil {
+			hubItem = it
+		}
+	}
+	if hubItem != nil {
+		switch hubItem.Status {
+		case api.StatusWrapped, api.StatusFailed, api.StatusCanceled:
+			d.landingSnaps.drop(wi)
+			return &api.LandingLock{State: api.LandingLockNone, ObservedAt: now, AsOf: now}
+		}
+		if hubItem.LandingLock != nil {
+			d.landingSnaps.put(wi, hubItem.LandingLock)
+			return hubItem.LandingLock
+		}
+	}
+	if ll, age, ok := d.landingSnaps.get(wi); ok {
+		ll.AgeMS = age.Milliseconds()
+		if age > api.LandingLockStaleAfter {
+			ll.State = api.LandingLockStale
+		}
+		return ll
+	}
+	return &api.LandingLock{State: api.LandingLockUnavailable, ObservedAt: now, AsOf: now}
 }
 
 // watchProgress projects the observe lane's LiveProgress onto the wire
