@@ -19,6 +19,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
+	"github.com/silgrid/polyforge/internal/polyforge/driver"
 )
 
 type fakeLeaseHub struct {
@@ -94,8 +95,8 @@ func TestLandingHoldRenewsAndReleases(t *testing.T) {
 	l.poll = time.Millisecond
 	dir := landingCapsule(t)
 	var positions []int
-	hold, err := l.Hold(context.Background(), "wi_1", dir, []string{"o/app", "o/lib"}, func(pos int, _ time.Time) {
-		positions = append(positions, pos)
+	hold, err := l.Hold(context.Background(), "wi_1", dir, []string{"o/app", "o/lib"}, func(q driver.LandingQueue) {
+		positions = append(positions, q.Position)
 	})
 	if err != nil {
 		t.Fatalf("Hold: %v", err)
