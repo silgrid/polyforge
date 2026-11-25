@@ -3,9 +3,11 @@ package watcher
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
@@ -54,6 +56,12 @@ func FormatOnce(s *protocol.WatchSnapshot, now time.Time, maxEvents int) string 
 	fmt.Fprintf(&b, "status:     %s\n", StateLabel(s))
 	if s.HolderMachine != "" {
 		fmt.Fprintf(&b, "holder:     %s\n", safeID(s.HolderMachine))
+	}
+	if line := LandingLockLine(s.LandingLock); line != "" {
+		fmt.Fprintf(&b, "landing:    %s\n", line)
+	}
+	if s.ProgressError != "" {
+		fmt.Fprintf(&b, "progress:   不可用（%s）\n", clean(s.ProgressError))
 	}
 	if s.Execution == nil {
 		if s.Known || s.Queued {
@@ -213,4 +221,57 @@ func clean(s string) string {
 		out = string(rs[:maxFieldWidth]) + "…"
 	}
 	return out
+}
+
+// LandingLockLine renders one ticket's landing-lock projection for a human
+// face (polyforge#249 Q11). "" when the ticket is not waiting on a lock.
+// The line names only this ticket's positions and lock keys; a stale
+// snapshot keeps its old position and says it is stale, and unavailable
+// says so instead of inventing a position.
+func LandingLockLine(l *api.LandingLock) string {
+	if l == nil {
+		return ""
+	}
+	switch l.State {
+	case api.LandingLockUnavailable:
+		return "锁状态不可用（读取不到锁快照）"
+	case api.LandingLockStale:
+		return "等待合入锁 " + landingPositions(l) + "（陈旧）"
+	case api.LandingLockWaiting:
+		return "等待合入锁 " + landingPositions(l)
+	}
+	return ""
+}
+
+// landingPositions formats the 1-based queue positions this ticket holds, in
+// the projection's key order: "#3" for one key, "#1,#3" for several.
+func landingPositions(l *api.LandingLock) string {
+	out := make([]string, 0, len(l.Keys))
+	for _, k := range l.Keys {
+		if k.Position < 1 {
+			continue
+		}
+		out = append(out, "#"+strconv.Itoa(k.Position))
+	}
+	if len(out) == 0 {
+		return "#?"
+	}
+	return strings.Join(out, ",")
+}
+
+// LandingKeysText names the lock keys of a projection for the human watch
+// face: "repo (branch)" per key, comma separated. It never names a holder.
+func LandingKeysText(l *api.LandingLock) string {
+	if l == nil || len(l.Keys) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(l.Keys))
+	for _, k := range l.Keys {
+		line := k.Repo
+		if k.Branch != "" {
+			line += " (" + k.Branch + ")"
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, ", ")
 }
