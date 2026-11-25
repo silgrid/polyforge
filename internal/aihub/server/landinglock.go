@@ -238,18 +238,24 @@ func leaseBodyScope(_ *http.Request, body []byte) string {
 }
 
 // decorateLeaseProjections fills each work item's read-only landing-lock
-// projection (polyforge#245 epic 3/3, Q11) from the lease store. It runs on
+// projection (polyforge#245 epic 3/3, Q11) from one batch read. It runs on
 // the read paths only, never on a write, and a row it cannot project keeps
 // no field (unknown) instead of failing the read.
 func (s *Server) decorateLeaseProjections(items []core.WIView) {
-	if s.Leases == nil {
+	if s.Leases == nil || len(items) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(items))
+	for i := range items {
+		ids = append(ids, items[i].ID)
+	}
+	locks, err := s.Leases.LandingSnapshots(ids)
+	if err != nil {
 		return
 	}
 	for i := range items {
-		ll, err := s.Leases.LandingSnapshot(items[i].ID)
-		if err != nil || ll == nil {
-			continue
+		if p := locks[items[i].ID]; p != nil {
+			items[i].LeaseProjection = p
 		}
-		items[i].LeaseProjection = ll
 	}
 }
