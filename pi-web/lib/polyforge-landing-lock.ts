@@ -49,20 +49,58 @@ function nonNegative(value: unknown): number | undefined {
  * the same way. Only the listed fields are copied.
  */
 export function sanitizeLandingLock(raw: unknown): PolyforgeLandingLock | undefined {
-  return undefined;
+  const row = asRecord(raw);
+  if (!row) return undefined;
+  const state = typeof row.state === "string" && STATES.has(row.state as PolyforgeLandingLockState)
+    ? row.state as PolyforgeLandingLockState : undefined;
+  if (!state) return undefined;
+  const keys: PolyforgeLandingLockKey[] = [];
+  if (Array.isArray(row.keys)) {
+    for (const entry of row.keys) {
+      const key = asRecord(entry);
+      if (!key) continue;
+      const repo = nonEmpty(key.repo);
+      const pos = position(key.position);
+      if (!repo || pos === undefined || typeof key.branch !== "string") continue;
+      const since = nonEmpty(key.since);
+      keys.push({ repo, branch: key.branch, position: pos, ...(since ? { since } : {}) });
+    }
+  }
+  if ((state === "waiting" || state === "stale") && keys.length === 0) return undefined;
+  const observedAt = nonEmpty(row.observed_at);
+  const asOf = nonEmpty(row.as_of);
+  const ageMs = nonNegative(row.age_ms);
+  return {
+    state,
+    keys,
+    ...(observedAt ? { observedAt } : {}),
+    ...(asOf ? { asOf } : {}),
+    ...(ageMs === undefined ? {} : { ageMs }),
+  };
 }
 
 /** The 1-based positions in the projection's key order: `#1,#3`. */
 export function landingLockPositions(lock: PolyforgeLandingLock): string {
-  return "";
+  const out = lock.keys.map((key) => `#${key.position}`);
+  return out.length > 0 ? out.join(",") : "";
 }
 
 /** The lock keys for a hover/detail: `repo (branch)`, comma separated. */
 export function landingLockKeysText(lock: PolyforgeLandingLock): string {
-  return "";
+  return lock.keys.map((key) => (key.branch ? `${key.repo} (${key.branch})` : key.repo)).join(", ");
 }
 
 /** The one-line human label; `t` is the panel's i18n translator. */
 export function landingLockText(lock: PolyforgeLandingLock, t: (key: string, values?: Record<string, string>) => string): string {
-  return "";
+  const positions = landingLockPositions(lock);
+  switch (lock.state) {
+    case "waiting":
+      return t("polyforge.landingLock.waiting", { positions });
+    case "stale":
+      return t("polyforge.landingLock.stale", { positions });
+    case "unavailable":
+      return t("polyforge.landingLock.unavailable");
+    default:
+      return "";
+  }
 }
