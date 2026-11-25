@@ -305,8 +305,8 @@ func (d *w113Daemon) start() {
 }
 
 // processEnv is the daemon process's whole environment: its own HOME
-// and XDG root, the fakepi watchdog's pid, a git identity, the fakepi
-// plans and the test's extra entries.
+// and XDG root, the fakepi watchdog's pid, a git identity, the run's
+// hermetic git config, the fakepi plans and the test's extra entries.
 func (d *w113Daemon) processEnv() []string {
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -318,6 +318,13 @@ func (d *w113Daemon) processEnv() []string {
 		"GIT_AUTHOR_EMAIL=pf-e2e@invalid",
 		"GIT_COMMITTER_NAME=pf-e2e",
 		"GIT_COMMITTER_EMAIL=pf-e2e@invalid",
+		// the run's hermetic git config (testenv): it carries the
+		// insteadOf lines that rewrite the harness's forge-shaped project
+		// repo URLs (leaseableProjectRepos) back to their local bare
+		// repositories — without it the daemon's claim clone dials
+		// https://forge.invalid (polyforge#245 verification r1#1)
+		"GIT_CONFIG_GLOBAL=" + os.Getenv("GIT_CONFIG_GLOBAL"),
+		"GIT_CONFIG_NOSYSTEM=1",
 	}
 	if d.planDir != "" {
 		env = append(env, "FAKEPI_PLANS="+d.planDir)
