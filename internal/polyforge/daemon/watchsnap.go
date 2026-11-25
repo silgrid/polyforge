@@ -289,8 +289,15 @@ func (d *Daemon) leaseLockFor(wi string, hubItem *api.WorkItem) *api.LeaseProjec
 	}
 	if ll, age, ok := d.leaseSnaps.get(wi); ok {
 		ll.AgeMS = age.Milliseconds()
-		if age > api.LeaseStaleAfter {
-			ll.State = api.LeaseStale
+		if age >= api.LeaseStaleAfter {
+			if len(ll.Keys) > 0 && (ll.State == api.LeaseWaiting || ll.State == api.LeaseStale) {
+				ll.State = api.LeaseStale
+			} else {
+				// A cached fresh-none is not a queue entry: an aged copy is
+				// unknown, never a fabricated wait (Q1; review r1#3).
+				ll.State = api.LeaseUnavailable
+				ll.Keys = nil
+			}
 		}
 		return ll
 	}
