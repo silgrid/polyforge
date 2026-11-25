@@ -2,6 +2,7 @@
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { createJiti } from "jiti";
 
 // The 工单列表 row and the selected job card render the same exported badge;
@@ -40,14 +41,13 @@ test("stale, unavailable, none and keyless values render truthfully", () => {
   assert.equal(render({ state: "stale", ageMs: 20000, keys: [] }), "", "a keyless stale value invents no #?");
 });
 
-test("the card variant renders the same words, and the two surfaces use this one component", () => {
+test("the card variant renders the same words, and the two surfaces use this one component", async () => {
   const card = render({ state: "waiting", keys: [key("github.com/o/app", 3)] }, false);
   assert.match(card, />等待合入锁 #3</);
   assert.doesNotMatch(card, /#0|\#\?/);
   // wiring pins: both surfaces render the exported component, not their own copy
-  const fs = require("node:fs");
-  const workItems = fs.readFileSync(new URL("./PolyforgeWorkItems.tsx", import.meta.url), "utf8");
-  const panel = fs.readFileSync(new URL("./PolyforgePanel.tsx", import.meta.url), "utf8");
+  const workItems = await readFile(new URL("./PolyforgeWorkItems.tsx", import.meta.url), "utf8");
+  const panel = await readFile(new URL("./PolyforgePanel.tsx", import.meta.url), "utf8");
   assert.match(workItems, /<PolyforgeLandingLockBadge lock=\{row\.landing_lock\}/);
   assert.match(panel, /<PolyforgeLandingLockBadge lock=\{landingLock\}/);
 });
