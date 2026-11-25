@@ -63,6 +63,10 @@ var Keys = []Key{
 	{"step_timeout", "daemon", ScopeCell, ClassLive},
 	{"stall_window", "daemon", ScopeCell, ClassLive},
 	{"ask_warm_window", "daemon", ScopeCell, ClassRestartOnly},
+	// polyforge#239: the automatic reply to a low-star question card — a
+	// Cell switch and timeout, live (the next judgement reads them).
+	{"ask_auto_reply_enabled", "daemon", ScopeCell, ClassLive},
+	{"ask_auto_reply_timeout", "daemon", ScopeCell, ClassLive},
 	{"command_path", "daemon", ScopeCell, ClassLive},
 	{"cell_max_concurrent_jobs", "daemon", ScopeCell, ClassLive},
 	{"machine_id", "daemon", ScopeCell, ClassRestartOnly},

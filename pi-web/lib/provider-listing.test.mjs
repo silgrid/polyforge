@@ -133,3 +133,29 @@ test("the offering keeps every other OAuth provider and never offers an unlogged
   // the API-key entry for Anthropic is unaffected
   assert.deepEqual(buildApiKeyProviderList(providers).map((p) => p.id), ["github-copilot", "anthropic"]);
 });
+
+// polyforge#271 AC2 (B3, Q2 A/Q3 A): the account page's rows come from the
+// two managed lists, one identity per provider + auth kind; only a stored
+// credential (`loggedIn` / `configured` true) is connected, only a definite
+// false is available to add, and an entry with no usable boolean folds as
+// unknown instead of reading as not connected.
+test("account provider rows keep connected, available and unknown apart (B3)", async () => {
+  const { accountProviderRows } = await loadSubject();
+  assert.equal(typeof accountProviderRows, "function", "the one projection is exported");
+  const rows = accountProviderRows(
+    [
+      { id: "alpha", name: "Alpha", loggedIn: true },
+      { id: "beta", name: "Beta", loggedIn: false },
+      { id: "mystery", name: "Mystery" },
+    ],
+    [
+      { id: "gamma", displayName: "Gamma", configured: true, modelCount: 3 },
+      { id: "delta", displayName: "Delta", configured: false, modelCount: 1 },
+      { id: "dual", displayName: "Dual", configured: false, modelCount: 2 },
+      { id: "alpha", displayName: "Alpha key", configured: false, modelCount: 0 },
+    ],
+  );
+  assert.deepEqual(rows.connected.map((row) => `${row.kind}:${row.id}`), ["oauth:alpha", "apikey:gamma"]);
+  assert.deepEqual(rows.available.map((row) => `${row.kind}:${row.id}`), ["oauth:beta", "apikey:delta", "apikey:dual", "apikey:alpha"]);
+  assert.deepEqual(rows.unknown.map((row) => `${row.kind}:${row.id}`), ["oauth:mystery"]);
+});

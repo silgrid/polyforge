@@ -26,14 +26,14 @@ import (
 var cmdOverride = &Command{
 	Name:    "override",
 	Group:   GroupExec,
-	Summary: "View or change a work item's per-step overlay: the model chain, the skip switch and the params of one step — a queued work item's params included (they ride its attrs until the claim)",
+	Summary: "View or change a work item's per-step overlay: the model chain, the skip switch and the params of one step — a queued work item's params included (they ride its attrs until the claim); a models/tier overlay is accepted on a step that already ran or is running too and takes effect on that step's next dispatch",
 	Usage:   "pf override <id> [--step <step-id> [--models <h:m[:e],...] | --clear-models | --skip | --unskip | --param <name>=<value> | --clear-param <name>] [--by user]]",
 	Setup: func(fs *flag.FlagSet) {
-		fs.String("step", "", "the step id the change applies to (required for every action; without it the command is the view)")
-		fs.String("models", "", "set the step's overlay model chain, comma-separated in order; each is <harness>:<model>[:<effort>] with harness pi or claude (it outranks every other source: --models, the workspace yaml, the bundle)")
-		fs.Bool("clear-models", false, "clear the step's overlay model chain (the step composes from its usual sources again)")
-		fs.String("tier", "", "set the step's overlay capability-tier name from the Host [step_tiers] catalog (expanded to that tier's candidates at dispatch time; an explicit --models outranks it; `default` means unset)")
-		fs.Bool("clear-tier", false, "clear the step's overlay capability tier (the step composes from its usual sources again)")
+		fs.String("step", "", "the step id the change applies to (required for every action; without it the command is the view); a models/tier action is accepted on a done or running step too — it takes effect on that step's next dispatch")
+		fs.String("models", "", "set the step's overlay model chain, comma-separated in order; each is <harness>:<model>[:<effort>] with harness pi or claude (it outranks every other source: --models, the workspace yaml, the bundle); on a done or running step it governs that step's next dispatch, never the finished or live one")
+		fs.Bool("clear-models", false, "clear the step's overlay model chain from the step's next dispatch (it composes from its usual sources again)")
+		fs.String("tier", "", "set the step's overlay capability-tier name from the Host [step_tiers] catalog (expanded to that tier's candidates at the step's next dispatch time; an explicit --models outranks it; `default` means unset); accepted on a done or running step too, for its next dispatch")
+		fs.Bool("clear-tier", false, "clear the step's overlay capability tier from its next dispatch (it composes from its usual sources again)")
 		fs.Bool("skip", false, "switch the step off (only a step the lane declares skippable; it is never dispatched and records skipped)")
 		fs.Bool("unskip", false, "clear the step's skip switch (it dispatches again)")
 		fs.String("param", "", "set one param the lane declares on the step, <name>=<value> (the value is one line of at most 256 bytes, empty allowed); it outranks the workspace yaml and the lane default from the step's next dispatch")
@@ -160,6 +160,17 @@ func renderOverrideView(w io.Writer, v *protocol.OverrideView) {
 		if s.Pending {
 			fmt.Fprintf(w, " pending")
 		}
+		// polyforge#270: a done or running step's model overlay is for its
+		// NEXT dispatch (the finished round or the live one is unchanged);
+		// a step that will not run again says so.
+		if s.Status == "done" || s.Status == "in_progress" {
+			switch {
+			case s.CanOverrideModels:
+				fmt.Fprintf(w, " model-overlay=next-dispatch")
+			case s.ModelOverrideReason != "":
+				fmt.Fprintf(w, " model-overlay=refused")
+			}
+		}
 		// Q13 A: the source shows even when the effective chain is empty
 		// (a declared-empty level still governs, and "no list anywhere" is
 		// the harness adapter's default — never a silently hidden source).
@@ -223,5 +234,13 @@ func renderOverrideWrite(w io.Writer, res *protocol.OverrideWriteResult, req pro
 		fmt.Fprintf(w, "%s\n", res.Note)
 	default:
 		fmt.Fprintf(w, "not published yet\n")
+	}
+	// polyforge#270: the models/tier answer names when the change applies —
+	// the step's next dispatch only, never the round that already ran or
+	// the dispatch in flight (Q6 B).
+	if res.Step.ModelEffectScope == "next_dispatch" && res.Note != "" {
+		fmt.Fprintf(w, "next dispatch: %s\n", res.Note)
+	} else if res.Step.ModelEffectScope == "next_dispatch" {
+		fmt.Fprintln(w, "next dispatch: the change applies on the step's next dispatch only")
 	}
 }

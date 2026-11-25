@@ -6,6 +6,7 @@ import type {
   ClaudeMcpServerInfo,
   CodemodeMode,
   McpActionResponse,
+  McpApplyResult,
   McpCodemodeInfo,
   McpCodemodeInlineBudget,
   McpCodemodeMode,
@@ -20,6 +21,10 @@ import type {
   ProjectTrustStatus,
 } from "@/lib/api-types";
 import { HarnessApplyTo, applyToCanSubmit, type HarnessApplyToSelection, type HarnessApplyToTarget } from "./HarnessApplyTo";
+import { ConfigDangerMenu, dangerConfirmAllowed, type ConfigDangerStage } from "./ConfigDangerMenu";
+import { SettingsSavedToast } from "./SettingsSavedToast";
+import { recordWriteItems, undoPlan, type SettingsWriteItems } from "@/lib/settings-undo";
+import { serverErrorText } from "@/lib/server-error";
 import { useI18n } from "@/hooks/useI18n";
 import { displayPathWithin, shortenPath } from "@/lib/display-path";
 import {
@@ -203,16 +208,68 @@ function noticeText({ key, params }: McpNoticeText, t: Translate): string {
   return t(key, params.path === undefined ? params : { ...params, path: displayPath(params.path) });
 }
 
-/** A refusal's translated reason, or for an internal or network failure its diagnostic. */
+/** A reason the panel has a line for: any refusal reason but `internal`. */
+function translatedReason(reason: McpLoadFailure["reason"]): reason is NonNullable<McpLoadFailure["reason"]> {
+  return reason !== undefined && reason !== "internal";
+}
+
+/**
+ * A refusal's translated reason; an internal or network failure, which has
+ * none, reads the generic line (T4 AC2, owner 2A) and its diagnostic goes to
+ * the 详情 fold (`failureDetails`).
+ */
 function failureText(failure: McpLoadFailure, t: Translate): string {
   if (failure.timedOut) return t("mcp.loadTimedOut");
-  return failure.reason && failure.reason !== "internal" ? t(`mcp.reason.${failure.reason}`) : failure.error;
+  if (translatedReason(failure.reason)) return t(`mcp.reason.${failure.reason}`);
+  const split = serverErrorText({ message: failure.error });
+  return t(split.summaryKey, split.summaryParams);
+}
+
+/** The words for the 详情 fold: the original of a line that did not say it, else nothing. */
+function failureDetails(failure: McpActionFailure): string | null {
+  const words = failure.error.trim() === "" ? null : failure.error;
+  if (failure.summaryKey) return words;
+  if (failure.timedOut || translatedReason(failure.reason)) return null;
+  return words;
+}
+
+/** A failure's original words, folded under its line (labelled 详情); nothing without any. */
+function McpFailureFold({ details }: { details: string | null }) {
+  const { t } = useI18n();
+  if (!details) return null;
+  return (
+    <details className="config-error-notice-details">
+      <summary>{t("i18n.detailsLabel")}</summary>
+      <div className="config-error-notice-original">{revealHiddenCharacters(details)}</div>
+    </details>
+  );
 }
 
 /** The same for a change, whose timeout means it may have landed. */
 function actionFailureText(failure: McpActionFailure, t: Translate): string {
+  // A refusal split by the caller shows its Chinese line; the original stays for the fold.
+  if (failure.summaryKey) return t(failure.summaryKey, failure.summaryParams);
   if (failure.timedOut) return t("mcp.actionTimedOut");
   return failureText(failure, t);
+}
+
+/**
+ * The row's 「应用到」 failure from the harnesses that refused (T4 AC2): the
+ * line it shows and each harness's own words for the details fold.
+ */
+export function applyFailureOf(failures: readonly McpApplyResult[]): McpActionFailure {
+  const words = failures.map((item) => `${item.harness}: ${item.error ?? item.reason ?? ""}`).join("; ");
+  // The first refusal whose reason has a line says it; with none (internal,
+  // or no reason at all) the generic line. Either way the words are folded.
+  const reason = failures.find((item) => translatedReason(item.reason))?.reason;
+  if (reason !== undefined) return { error: words, reason, summaryKey: `mcp.reason.${reason}` };
+  const split = serverErrorText({ message: words });
+  return {
+    error: split.details ?? "",
+    ...(failures[0]?.reason !== undefined ? { reason: failures[0].reason } : {}),
+    summaryKey: split.summaryKey,
+    ...(split.summaryParams ? { summaryParams: split.summaryParams } : {}),
+  };
 }
 
 /** What saving the Code mode choice, mode or budget is doing: nothing, waiting for the route, or why it failed. */
@@ -330,6 +387,10 @@ export function McpConfig({
   const [actionError, setActionError] = useState<McpActionErrorState | null>(null);
   const [groupStatus, setGroupStatus] = useState<McpGroupStatus | null>(null);
   const [undo, setUndo] = useState<McpUndoNotice | null>(null);
+  // The last switch, undoable inside its toast (polyforge#259 T4 AC1, owner 1A).
+  const [switchUndo, setSwitchUndo] = useState<{ record: SettingsWriteItems; server: McpServerInfo } | null>(null);
+  // Why an undo was dropped (the field moved elsewhere, owner 4A): a visible line.
+  const [switchNote, setSwitchNote] = useState(false);
   const [focusBack, setFocusBack] = useState<McpFocusBack | null>(null);
   // Tests by server key. A test writes no file, so it runs beside changes and other tests.
   const [tests, setTests] = useState<Record<string, McpTestRun>>({});
@@ -608,9 +669,56 @@ export function McpConfig({
     setGroupStatus(null);
     const result = await runAction({ action: enabled ? "enable" : "disable", scope: server.scope, name: server.name }, `switch:${key}`);
     if (!result) return;
-    if (!result.ok) setActionError({ key, failure: result.error });
+    if (!result.ok) {
+      setActionError({ key, failure: result.error });
+      setSwitchUndo(null);
+    } else {
+      // A landed switch carries its own undo (polyforge#259 T4 AC1, owner 1A).
+      const record = recordWriteItems({
+        field: key,
+        previous: [{ harness: key, state: server.enabled ? "on" : "off" }],
+        written: [{ harness: key, state: enabled ? "on" : "off" }],
+        ok: true,
+        at: Date.now(),
+      });
+        setSwitchUndo(record === null ? null : { record, server });
+      setSwitchNote(false);
+    }
     setFocusBack({ control: pressed });
   }, [runAction]);
+
+  /**
+   * The toast's one click: read the server list again and only write the old
+   * value back while the server still holds what this switch set — a change made
+   * elsewhere abandons the undo (owner 4A), and a refusal is shown.
+   */
+  const undoSwitch = useCallback(async () => {
+    const entry = switchUndo;
+    setSwitchUndo(null);
+    if (!entry) return;
+    const fresh = await loadMcpOverview(cwd);
+    if (!fresh.ok) {
+      setActionError({ key: entry.record.field, failure: fresh.error });
+      return;
+    }
+    const now = fresh.data.servers.find((candidate) => mcpServerKey(candidate) === entry.record.field);
+    const plan = undoPlan(entry.record, [{ harness: entry.record.field, state: now?.enabled ? "on" : "off" }], Date.now());
+    if (!plan.ok) {
+      if (plan.reason === "changed") {
+        // The server moved since this switch: show the fresh list and say so.
+        setLoad({ state: "loaded", data: fresh.data, ...(fresh.projectError ? { projectError: fresh.projectError } : {}) });
+        setSwitchNote(true);
+      }
+      return;
+    }
+    setSwitchNote(false);
+    const want = plan.items[0]?.state === "on";
+    const pressed = pressedButton();
+    const result = await runAction({ action: want ? "enable" : "disable", scope: entry.server.scope, name: entry.server.name }, `switch:${entry.record.field}`);
+    if (!result) return;
+    if (!result.ok) setActionError({ key: entry.record.field, failure: result.error });
+    setFocusBack({ control: pressed });
+  }, [cwd, runAction, switchUndo]);
 
   // A global server on or off in this project alone: an override in its .pi/mcp.json, like a switch.
   const switchServerInProject = useCallback(async (server: McpServerInfo, enabled: boolean) => {
@@ -667,13 +775,7 @@ export function McpConfig({
     if (result.ok) {
       const failures = (result.data.applied?.results ?? []).filter((item) => !item.ok);
       if (failures.length > 0) {
-        setActionError({
-          key,
-          failure: {
-            error: failures.map((item) => `${item.harness}: ${item.error ?? item.reason ?? ""}`).join("; "),
-            ...(failures[0].reason !== undefined ? { reason: failures[0].reason } : {}),
-          },
-        });
+        setActionError({ key, failure: applyFailureOf(failures) });
       }
       // A side the change removed carries its undo, so the notice offers it
       // as the remove action's does (Q1 A).
@@ -858,6 +960,10 @@ export function McpConfig({
       codemodeSave={codemodeSave}
       busy={busy}
       actionError={actionError}
+      switchUndo={switchUndo}
+      switchSuperseded={switchNote}
+      onSwitchUndo={() => void undoSwitch()}
+      onSwitchExpire={() => setSwitchUndo(null)}
       groupStatus={groupStatus}
       undo={undo}
       focusBack={focusBack}
@@ -925,6 +1031,10 @@ export function McpConfigView({
   codemodeSave = { saving: false, error: null },
   busy = null,
   actionError = null,
+  switchUndo = null,
+  switchSuperseded = false,
+  onSwitchUndo = () => {},
+  onSwitchExpire = () => {},
   groupStatus = null,
   undo = null,
   focusBack = null,
@@ -968,6 +1078,10 @@ export function McpConfigView({
   /** The change on its way, if any: `switch:<key>`, `in-project:<key>`, `remove:<key>`, `sign-out:<key>`, `group:<scope>` or `undo`. */
   busy?: string | null;
   actionError?: McpActionErrorState | null;
+  switchUndo?: { record: SettingsWriteItems } | null;
+  switchSuperseded?: boolean;
+  onSwitchUndo?: () => void;
+  onSwitchExpire?: () => void;
   groupStatus?: McpGroupStatus | null;
   undo?: McpUndoNotice | null;
   /** The control the last answered change was started from, to give focus back to. */
@@ -1128,7 +1242,10 @@ export function McpConfigView({
           <ConfigNotice>{t("mcp.hostInactive", { path: displayPath(hostInactive.cwd), owner: displayPath(hostInactive.owner) })}</ConfigNotice>
         )}
         {load.state === "loaded" && load.projectError && (
-          <ConfigNotice>{t("mcp.projectNotListed", { reason: failureText(load.projectError, t) })}</ConfigNotice>
+          <ConfigNotice>
+            {t("mcp.projectNotListed", { reason: failureText(load.projectError, t) })}
+            <McpFailureFold details={failureDetails(load.projectError)} />
+          </ConfigNotice>
         )}
         {trustNotice?.kind === "untrusted" && (
           <ConfigTrustNotice id={trustNoticeId} message={trustMessage} trustLabel={t("mcp.trust.trustButton")} onTrust={onTrust} />
@@ -1168,6 +1285,7 @@ export function McpConfigView({
             ) : load.state === "failed" ? (
               <div role="alert" className="config-sidebar-message is-error">
                 {t("mcp.loadFailed")} {failureText(load.error, t)}
+                <McpFailureFold details={failureDetails(load.error)} />
               </div>
             ) : data && context ? (
               <>
@@ -1297,6 +1415,16 @@ export function McpConfigView({
         </ConfigDetail>
       </ConfigSplitView>
 
+      {switchSuperseded && <p role="status" className="mcp-config-line is-dim" data-mcp-switch-note>{t("mcp.undoSuperseded")}</p>}
+      {switchUndo && (
+        <SettingsSavedToast
+          texts={{ saved: t("settings.saved"), undo: t("settings.undo") }}
+          remainingMs={switchUndo.record.lifetimeMs}
+          onUndo={onSwitchUndo}
+          onExpire={onSwitchExpire}
+        />
+      )}
+
       <ConfigFooter
         status={problems.length > 0 ? (
           <ConfigFooterStatus
@@ -1424,6 +1552,18 @@ function groupStatusText(status: McpGroupStatus, t: Translate): { note?: string;
   return { ...(note ? { note } : {}), ...(error ? { error } : {}) };
 }
 
+/** The 详情 fold of the group switch's failures: each untranslated failure's own words. */
+function groupStatusDetails(status: McpGroupStatus): string | null {
+  const lines = status.error
+    ? [failureDetails(status.error)]
+    : status.failures.map(({ name, failure }) => {
+      const details = failureDetails(failure);
+      return details === null ? null : `${name}: ${details}`;
+    });
+  const kept = lines.filter((line): line is string => line !== null);
+  return kept.length > 0 ? kept.join("; ") : null;
+}
+
 function McpServerGroupList({
   group,
   unifiedRows,
@@ -1489,6 +1629,7 @@ function McpServerGroupList({
         {group.scope === "local" && <span className="mcp-sidebar-badge is-muted">{t("mcp.group.claudeOnly")}</span>}
       </ConfigSidebarGroupLabel>
       {statusText && <ConfigSidebarGroupStatus note={statusText.note} error={statusText.error} />}
+      {status && <McpFailureFold details={groupStatusDetails(status)} />}
       {emptyKey && <div className="mcp-sidebar-group-empty">{t(emptyKey)}</div>}
       {group.servers.map((server) => {
         const key = mcpServerKey(server);
@@ -1687,15 +1828,19 @@ function McpServerDetail({
           </ConfigDetailHeaderInfo>
           <ConfigDetailActions>
             <McpTestButton server={server} test={test} testBlock={testBlock} describedBy={testBlockId} onTest={onTest} />
-            <ConfigButton
-              variant="danger"
-              size="small"
-              disabled={controlsBusy || block !== undefined}
-              aria-describedby={block ? noteId : undefined}
-              onClick={() => onRemove(server)}
-            >
-              {busy === `remove:${key}` ? t("i18n.removing") : t("i18n.remove")}
-            </ConfigButton>
+            <ConfigDangerMenu
+              texts={{
+                menu: t("settings.dangerMenu"),
+                action: t("i18n.remove"),
+                confirmText: t("mcp.danger.confirmRemove", { name }),
+                confirm: t("i18n.remove"),
+                cancel: t("i18n.cancel"),
+              }}
+              busy={controlsBusy}
+              disabled={block !== undefined}
+              describedBy={block ? noteId : undefined}
+              onConfirm={() => onRemove(server)}
+            />
             <ConfigSwitch
               checked={server.enabled}
               disabled={controlsBusy || block !== undefined || switchless || passwordKeepsOff}
@@ -1709,9 +1854,12 @@ function McpServerDetail({
         {note && <div id={noteId} className="config-detail-heading-note">{note}</div>}
       </div>
       {actionError && (
-        <p role="alert" className="mcp-config-line is-error">
-          {t("mcp.actionFailed")} {actionFailureText(actionError, t)}
-        </p>
+        <>
+          <p role="alert" className="mcp-config-line is-error">
+            {t("mcp.actionFailed")} {actionFailureText(actionError, t)}
+          </p>
+          <McpFailureFold details={failureDetails(actionError)} />
+        </>
       )}
 
       <ConfigDetailGrid>
@@ -1900,6 +2048,12 @@ function testFailureText(failure: McpActionFailure, t: Translate): string {
   if (failure.timedOut) return t("mcp.test.requestTimedOut");
   const key = failure.reason ? MCP_TEST_REFUSAL_KEYS[failure.reason] : undefined;
   return key ? t(key) : failureText(failure, t);
+}
+
+/** The 详情 fold of a failed test request: the words a test's own line did not say. */
+function testFailureDetails(failure: McpActionFailure): string | null {
+  if (failure.timedOut || (failure.reason && MCP_TEST_REFUSAL_KEYS[failure.reason])) return null;
+  return failureDetails(failure);
 }
 
 /** A status's error and the stderr tail it kept, as the server's text with its hidden characters escaped. */
@@ -2136,6 +2290,7 @@ function McpStatusRow({
             {t("mcp.test.requestFailed")} {testFailureText(test.error, t)}
           </span>
         )}
+        {test?.error && <McpFailureFold details={testFailureDetails(test.error)} />}
         {testBlock && !blockSaidBy && (
           <span id={testBlockId} className="mcp-config-line is-dim">{t(MCP_TEST_BLOCK_KEYS[testBlock])}</span>
         )}
@@ -2482,8 +2637,11 @@ function McpUnifiedSection({
 }) {
   const { t } = useI18n();
   const [selection, setSelection] = useState(() => mcpApplyToSelection(row));
+  // 「⋯」 holds the irreversible removal, and it asks before it writes (T4 AC1).
+  const [dangerStage, setDangerStage] = useState<ConfigDangerStage>("closed");
   useEffect(() => {
     setSelection(mcpApplyToSelection(row));
+    setDangerStage("closed");
   }, [row]);
   const piUnsupported = row.scope === "local"
     ? t("mcp.applyTo.piUnsupportedLocal")
@@ -2508,9 +2666,9 @@ function McpUnifiedSection({
             ))}
           </ul>
           {claudeSide !== undefined && onUnify && (
-            <button type="button" className="config-button" disabled={controlsBusy || applyBusy} onClick={() => onUnify(row, "pi")}>
+            <ConfigButton disabled={controlsBusy || applyBusy} onClick={() => onUnify(row, "pi")}>
               {t("mcp.unified.unify")}
-            </button>
+            </ConfigButton>
           )}
         </section>
       )}
@@ -2531,30 +2689,50 @@ function McpUnifiedSection({
           )}
           {onRemoveClaude && (
             <p className="mcp-config-line">
-              <ConfigButton variant="danger" size="small" disabled={controlsBusy} onClick={() => onRemoveClaude(claudeSide)}>
-                {t("mcp.claude.remove")}
-              </ConfigButton>
+              <ConfigDangerMenu
+                texts={{
+                  menu: t("mcp.danger.menu"),
+                  action: t("mcp.claude.remove"),
+                  confirmText: t("mcp.danger.confirmRemove", { name: row.name }),
+                  confirm: t("i18n.remove"),
+                  cancel: t("i18n.cancel"),
+                }}
+                stage={dangerStage}
+                onStageChange={setDangerStage}
+                busy={controlsBusy}
+                onConfirm={() => {
+                  if (!dangerConfirmAllowed(dangerStage)) return;
+                  setDangerStage("closed");
+                  onRemoveClaude(claudeSide);
+                }}
+              />
             </p>
           )}
         </>
       )}
       {onApplyTo && (
-        <HarnessApplyTo
-          texts={{
-            title: t("mcp.applyTo.title"),
-            all: t("mcp.applyTo.all"),
-            specific: t("mcp.applyTo.specific"),
-            submit: t("mcp.applyTo.submit"),
-          }}
-          targets={targets}
-          value={selection}
-          busy={controlsBusy || applyBusy}
-          onChange={setSelection}
-          onSubmit={() => {
-            if (!applyToCanSubmit(selection, targets)) return;
-            onApplyTo(row, applyToChosen(selection, targets));
-          }}
-        />
+        <div className="mcp-apply-to-row">
+          <HarnessApplyTo
+            texts={{
+              title: t("mcp.applyTo.title"),
+              all: t("mcp.applyTo.all"),
+              specific: t("mcp.applyTo.specific"),
+            }}
+            targets={targets}
+            value={selection}
+            onChange={setSelection}
+          />
+          <ConfigButton
+            size="small"
+            disabled={controlsBusy || applyBusy || !applyToCanSubmit(selection, targets)}
+            onClick={() => {
+              if (!applyToCanSubmit(selection, targets)) return;
+              onApplyTo(row, applyToChosen(selection, targets));
+            }}
+          >
+            {t("mcp.applyTo.submit")}
+          </ConfigButton>
+        </div>
       )}
     </div>
   );
@@ -2594,8 +2772,11 @@ function McpClaudeServerDetail({
     otherScopes: [],
   }, [entry.scope, entry.name, unifiedRow]);
   const [selection, setSelection] = useState(() => mcpApplyToSelection(row));
+  // 「⋯」 holds the irreversible removal, and it asks before it writes (T4 AC1).
+  const [dangerStage, setDangerStage] = useState<ConfigDangerStage>("closed");
   useEffect(() => {
     setSelection(mcpApplyToSelection(row));
+    setDangerStage("closed");
   }, [row]);
   const piUnsupported = entry.scope === "local"
     ? t("mcp.applyTo.piUnsupportedLocal")
@@ -2614,14 +2795,23 @@ function McpClaudeServerDetail({
           </ConfigDetailHeaderInfo>
           <ConfigDetailActions>
             {onRemoveClaude && (
-              <ConfigButton
-                variant="danger"
-                size="small"
-                disabled={controlsBusy}
-                onClick={() => onRemoveClaude(entry)}
-              >
-                {removeBusy ? t("i18n.removing") : t("mcp.claude.remove")}
-              </ConfigButton>
+              <ConfigDangerMenu
+                texts={{
+                  menu: t("mcp.danger.menu"),
+                  action: t("mcp.claude.remove"),
+                  confirmText: t("mcp.danger.confirmRemove", { name }),
+                  confirm: t("i18n.remove"),
+                  cancel: t("i18n.cancel"),
+                }}
+                stage={dangerStage}
+                onStageChange={setDangerStage}
+                busy={controlsBusy || removeBusy}
+                onConfirm={() => {
+                  if (!dangerConfirmAllowed(dangerStage)) return;
+                  setDangerStage("closed");
+                  onRemoveClaude(entry);
+                }}
+              />
             )}
           </ConfigDetailActions>
         </ConfigDetailHeader>
@@ -2648,22 +2838,28 @@ function McpClaudeServerDetail({
       </ConfigDetailGrid>
       {entry.disabled === true && <p className="mcp-config-line is-warning">{t("mcp.claude.disabled")}</p>}
       {onApplyTo && (
-        <HarnessApplyTo
-          texts={{
-            title: t("mcp.applyTo.title"),
-            all: t("mcp.applyTo.all"),
-            specific: t("mcp.applyTo.specific"),
-            submit: t("mcp.applyTo.submit"),
-          }}
-          targets={targets}
-          value={selection}
-          busy={controlsBusy || applyBusy}
-          onChange={setSelection}
-          onSubmit={() => {
-            if (!applyToCanSubmit(selection, targets)) return;
-            onApplyTo(row, applyToChosen(selection, targets));
-          }}
-        />
+        <div className="mcp-apply-to-row">
+          <HarnessApplyTo
+            texts={{
+              title: t("mcp.applyTo.title"),
+              all: t("mcp.applyTo.all"),
+              specific: t("mcp.applyTo.specific"),
+            }}
+            targets={targets}
+            value={selection}
+            onChange={setSelection}
+          />
+          <ConfigButton
+            size="small"
+            disabled={controlsBusy || applyBusy || !applyToCanSubmit(selection, targets)}
+            onClick={() => {
+              if (!applyToCanSubmit(selection, targets)) return;
+              onApplyTo(row, applyToChosen(selection, targets));
+            }}
+          >
+            {t("mcp.applyTo.submit")}
+          </ConfigButton>
+        </div>
       )}
     </ConfigDetailStack>
   );

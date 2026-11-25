@@ -237,11 +237,13 @@ func (r *Runtime) applyOverrideJob(ctx context.Context, j *job, ch OverrideChang
 	j.mu.Unlock()
 	switch st {
 	case StateRunning:
-		// a live dispatch owns the current step: the overlay is for
-		// steps it has not started
+		// a live dispatch owns the current step: the model aspects are
+		// recorded for its NEXT dispatch (polyforge#270), the skip switch
+		// and a param keep the old rule — they would change the dispatch
+		// in flight.
 		ex := capsuleExecution(capDir)
-		if stepLive(ex, ch.Step) {
-			return OverrideOutcome{}, conflict("step %s has a live dispatch (its status is %s): the overlay is for steps without one — set it on a step that has not started, or while the work item is parked", ch.Step, ex.Steps[ch.Step].Status)
+		if stepLive(ex, ch.Step) && !futureDispatchModelChange(ch) {
+			return OverrideOutcome{}, conflict("step %s has a live dispatch (its status is %s): only a model chain or a tier is recorded for its next dispatch — the skip switch and a param need a step that has not started, or a parked work item", ch.Step, ex.Steps[ch.Step].Status)
 		}
 		return r.applyOverrideScene(ctx, j, ch, OverridePostureRunning)
 	case StatePaused:
@@ -256,6 +258,16 @@ func (r *Runtime) applyOverrideJob(ctx context.Context, j *job, ch OverrideChang
 	default:
 		return OverrideOutcome{}, conflict("work item is %s here; try again in a moment", st)
 	}
+}
+
+// futureDispatchModelChange reports whether the change is one of the model
+// aspects a step's NEXT dispatch takes (polyforge#270, the owner's Q2 B):
+// models/tier set or clear. These govern the next composition, so a live
+// step (or a step that already ran, judged by the daemon route) accepts
+// them without touching the dispatch in flight. A skip or a param is not
+// one of them and keeps the old step-status rules.
+func futureDispatchModelChange(ch OverrideChange) bool {
+	return ch.Models != nil || ch.ClearModels || ch.Tier != "" || ch.ClearTier
 }
 
 // stepLive reports whether the step's record shows a live dispatch: only

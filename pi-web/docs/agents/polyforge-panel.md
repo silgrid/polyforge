@@ -47,7 +47,7 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
 - `GET /api/polyforge/watch?wi=<slug|wi_id>` → 200 `{status:{wi,slug,workflowStatus,
   currentStep,updatedAt,steps:[{name,status,startedAt?}],declared_steps:[{id}]|null,
   skippableSteps?:[id],overrides?:{[id]:{models?,skip?,pending?}},
-  overrideView?:{wi,posture,steps:[{id,status,skippable,models?,modelsBy?,skip?,skipBy?,pending?,effective?,source?}]},
+  overrideView?:{wi,posture,steps:[{id,status,skippable,models?,modelsBy?,skip?,skipBy?,pending?,effective?,source?,canOverrideModels?,modelOverrideReason?,modelEffectScope?}]},
   paramsView?:{wi,posture,steps:[{id,status,params:[{name,value,source?}]}]},
   events:[{at,kind,step?,…,question?,question_id?,by?,disposition?,intent?}],progress?:{command,command_age_sec,tool_calls,
   recent_files},origin?:{kind:"chat",owner},summary?,summary_age_sec?,
@@ -250,19 +250,22 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   history's `old` from `config list`, a mapped cwd not required; plus the
   Host-only `step_tiers.<tier>` family (85b2, `parseStepTierKey`'s grammar
   only): a write MUST carry `{host: true}` (any Cell scope is a 400), the
-  family's own 0.2.4 pf floor applies (an unparseable version is below), a
+  family's own 0.2.4-0 pf floor applies (v0.2.4-dev.N and v0.2.4 pass; v0.2.3, 2.20.x and an unparseable version are below), a
   `set` value is a non-empty candidate array (a tier is emptied by `unset`,
   never by an empty list — pf refuses one), and only the write's NEW
   candidates must be defined models (`lib/step-tier-defined-models.ts`:
   pi's scope-all projection behind /api/models and claude's aliases plus
   native modelPicker names — recomputed per write, the file's own retired
   candidates preserved); every one of those refusals precedes the write
-  spawn. The models page's tier column writes through this same POST, one
-  harness at a time (add-first, a partial
-  failure reported per harness with the draft kept; EVERY step re-reads the
-  Host catalog together with the file hash from the SAME GET, so the plan
-  derives from the very state the CAS guards — a concurrent external write
-  either joins the plan or refuses the write with 409; a rollback
+  spawn. The write path serves the CLI and any direct POST; the models page's
+  tier column is read-only (polyforge#256 B7: it shows the labels only, the
+  editor entry and its write callback are gone, so opening the page writes
+  nothing). The write gate itself is Host-only (`{host: true}`; a Cell scope
+  is a 400), only NEW candidates must be defined models (the file's own
+  retired candidates are preserved), a `set` list must be non-empty (an empty
+  tier is emptied by `unset`), and `--expect-state` carries the file hash —
+  a concurrent change makes pf refuse with 409; a
+  rollback
   derives its scope from the key, so a pre-#286 entry recorded against a
   workspace yaml rolls back through the same flat path as a new entry;
   below the 2.20.21 summarize floor, or with an unknown version,
@@ -721,8 +724,12 @@ keep no read of their own (polyforge#42 G11: a read per selection was a
 click-caused request): everything they render rides the watch snapshot —
 the declarations and the overlay's values (`skippableSteps`, `overrides`),
 and the effective chains with their source labels (`step overlay`, `pf
-submit --models`, the yaml/bundle level) through the view the watch route
-composes into its own response (`status.overrideView`, one
+submit --models`, the yaml/bundle level) — and, since polyforge#270, the
+daemon's per-row next-dispatch face (`canOverrideModels`,
+`modelOverrideReason`, `modelEffectScope: "next_dispatch"` — the scope only
+on a row the daemon still accepts a write for, so the timing note never
+shows on a step with no next dispatch) — through the
+view the watch route composes into its own response (`status.overrideView`, one
 `pf --json override <wi>` read per asked watch answer; a failed view read
 degrades to a snapshot without it, and the override route's GET face is
 gone with its last caller; polyforge#48: the view is opt-in — `?overrides=1`,
@@ -740,9 +747,14 @@ composes beside the overlay one (`status.paramsView`, one
 for an ended ticket; G11 keeps holding — the section fetches nothing on
 selection). The write controls — the model setter, the skip switch and a
 set/clear row per declared param (the same one-action POST face, `pf
-override --param` / `--clear-param`'s shapes) — stay an UNSTARTED step's
-only; a step that already ran or holds a live dispatch shows its params
-read-only, and the daemon's typed refusal of a write shows inline. The model
+override --param` / `--clear-param`'s shapes) — keep the old reach, with
+one addition (polyforge#270): a done or live step whose view row says
+`canOverrideModels` renders the model setter again, with the
+`polyforge.stepControls.nextDispatch` note, because the daemon accepts that
+write for the step's NEXT dispatch (the finished round or live dispatch is
+unchanged); its params and the skip switch stay read-only. A started step
+with no such row shows its params read-only, and the daemon's typed refusal
+of a write shows inline. The model
 setter is the shared `ModelCandidatePicker` (85b2): the manual fill keeps
 the `data-pf-step-controls-model` hook and takes the full candidate string,
 the grouped select rides the watch snapshot's composed `status.stepTiers`
@@ -1384,6 +1396,12 @@ helpers, `directRows`, the flat direct area's row sequence,
   blank or multi-line goal or one over 500 characters (pf's goal bound), a
   project that is not exactly one mapped name, a blank content or one over
   64 KiB, a content pf would read as a file or stdin (`@path`, `-`) are 400.
+  The body carries no lane: a request with a `lane` field or an
+  `x-polyforge-lane` header (the onboarding wizard's first ticket,
+  polyforge#167) has the lane validated (a plain token; a blank,
+  option-shaped or oversized value is 400 before any spawn) and creates
+  through `pf --json file create --stdin`, one JSON body with
+  `bundle_name` — the Messages path keeps the flag create below.
   Then exactly one `pf --json file create --project <p> --goal <g> --content <c>`
   — never `--bundle`, so the result is a **registration ticket**: not
   claimable, no lane chosen, the filing discipline untouched. Success is
@@ -1529,7 +1547,12 @@ card unchanged. Confirm makes exactly one `POST /api/polyforge/messages/file-tic
 (one bundle-free `pf file create`: a registration ticket); on success the
 dialog closes and the card names the created slug (已建票 `<slug>`); on a
 refusal the dialog stays open with pf's text, nothing is created and nothing
-is retried. 【回复】 sets that message as the composer's reply target and,
+is retried. The same dialog carries the first-open onboarding's first-ticket
+step without a source message (polyforge#167 Q5): the goal and content start
+blank, the project select defaults to the first mapped project, and
+`lane="develop"` rides the request's `x-polyforge-lane` header, so the
+Messages path's `{goal, project, content}` body and its bundle-free flag
+create are unchanged. 【回复】 sets that message as the composer's reply target and,
 when the analysis carries `reply_draft`, fills the composer with it (still
 editable); without a draft the composer keeps its text. It never sends and the
 card stays. The composer's fields are named by their own labels (`htmlFor`),
@@ -2708,7 +2731,7 @@ are `@container` queries on `.settings-polyforge`, so a narrow detail pane
 on a desktop window gets them too.
 
 - **Host pane** — the one home of the Host-level settings: the machine
-  status, the Host region (below), the package switch, the Jobs card
+  status, the Host region (below), the read-only package card (its only control links to the Plugins page, polyforge#271), the Jobs card
   preferences, the config history and the install command.
 - **A Cell's pane** — its head (`data-pf-cell`: name and state, normalized
   server, running / pending / effective ceiling, the optional Cell ceiling,
@@ -2750,12 +2773,16 @@ slow-model latency bounds as one-line rows — `HOST_SCALAR_KEYS` — and the
 two failure-classification pattern lists as one-regex-per-line editors —
 `HOST_LIST_KEYS`, `data-pf-pattern-list`, saved as one JSON array on the
 Host scope —, polyforge#51) through
-`GET /api/polyforge/config?host=1` and `{host: true}` writes (
+`GET /api/polyforge/config?host=1` and `{host: true}` writes — since polyforge#259 T4 the region's editable fields are one draft behind a single footer 「保存（n 项改动）」 (`lib/settings-dirty` + `ConfigSaveFooter`; it writes exactly the changed keys and a connection key keeps its own confirmation) — (
 removed the read-only `HOST_READ_ONLY_KEYS` row with the per-repository bar
 ceiling) — no Cell's file card renders them; every
 Cell's own keys are its file card (`?profile=` reads, `{profile}` writes —
 the same scoped writer, pf's CAS on the file's sha256, validation and
-history). A connection key (`CONNECTION_KEYS`: the Host's daemon_socket, a
+history). A refused read or write anywhere on the page (row writes, rollbacks, Cell add/repair/remove, detect, the Host region, the workflow card) throws
+`responseError(body, status)` and shows `failureLine()`: the Chinese line the route's
+`code` names (`config-cas-409` → the conflict line; else `http-<status>`, else the generic
+line), the server's words and any CAS diff only inside the row's 「详情」 fold
+(`RowFeedbackLine`, `ConfigErrorNotice`; polyforge#259 T4 AC2). A connection key (`CONNECTION_KEYS`: the Host's daemon_socket, a
 Cell's user_id and api_key, set or unset) posts only after the confirmation
 (`data-pf-region-confirm` in the Host region, `data-pf-confirm` in a file
 card; unsetting a named Cell's api_key says a named Cell needs one — its

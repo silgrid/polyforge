@@ -58,7 +58,7 @@ export function compareFieldOf(results: readonly ComparedField[], field: string)
 export function unifiedValues(
   field: "approval-mode" | "sandbox" | "project-trust",
   compare: ComparedField | null,
-  notes: { pi: string; claude: string },
+  notes: { pi: string; claude: string; unset?: string },
 ): UnifiedSettingHarnessValue[] {
   if (compare === null) return [];
   const values: UnifiedSettingHarnessValue[] = [];
@@ -66,6 +66,12 @@ export function unifiedValues(
     const value = compare.values[harness];
     if (!value.supported) {
       values.push({ harness, status: "unsupported", value: null, reason: notes[harness] });
+    } else if (value.neutral === null && notes.unset !== undefined) {
+      // polyforge#256 B6: supported but unset is its own state, never the
+      // unsupported one. The display carries the localized 「未设置」 text (the
+      // UnifiedSetting protocol keeps `ready`; the stored value is not
+      // rewritten to false here — no silent write, no fake default).
+      values.push({ harness, status: "ready", value: notes.unset });
     } else {
       values.push({ harness, status: "ready", value: value.neutral });
     }

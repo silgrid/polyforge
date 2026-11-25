@@ -1,4 +1,4 @@
-// carries: lib/polyforge-unclassified*, app/api/polyforge/unclassified/*
+// carries: lib/polyforge-unclassified*, app/api/polyforge/unclassified/*, lib/host-pattern-lines*
 // — polyforge#51, end-to-end: the Host region's additional
 // failure-classification pattern lists, the two slow-model latency bounds
 // and the unclassified-error list (the last 7 days' fallback texts), driven
@@ -11,7 +11,8 @@
 // lib/polyforge-config-write* are deliberately NOT carried: three suites
 // already declare each of them (the e2e-carries cap is three per tracked
 // path); this suite's own surface — the unclassified read and its panel —
-// is what it uniquely pins.
+// is what it uniquely pins, with lib/host-pattern-lines* — the lines a
+// Host pattern-list save writes and settles to (W2, polyforge#277).
 //
 //   node e2e/w51-error-classes.mjs
 import assert from "node:assert/strict";
@@ -185,8 +186,12 @@ try {
     // the Host scope (blank lines trimmed, --host pinned, no --profile).
     const transient = host.locator('textarea[aria-label="transient_error_patterns (host)"]').first();
     await transient.waitFor({ state: "visible", timeout: 20_000 });
+    // polyforge#259 T4 AC1: the Host region has one save footer; the edit
+    // makes it dirty by exactly this one field before its Save is pressed.
     await transient.fill("\\b402\\b\npayment retry\n");
-    await host.locator('[data-pf-pattern-list="transient_error_patterns"]').getByRole("button", { name: "Save", exact: true }).first().click();
+    const footerSave = host.locator("footer.config-footer").getByRole("button", { name: "Save (1 change(s))", exact: true });
+    await footerSave.waitFor({ state: "visible", timeout: 20_000 });
+    await footerSave.click();
     const hit = await waitForCall((call) => call.args.includes("config") && call.args.includes("set") && call.args.includes("transient_error_patterns"));
     assert.ok(hit, "the list save reached pf");
     const keyIdx = hit.args.indexOf("transient_error_patterns");
@@ -206,6 +211,8 @@ try {
       await delay(100);
     }
     assert.equal(await transient.inputValue(), "\\b402\\b\npayment retry", "the re-read shows the applied list");
+    // the landed field settled: nothing is left for the footer to save
+    await footerSave.waitFor({ state: "detached", timeout: 20_000 });
   });
 
   await check("W3", async () => {
@@ -228,10 +235,29 @@ try {
     const transient = host.locator('textarea[aria-label="transient_error_patterns (host)"]').first();
     await transient.waitFor({ state: "visible", timeout: 20_000 });
     await transient.fill("not a regex (");
-    await host.locator('[data-pf-pattern-list="transient_error_patterns"]').getByRole("button", { name: "Save", exact: true }).first().click();
-    const error = host.locator('[role="status"], [role="alert"]').filter({ hasText: /compilable RE2/ }).first();
-    await error.waitFor({ state: "attached", timeout: 20_000 });
+    const footerSave = host.locator("footer.config-footer").getByRole("button", { name: "Save (1 change(s))", exact: true });
+    await footerSave.waitFor({ state: "visible", timeout: 20_000 });
+    await footerSave.click();
+    // polyforge#259 T4 AC2: the region's error line is a localized summary;
+    // pf's own words sit in its closed Details fold, not on the main line.
+    const error = host.locator('[role="status"].config-add-source-error').first();
+    await error.waitFor({ state: "visible", timeout: 20_000 });
+    const fold = error.locator("details.settings-reason-details").first();
+    const original = fold.locator(".settings-reason-original").first();
+    for (const deadline = Date.now() + 20_000; ;) {
+      if (/compilable RE2/.test((await original.textContent().catch(() => null)) ?? "")) break;
+      if (Date.now() > deadline) throw new Error(`pf's refusal never reached the Details fold: ${JSON.stringify(await error.textContent())}`);
+      await delay(100);
+    }
+    assert.equal(await fold.evaluate((node) => node.open), false, "the Details fold starts closed");
+    const shown = await error.innerText();
+    assert.doesNotMatch(shown, /compilable RE2/, `pf's own words are not the main line: ${JSON.stringify(shown)}`);
+    await fold.locator("summary").click();
+    await original.waitFor({ state: "visible", timeout: 20_000 });
+    assert.match(await original.innerText(), /compilable RE2/, "the opened Details fold shows pf's refusal");
+    // nothing crashed and the draft survives: the editor and the footer keep it
     assert.equal(await transient.inputValue(), "not a regex (", "a refused write keeps the draft");
+    await footerSave.waitFor({ state: "visible", timeout: 20_000 });
   });
 } catch (error) {
   failures.push(`crash: ${error instanceof Error ? error.stack : String(error)}`);

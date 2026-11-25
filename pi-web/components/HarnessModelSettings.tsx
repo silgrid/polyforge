@@ -1,26 +1,77 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { buildModelRows, type ModelViewInput, type ModelViewRow } from "@/lib/harness/model-view";
 import type { ModelPayload } from "@/lib/harness/concepts";
 import {
-  stepTierDisplayOrder,
   stepTierInvalidReferences,
   stepTierItems,
   stepTierRowView,
   stepTierState,
-  stepTierWritePlan,
   type StepTierItem,
   type StepTierWrite,
 } from "@/lib/step-tiers";
-import { useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
+import { EnabledModelsBanner, useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
+import {
+  draftDirtyCount,
+  draftWrites,
+  emptyDraft,
+  setDraftDefaultModel,
+  setDraftEffort,
+  settleWrite,
+  type ModelPageDraft,
+} from "@/lib/model-page-draft";
 import { ModelsConfig } from "./ModelsConfig";
 import { ClaudeCustomModels } from "./ClaudeCustomModels";
-import { HarnessApplyTo, applyToTargets, type HarnessApplyToResult, type HarnessApplyToSelection } from "./HarnessApplyTo";
-import { ConfigSidebar, ConfigSidebarList, ConfigSidebarItem, ConfigDetail } from "./SettingsUi";
+import { ModelStepTierDrawer, stepTierIdentity, type StepTierRead, type StepTierWriteFn } from "./ModelStepTierDrawer";
+import { readView } from "@/lib/settings-read-states";
+import {
+  ConfigButton,
+  ConfigEmptyState,
+  ConfigErrorNotice,
+  ConfigSidebar,
+  ConfigSidebarItem,
+  ConfigSidebarList,
+  ConfigDetail,
+  ConfigSkeleton,
+  ConfigSplitView,
+} from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
+
+/** The model page's four subpages (T3's settled information architecture):
+ *  the sidebar navigates pages, never a copy of the model table. */
+export type ModelSubpage = "default" | "list" | "providers" | "claude";
+
+const MODEL_SUBPAGES: ReadonlyArray<{ id: ModelSubpage; labelKey: string }> = [
+  { id: "default", labelKey: "models.defaultHeading" },
+  { id: "list", labelKey: "models.listHeading" },
+  { id: "providers", labelKey: "models.providersHeading" },
+  { id: "claude", labelKey: "models.claudeCustomHeading" },
+];
+
+/** The model page's left column: the four subpages, each with its translated
+ *  label. Presentational, so a component test can render it alone. */
+export function ModelPageNav({ page, onSelect }: { page: ModelSubpage; onSelect: (page: ModelSubpage) => void }) {
+  const { t } = useI18n();
+  return (
+    <ConfigSidebar>
+      <ConfigSidebarList>
+        {MODEL_SUBPAGES.map((subpage) => (
+          <ConfigSidebarItem
+            key={subpage.id}
+            data-model-subpage={subpage.id}
+            active={page === subpage.id}
+            onClick={() => onSelect(subpage.id)}
+          >
+            {t(subpage.labelKey)}
+          </ConfigSidebarItem>
+        ))}
+      </ConfigSidebarList>
+    </ConfigSidebar>
+  );
+}
 
 /** The tier column's own view of the Host's [step_tiers] catalog (85b2):
  *  the parsed tier items and why the column is read-only when it is. */
@@ -30,145 +81,75 @@ export interface StepTierColumnView {
   tiers: StepTierItem[];
 }
 
-/** One key write the tier column submits (the panel write route's face). */
-export interface StepTierWriteOutcome {
-  ok: boolean;
-  error?: string;
+/** The raw Host config answer the tier column reads (the panel's own shape):
+ *  the version facts localize the read-only reason, the items are the catalog
+ *  (polyforge#256 B1: the reason is rendered from i18n, never the server's
+ *  English sentence). */
+export interface HostTierConfig {
+  pfPresent: boolean | null;
+  pfVersion: string | null;
+  capable: boolean;
+  stepTiersReason: string | null;
+  items: Array<{ key: string; value?: unknown }>;
 }
 
-/** The identity a row's harness addresses in the catalog: pi's
- *  provider/id, claude's model name (Q2's identity rule — the same one the
- *  write gate judges). */
-function stepTierIdentity(row: Pick<ModelViewRow, "provider" | "id">, harness: string): { harness: "pi" | "claude"; model: string } | null {
-  if (harness === "pi") return { harness: "pi", model: `${row.provider}/${row.id}` };
-  if (harness === "claude") return { harness: "claude", model: row.id };
-  return null;
+/** Why the tier column is read-only, localized from the read's facts: not
+ *  installed, a version below the family's `0.2.4-0` floor (its found version
+ *  named), or an unreadable catalog. */
+export function stepTierReasonText(host: HostTierConfig, t: (key: string, params?: Record<string, string | number>) => string): string {
+  if (host.pfPresent === false) return t("models.stepTierReasonNotInstalled");
+  if (host.stepTiersReason) return t("models.stepTierReasonVersion", { version: host.pfVersion ?? t("models.stepTierReasonUnknownVersion") });
+  return t("models.stepTierReasonUnavailable");
 }
 
-/** One row's tier cell: the current state (全部 / 指定 with per-harness
- *  不一致 lines / 未设置, a multi-tier harness shown as 多档), a target
- *  select (未设置 or a tier, default first) and the「应用到」choice over
- *  the row's own harnesses. The submit writes one harness at a time, and
- *  EVERY step re-reads the Host catalog together with the file hash its
- *  write expects — the plan derives from the very state the CAS guards
- *  (review r2 #1: a plan from the page-load catalog let a concurrent
- *  write pass the fresh-hash CAS and be silently overwritten), a failure
- *  stops there, reported per harness with the draft kept (the CAS
- *  conflict included). A multi-tier edit confirms before it replaces. */
-export function StepTierCell({ row, tier, tierRead, tierWrite, onTierSaved }: {
-  row: ModelViewRow;
-  tier: StepTierColumnView;
-  tierRead: () => Promise<{ ok: true; items: Array<{ key: string; value?: unknown }>; hash: string | null } | { ok: false; error: string }>;
-  tierWrite: (write: StepTierWrite, hash: string | null) => Promise<StepTierWriteOutcome>;
-  onTierSaved?: () => void;
-}) {
+/** One row's step-tier cell (polyforge#256 B7, T3): the current state as short
+ *  badges — a single shared tier shows its name, differing harnesses show
+ *  `pi: default` / `claude: fast`, an unset or incapable row shows 「—」. A
+ *  capable cell is one small label button that opens the row's drawer
+ *  (ModelStepTierDrawer); no editor lives inline. */
+export function StepTierBadges({ row, tier, onOpen }: { row: ModelViewRow; tier: StepTierColumnView; onOpen?: (row: ModelViewRow) => void }) {
   const { t } = useI18n();
+  if (!tier.capable) {
+    return <span data-step-tier-cell="readonly" data-step-tier-state="readonly" style={{ color: "var(--text-dim)" }}>—</span>;
+  }
   const identities = row.harnesses
     .map((harness) => stepTierIdentity(row, harness))
     .filter((identity): identity is { harness: "pi" | "claude"; model: string } => identity !== null);
   const perHarness: Record<string, string[]> = {};
   for (const identity of identities) perHarness[identity.harness] = stepTierState(tier.tiers, identity);
   const view = stepTierRowView(identities.map((identity) => identity.harness), perHarness);
-  const [draft, setDraft] = useState<string | null>(null);
-  const [selection, setSelection] = useState<HarnessApplyToSelection>({ mode: "all", selected: [] });
-  const [results, setResults] = useState<HarnessApplyToResult[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  if (!tier.capable) {
-    return <span data-step-tier-cell="readonly" style={{ color: "var(--text-dim)" }}>—</span>;
-  }
-  const target = draft !== null ? draft : view.kind === "all" ? view.tier : "";
-  const tierNameText = (tiers: string[]) => tiers.length === 0 ? t("models.stepTierUnset")
-    : tiers.length === 1 ? tiers[0]
-    : t("models.stepTierMulti", { tiers: tiers.join("、") });
-  const submit = async () => {
-    const targets = applyToTargets(selection, row.harnesses.map((harness) => ({ harness, label: harness })));
-    if (targets.length === 0) return;
-    // a multi-tier harness is replaced by the chosen single tier — confirm first
-    if (targets.some((harness) => (perHarness[harness]?.length ?? 0) > 1)
-      && !window.confirm(t("models.stepTierMultiConfirm"))) return;
-    setBusy(true);
-    setResults(null);
-    const out: HarnessApplyToResult[] = [];
-    let failed = false;
-    for (const harness of targets) {
-      if (failed) {
-        out.push({ harness, ok: false, text: t("models.stepTierNotAttempted") });
-        continue;
-      }
-      const identity = stepTierIdentity(row, harness);
-      if (!identity) continue;
-      let harnessError: string | null = null;
-      for (let guard = 0; guard < 32; guard++) {
-        // one read carries both the catalog the plan derives from and the
-        // hash the write expects — the CAS then guards exactly that state
-        const read = await tierRead();
-        if (!read.ok) { harnessError = read.error; break; }
-        const plan = stepTierWritePlan(stepTierItems(read.items), identity, target === "" ? null : target);
-        if (plan.length === 0) break;
-        const answer = await tierWrite(plan[0], read.hash);
-        if (!answer.ok) {
-          harnessError = answer.error ?? `HTTP`;
-          break;
-        }
-      }
-      out.push({ harness, ok: !harnessError, text: harnessError ?? t("models.stepTierApplied") });
-      if (harnessError) failed = true;
-    }
-    setResults(out);
-    setBusy(false);
-    if (!failed && onTierSaved) onTierSaved();
-  };
-  return (
-    <span data-step-tier-cell="" style={{ display: "inline-flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-      <span data-step-tier-state="">
-        {view.kind === "all" && t("models.stepTierAll", { tier: view.tier })}
-        {view.kind === "unset" && t("models.stepTierUnset")}
-        {view.kind === "specific" && <>
-          <strong>{t("models.stepTierSpecific")}</strong>
-          {view.per.map((entry) => <span key={entry.harness} data-step-tier-per={entry.harness}>
-            {t("models.stepTierInconsistent", { harness: entry.harness, current: tierNameText(entry.tiers) })}
-          </span>)}
-        </>}
-      </span>
-      <select
-        data-step-tier-select=""
-        aria-label={t("models.stepTier")}
-        disabled={busy}
-        value={target}
-        onChange={(event) => setDraft(event.target.value)}
-      >
-        <option value="">{t("models.stepTierUnset")}</option>
-        {stepTierDisplayOrder([...new Set(tier.tiers.map((item) => item.tier))]).map((name) =>
-          <option key={name} value={name}>{name}</option>)}
-      </select>
-      <HarnessApplyTo
-        texts={{
-          title: t("models.stepTierApplyTo.title"),
-          all: t("models.stepTierApplyTo.all"),
-          specific: t("models.stepTierApplyTo.specific"),
-          submit: t("models.stepTierApplyTo.submit"),
-        }}
-        targets={row.harnesses.map((harness) => ({ harness, label: harness }))}
-        value={selection}
-        busy={busy}
-        results={results}
-        onChange={setSelection}
-        onSubmit={() => void submit()}
-      />
-    </span>
-  );
+  const content = view.kind === "unset"
+    ? <span data-step-tier-state="unset" style={{ color: "var(--text-dim)" }}>—</span>
+    : view.kind === "all"
+      ? <span data-step-tier-state="all"><span data-step-tier-badge="all">{view.tier}</span></span>
+      : <span data-step-tier-state="specific">
+        {view.per.map((entry) => <span key={entry.harness} data-step-tier-badge={entry.harness}>
+          {entry.harness}: {entry.tiers.length === 0 ? "—" : entry.tiers.join("、")}
+        </span>)}
+      </span>;
+  return <button
+    type="button"
+    className="settings-step-tier-button"
+    data-step-tier-cell="editable"
+    data-step-tier-open=""
+    aria-haspopup="dialog"
+    title={t("models.stepTierEdit")}
+    onClick={() => onOpen?.(row)}
+  >{content}</button>;
 }
 
-export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEffort, tier, tierRead, tierWrite, onTierSaved }: {
+export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effortValues = {}, onEffort, tier, onOpenTier, saving = false }: {
   rows: ModelViewRow[];
   enabled?: EnabledModelsController;
   levels?: Record<string, string[]>;
   piSettings?: ModelPayload | null;
+  /** The unsaved per-model levels (T3's draft), keyed `provider/id`. */
+  effortValues?: Record<string, string>;
   onEffort?: (provider: string, id: string, level: string) => void;
   tier?: StepTierColumnView;
-  tierRead?: () => Promise<{ ok: true; items: Array<{ key: string; value?: unknown }>; hash: string | null } | { ok: false; error: string }>;
-  tierWrite?: (write: StepTierWrite, hash: string | null) => Promise<StepTierWriteOutcome>;
-  onTierSaved?: () => void;
+  onOpenTier?: (row: ModelViewRow) => void;
+  /** The explicit save is in flight: the draft must not accept a newer edit. */
+  saving?: boolean;
 }) {
   const { t } = useI18n();
   return <table className="settings-model-table" style={{ width: "100%", textAlign: "left" }}>
@@ -185,40 +166,129 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEf
                 checked={row.chatAvailable} disabled={!enabled.view?.editable || enabled.pending !== null}
                 onChange={(event) => enabled.setModels(key, [key], event.target.checked)} /></label>
             : <span>pi: {row.chatAvailable ? t("models.available") : t("models.unavailable")}</span>)}
-          {row.harnesses.includes("claude") && <span> claude: {t("models.unsupported")}</span>}
+          {row.harnesses.includes("claude") && <span data-claude-chat="always" title={t("models.chatAlwaysOnReason")}>
+            {" "}claude: {t("models.chatAlwaysOn")}<span className="settings-model-info" aria-hidden="true"> ⓘ</span>
+          </span>}
         </td>
         <td>
-          {onEffort && row.harnesses.includes("pi") && supported.length > 0 && <label>pi <select
-            aria-label={`${t("models.reasoning")} — ${key}`}
-            value={piSettings?.perModelReasoningEffort[key]?.raw ?? ""}
-            onChange={(event) => onEffort(row.provider, row.id, event.target.value)}>
-            <option value="">{t("i18n.default")}</option>
-            {supported.map((level) => <option key={level} value={level}>{level}</option>)}
-          </select></label>}
-          <span>{row.reasoning.join(", ") || t("models.notProvided")}</span>
+          {onEffort && row.harnesses.includes("pi") && supported.length > 0
+            ? <label>pi <select
+              aria-label={`${t("models.reasoning")} — ${key}`}
+              disabled={saving}
+              value={key in effortValues ? effortValues[key] : piSettings?.perModelReasoningEffort[key]?.raw ?? ""}
+              onChange={(event) => onEffort(row.provider, row.id, event.target.value)}>
+              <option value="">{t("models.followGlobal", { level: piSettings?.reasoningEffort?.raw ?? t("models.notProvided") })}</option>
+              {supported.map((level) => <option key={level} value={level}>{level}</option>)}
+            </select></label>
+            : <span data-reasoning="readonly">{row.reasoning.join(", ") || t("models.notProvided")}</span>}
         </td>
-        {tier && <td><StepTierCell row={row} tier={tier} tierRead={tierRead ?? (async () => ({ ok: false, error: "no read path" }))} tierWrite={tierWrite ?? (async () => ({ ok: false }))} onTierSaved={onTierSaved} /></td>}
+        {tier && <td><StepTierBadges row={row} tier={tier} onOpen={onOpenTier} /></td>}
       </tr>;
     })}</tbody>
   </table>;
 }
 
-export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: string | null; onClose?: () => void; onOpenAccount?: () => void }) {
+/** The one explicit save action of the model subpages (T3): nothing is
+ *  written on change; the count names the fields still in the draft. */
+export function ModelSaveBar({ count, saving, onSave }: { count: number; saving: boolean; onSave: () => void }) {
+  const { t } = useI18n();
+  return <div className="settings-model-savebar">
+    <ConfigButton data-model-save="" variant="primary" disabled={saving || count === 0} onClick={onSave}>
+      {count > 0 ? t("models.saveChanges", { count }) : t("i18n.save")}
+    </ConfigButton>
+  </div>;
+}
+
+/** The model list's provider-wide enable/disable entry (T3): chat
+ *  availability has one home, so the provider switch that used to sit in the
+ *  Provider editor lives here as a bulk action instead. */
+export function ModelEnabledBulk({ enabled }: { enabled: EnabledModelsController }) {
+  const { t } = useI18n();
+  const [provider, setProvider] = useState("");
+  const providers = enabled.view?.providers ?? [];
+  if (providers.length === 0) return null;
+  const editable = enabled.view?.editable === true;
+  const busy = enabled.pending !== null;
+  return <div className="settings-model-bulk" data-model-bulk="">
+    <label className="settings-model-bulk-field">
+      <span>{t("models.providerLabel")}</span>
+      <select aria-label={t("models.providerLabel")} value={provider} onChange={(event) => setProvider(event.target.value)} disabled={busy}>
+        <option value="">{t("models.providerLabel")}</option>
+        {providers.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+      </select>
+    </label>
+    <ConfigButton size="small" disabled={!editable || !provider || busy}
+      onClick={() => { if (provider) enabled.setProvider(provider, true); }}>{t("models.enableAll")}</ConfigButton>
+    <ConfigButton size="small" disabled={!editable || !provider || busy}
+      onClick={() => { if (provider) enabled.setProvider(provider, false); }}>{t("models.disableAll")}</ConfigButton>
+  </div>;
+}
+
+/** 模型页读取失败时的页顶状态（polyforge#271 AC1/A3）：alert + 重试，纯展示。 */
+export function ModelPageError({ summary, onRetry, t }: { summary: ReactNode; onRetry: () => void; t: (key: string) => string }) {
+  return (
+    <ConfigErrorNotice
+      summary={summary}
+      action={<ConfigButton size="small" data-model-retry="" onClick={onRetry}>{t("i18n.retry")}</ConfigButton>}
+    />
+  );
+}
+
+/** 模型集合成功读回但为空时的空状态（polyforge#271 AC1/A3）：点明缺什么，
+ *  并给出两个真实动作——去账号连接、去 Providers 配置。 */
+export function ModelEmptyState({ onOpenAccount, onOpenProviders }: { onOpenAccount?: () => void; onOpenProviders?: () => void }) {
+  const { t } = useI18n();
+  return (
+    <ConfigEmptyState action={(
+      <>
+        {onOpenAccount && <ConfigButton data-model-action="open-account" onClick={onOpenAccount}>{t("models.openAccount")}</ConfigButton>}
+        {onOpenProviders && <ConfigButton data-model-action="open-providers" onClick={onOpenProviders}>{t("models.openProviders")}</ConfigButton>}
+      </>
+    )}>
+      {t("models.noModels")} {t("models.noModelsHint")}
+    </ConfigEmptyState>
+  );
+}
+
+export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage = "default", onUnsavedChange }: {
+  cwd: string | null;
+  onClose?: () => void;
+  onOpenAccount?: () => void;
+  /** A component test's entry point; the page opens on the default subpage. */
+  initialSubpage?: ModelSubpage;
+  /** The page reports its unsaved draft so Settings can guard a close (owner plan review item 1 A). */
+  onUnsavedChange?: (dirty: boolean) => void;
+}) {
   const { t } = useI18n();
   const enabled = useEnabledModels(cwd);
+  const [page, setPage] = useState<ModelSubpage>(initialSubpage);
+  // The Provider editor owns a models.json draft. Once visited it stays
+  // mounted (hidden), so switching subpages never throws that draft away; it
+  // is not fetched before the first visit.
+  const [providersVisited, setProvidersVisited] = useState(initialSubpage === "providers");
+  const [draft, setDraft] = useState<ModelPageDraft>(emptyDraft);
+  const [drawerRow, setDrawerRow] = useState<ModelViewRow | null>(null);
+  // The drawer keeps the catalog it opened with, so a background re-read never
+  // unmounts it mid-edit (the CAS re-read on save is what guards the write).
+  const [drawerTier, setDrawerTier] = useState<StepTierColumnView | null>(null);
   const [models, setModels] = useState<ModelViewInput[]>([]);
   const [defaultModel, setDefaultModel] = useState<ModelIdentity | null>(null);
   const [piSettings, setPiSettings] = useState<ModelPayload | null>(null);
   const [levels, setLevels] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
-  const [tierColumn, setTierColumn] = useState<StepTierColumnView | null>(null);
+  // A save failure is not a read failure: a reload after a landed write must
+  // not clear the message that belongs to the failed draft entry.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [hostTierConfig, setHostTierConfig] = useState<HostTierConfig | null>(null);
   const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
 
   useEffect(() => {
     const abort = new AbortController();
+    setLoading(true);
+    setError(null);
     const get = async (url: string) => {
       const response = await fetch(url, { signal: abort.signal });
       const data = await response.json();
@@ -243,10 +313,16 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
       // the Host's [step_tiers] catalog (85b2): the tier column's own read —
       // a failure or an incapable answer leaves the column read-only with
       // its reason, the other columns untouched
-      const hostConfig = value(5);
-      setTierColumn(hostConfig
-        ? { capable: hostConfig.capable === true && !hostConfig.stepTiersReason, reason: hostConfig.stepTiersReason ?? hostConfig.reason ?? null, tiers: stepTierItems(hostConfig.items ?? []) }
-        : { capable: false, reason: "the step-tier catalog read failed; polyforge may be unavailable", tiers: [] });
+      const hostConfig = value(5) as Partial<HostTierConfig> | undefined;
+      setHostTierConfig(hostConfig
+        ? {
+          pfPresent: hostConfig.pfPresent === false ? false : hostConfig.pfPresent === true ? true : null,
+          pfVersion: typeof hostConfig.pfVersion === "string" ? hostConfig.pfVersion : null,
+          capable: hostConfig.capable === true,
+          stepTiersReason: typeof hostConfig.stepTiersReason === "string" ? hostConfig.stepTiersReason : null,
+          items: Array.isArray(hostConfig.items) ? hostConfig.items : [],
+        }
+        : { pfPresent: null, pfVersion: null, capable: false, stepTiersReason: null, items: [] });
       const next: ModelViewInput[] = (catalog?.modelList ?? []).map((entry: { provider: string; id: string; name: string }) => ({
         harness: "pi", ...entry, chatAvailable: false,
         reasoning: pi?.perModelReasoningEffort[`${entry.provider}/${entry.id}`]?.raw ?? pi?.reasoningEffort?.raw ?? undefined,
@@ -266,6 +342,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
           : catalog?.defaultModel ? { harness: "pi", provider: catalog.defaultModel.provider, id: catalog.defaultModel.modelId } : null);
       const failed = answers.find((answer) => answer.status === "rejected");
       setError(failed?.status === "rejected" ? String(failed.reason?.message ?? failed.reason) : null);
+      setLoading(false);
     });
     return () => abort.abort();
   }, [cwd, query, revision]);
@@ -277,25 +354,50 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
     })), defaultModel);
   }, [models, defaultModel, enabled.view]);
 
-  const write = useCallback(async (url: string, body: unknown) => {
+  const dirty = draftDirtyCount(draft);
+  const saveDraft = useCallback(async () => {
+    if (saving) return;
+    const writes = draftWrites(draft, cwd);
+    if (writes.length === 0) return;
     setSaving(true);
     setError(null);
-    try {
-      const response = await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await response.json();
-      if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
-      setRevision((previous) => previous + 1);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally { setSaving(false); }
-  }, []);
+    setSaveError(null);
+    let next = draft;
+    for (const request of writes) {
+      try {
+        const response = await fetch(request.url, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request.body),
+        });
+        const data = await response.json();
+        if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
+        // A landed write is the saved value from now on: the UI shows it even
+        // when a later write of the same round fails, and the draft keeps only
+        // the failed entries for a retry. The controls are disabled while
+        // saving, so this settlement never races a newer edit.
+        if (request.kind === "default" && next.defaultModel) setDefaultModel(next.defaultModel);
+        if (request.kind === "effort" && request.key) {
+          const level = next.efforts[request.key] ?? "";
+          setPiSettings((previous) => previous ? {
+            ...previous,
+            perModelReasoningEffort: { ...previous.perModelReasoningEffort, [request.key as string]: { neutral: null, raw: level } },
+          } : previous);
+        }
+        next = settleWrite(next, request);
+        setDraft(next);
+        setRevision((previous) => previous + 1);
+      } catch (cause) {
+        setSaveError(cause instanceof Error ? cause.message : String(cause));
+        break;
+      }
+    }
+    setSaving(false);
+  }, [cwd, draft, saving]);
 
-  // One Host catalog read (85b2, review r2 #1): the items the plan derives
-  // from AND the file hash the write expects, from the SAME GET — the CAS
-  // then guards exactly the state the plan saw, so a concurrent write either
-  // shows up in the plan (it happened before the read) or refuses the write
-  // (it happened after; 409, the draft kept).
-  const tierRead = useCallback(async (): Promise<{ ok: true; items: Array<{ key: string; value?: unknown }>; hash: string | null } | { ok: false; error: string }> => {
+  // One Host catalog read: the items the plan derives from AND the file hash
+  // the write expects, from the SAME GET — the CAS guards exactly that state.
+  const tierRead: StepTierRead = useCallback(async () => {
     try {
       const response = await fetch("/api/polyforge/config?host=1");
       const data = await response.json().catch(() => null);
@@ -310,18 +412,16 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
     }
   }, []);
 
-  // One tier-key write (85b2): the CAS hash comes from the same read that
-  // planned it; the value is the plan's whole-key list, and the write gate
-  // judges the new candidates. A conflict (409) leaves the draft for a retry.
-  const tierWrite = useCallback(async (writeStepTier: StepTierWrite, hash: string | null): Promise<StepTierWriteOutcome> => {
+  // One tier-key write; the CAS hash comes from the same read that planned it.
+  const tierWrite: StepTierWriteFn = useCallback(async (write: StepTierWrite, hash: string | null) => {
     try {
       const response = await fetch("/api/polyforge/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: writeStepTier.action,
-          key: `step_tiers.${writeStepTier.tier}`,
-          ...(writeStepTier.action === "set" ? { value: writeStepTier.candidates } : {}),
+          action: write.action,
+          key: `step_tiers.${write.tier}`,
+          ...(write.action === "set" ? { value: write.candidates } : {}),
           host: true,
           ...(hash !== null ? { expect_state: { file_sha256: hash } } : {}),
         }),
@@ -333,74 +433,141 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
       return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
     }
   }, []);
-  const bumpTierRevision = useCallback(() => setRevision((previous) => previous + 1), []);
 
-  const selected = defaultModel ? JSON.stringify(defaultModel) : "";
+  // The unsaved draft is reported to Settings and guarded on the page itself:
+  // a subpage switch asks first, a close asks before anything is lost.
+  useEffect(() => { onUnsavedChange?.(dirty > 0); }, [dirty, onUnsavedChange]);
+  useEffect(() => {
+    if (dirty === 0) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  const changePage = (next: ModelSubpage) => {
+    if (dirty > 0 && !window.confirm(t("models.unsavedLeave"))) return;
+    if (next === "providers") setProvidersVisited(true);
+    setPage(next);
+  };
+
+  // The tier column is read-only (polyforge#256 B7): one Host read at page
+  // load, localized in render.
+  const tierColumn = useMemo<StepTierColumnView | null>(() => hostTierConfig === null ? null : {
+    capable: hostTierConfig.capable && !hostTierConfig.stepTiersReason,
+    reason: hostTierConfig.capable && !hostTierConfig.stepTiersReason ? null : stepTierReasonText(hostTierConfig, t),
+    tiers: stepTierItems(hostTierConfig.items),
+  }, [hostTierConfig, t]);
+
+  const shownDefault = draft.defaultModel ?? defaultModel;
+  const selected = shownDefault ? JSON.stringify(shownDefault) : "";
+  const defined = {
+    pi: rows.filter((row) => row.harnesses.includes("pi")).map((row) => `${row.provider}/${row.id}`),
+    claude: rows.filter((row) => row.harnesses.includes("claude")).map((row) => row.id),
+  };
+  const invalidTiers = tierColumn?.capable ? stepTierInvalidReferences(tierColumn.tiers, defined) : [];
+  const view = readView({ loading, error: Boolean(error || saveError), count: models.length });
+  // A kept draft (or the last good default) is data: a reload keeps the select
+  // on screen instead of replacing it with a skeleton (Q5 A).
+  const defaultView = readView({ loading: loading && !shownDefault, error: Boolean(error || saveError), count: models.length + (shownDefault ? 1 : 0) });
   return (
     <div className="settings-section settings-models" data-model-page="unified">
-      <h2>{t("common.models")}</h2>
-      {(error || enabled.failure) && <div role="alert">{error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}</div>}
-      <div className="config-split-view">
-      <ConfigSidebar><ConfigSidebarList>
-        <ConfigSidebarItem active={selectedProvider === null} onClick={() => setSelectedProvider(null)}>{t("models.defaultHeading")}</ConfigSidebarItem>
-        {[...new Set(rows.map((row) => row.provider))].map((provider) => <div key={provider}>
-          <strong>{provider}</strong>
-          {rows.filter((row) => row.provider === provider).map((row) => <ConfigSidebarItem
-            key={row.id} active={selectedProvider === provider} onClick={() => setSelectedProvider(provider)}>
-            {row.name} · {row.harnesses.join(", ")}
-          </ConfigSidebarItem>)}
-        </div>)}
-      </ConfigSidebarList></ConfigSidebar>
-      <ConfigDetail>
-      <section aria-label={t("models.defaultHeading")}>
-        <h3>{t("models.defaultHeading")}</h3>
-        <select aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
-          onChange={(event) => {
-            const choice = JSON.parse(event.target.value) as ModelIdentity;
-            void write(`/api/models/default${query}`, choice.harness === "claude"
-              ? { harness: "claude", model: choice.id, ...(cwd ? { cwd } : {}) }
-              : { provider: choice.provider, modelId: choice.id, ...(cwd ? { cwd } : {}) });
-          }}>
-          <option value="" disabled>{t("models.notProvided")}</option>
-          {defaultModel && !models.some((model) => model.harness === defaultModel.harness && model.provider === defaultModel.provider && model.id === defaultModel.id)
-            && <option value={selected}>{defaultModel.harness} · {defaultModel.provider}/{defaultModel.id}</option>}
-          {models.map((model) => <option key={`${model.harness}/${model.provider}/${model.id}`}
-            value={JSON.stringify({ harness: model.harness, provider: model.provider, id: model.id })}>
-            {model.harness} · {model.provider}/{model.id}
-          </option>)}
-        </select>
-      </section>
-      <section aria-label={t("models.listHeading")}>
-        <h3>{t("models.listHeading")}</h3>
-        {tierColumn && !tierColumn.capable && tierColumn.reason && (
-          <p role="note" data-step-tier-reason="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>{tierColumn.reason}</p>
-        )}
-        {tierColumn?.capable && (() => {
-          // the catalog's references no listed row answers (a deleted model, a
-          // migrated claude name) — noted once, never silently dropped
-          const defined = { pi: rows.filter((row) => row.harnesses.includes("pi")).map((row) => `${row.provider}/${row.id}`),
-            claude: rows.filter((row) => row.harnesses.includes("claude")).map((row) => row.id) };
-          const invalid = stepTierInvalidReferences(tierColumn.tiers, defined);
-          return invalid.length > 0 ? (
-            <p role="note" data-step-tier-invalid="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>
-              {t("models.stepTierInvalidNote", { candidates: invalid.join("、") })}
-            </p>
-          ) : null;
-        })()}
-        <HarnessModelTable rows={selectedProvider ? rows.filter((row) => row.provider === selectedProvider) : rows} enabled={enabled} levels={levels} piSettings={piSettings}
-          tier={tierColumn ?? undefined} tierRead={tierRead} tierWrite={tierWrite} onTierSaved={bumpTierRevision}
-          onEffort={(provider, id, level) => { void write(`/api/harness/pi/model${query}`, { modelThinkingLevel: { key: `${provider}/${id}`, level: level || null } }); }} />
-      </section>
-      <section aria-label="pi">
-        <h3>pi</h3>
-        <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
-      </section>
-      <section aria-label="claude">
-        <h3>claude</h3>
-        <ClaudeCustomModels onRefresh={() => setRevision((previous) => previous + 1)} />
-      </section>
-      </ConfigDetail>
-      </div>
+      {(error || saveError || enabled.failure) && (
+        error ? (
+          <ModelPageError
+            summary={saveError ?? error}
+            onRetry={() => setRevision((previous) => previous + 1)}
+            t={t}
+          />
+        ) : (
+          <ConfigErrorNotice summary={saveError ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")} />
+        )
+      )}
+      <ConfigSplitView>
+        <ModelPageNav page={page} onSelect={changePage} />
+        <ConfigDetail>
+          {page === "default" && defaultView.kind === "loading" && (
+            <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
+              <div data-model-skeleton=""><ConfigSkeleton label={t("i18n.loading")} lines={3} /></div>
+              <ModelSaveBar count={0} saving={saving} onSave={() => void saveDraft()} />
+            </section>
+          )}
+          {page === "default" && defaultView.kind === "empty" && (
+            <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
+              <ModelEmptyState onOpenAccount={onOpenAccount} onOpenProviders={() => setPage("providers")} />
+            </section>
+          )}
+          {page === "default" && defaultView.kind === "ready" && (
+            <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
+              <h3>{t("models.defaultHeading")}</h3>
+              <select className="settings-model-default-select" aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
+                onChange={(event) => {
+                  const choice = JSON.parse(event.target.value) as ModelIdentity;
+                  setDraft((previous) => setDraftDefaultModel(previous, choice));
+                }}>
+                <option value="" disabled>{t("models.notProvided")}</option>
+                {shownDefault && !models.some((model) => model.harness === shownDefault.harness && model.provider === shownDefault.provider && model.id === shownDefault.id)
+                  && <option value={selected}>{shownDefault.harness} · {shownDefault.provider}/{shownDefault.id}</option>}
+                {models.map((model) => <option key={`${model.harness}/${model.provider}/${model.id}`}
+                  value={JSON.stringify({ harness: model.harness, provider: model.provider, id: model.id })}>
+                  {model.harness} · {model.provider}/{model.id}
+                </option>)}
+              </select>
+              <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
+            </section>
+          )}
+          {page === "list" && view.kind === "loading" && (
+            <section className="settings-model-section" data-model-page-pane="list" aria-label={t("models.listHeading")}>
+              <div data-model-skeleton=""><ConfigSkeleton label={t("i18n.loading")} lines={4} /></div>
+            </section>
+          )}
+          {page === "list" && view.kind === "empty" && (
+            <section className="settings-model-section" data-model-page-pane="list" aria-label={t("models.listHeading")}>
+              <ModelEmptyState onOpenAccount={onOpenAccount} onOpenProviders={() => setPage("providers")} />
+            </section>
+          )}
+          {page === "list" && view.kind === "ready" && (
+            <section className="settings-model-section" data-model-page-pane="list" aria-label={t("models.listHeading")}>
+              <EnabledModelsBanner controller={enabled} />
+              <h3>{t("models.listHeading")}</h3>
+              {tierColumn && !tierColumn.capable && tierColumn.reason && (
+                <p role="note" data-step-tier-reason="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>{tierColumn.reason}</p>
+              )}
+              {invalidTiers.length > 0 && (
+                <p role="note" data-step-tier-invalid="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>
+                  {t("models.stepTierInvalidNote", { candidates: invalidTiers.join("、") })}
+                </p>
+              )}
+              <ModelEnabledBulk enabled={enabled} />
+              <HarnessModelTable rows={rows} enabled={enabled} levels={levels} piSettings={piSettings}
+                saving={saving}
+                effortValues={draft.efforts}
+                tier={tierColumn ?? undefined}
+                onOpenTier={(row) => { setDrawerTier(tierColumn); setDrawerRow(row); }}
+                onEffort={(provider, id, level) => setDraft((previous) => setDraftEffort(previous, `${provider}/${id}`, level))} />
+              <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
+            </section>
+          )}
+          {(page === "providers" || providersVisited) && (
+            <section hidden={page !== "providers"} className="settings-model-section is-provider-page" data-model-page-pane="providers" aria-label={t("models.providersHeading")}>
+              <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
+            </section>
+          )}
+          {page === "claude" && (
+            <section className="settings-model-section" data-model-page-pane="claude" aria-label={t("models.claudeCustomHeading")}>
+              <ClaudeCustomModels onRefresh={() => setRevision((previous) => previous + 1)} />
+            </section>
+          )}
+        </ConfigDetail>
+      </ConfigSplitView>
+      {drawerRow && drawerTier?.capable && (
+        <ModelStepTierDrawer
+          row={drawerRow}
+          tier={drawerTier}
+          tierRead={tierRead}
+          tierWrite={tierWrite}
+          onClose={() => { setDrawerRow(null); setDrawerTier(null); }}
+          onSaved={() => setRevision((previous) => previous + 1)}
+        />
+      )}
     </div>
   );
 }

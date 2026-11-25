@@ -131,6 +131,9 @@ type StartConfig struct {
 	// and whenever the daemon writes the opening or an event section of
 	// artifacts/handoff.md (Config.Language).
 	Language func() string
+	// LaneVerifiable answers whether the lane is one this build verifies
+	// (Config.LaneVerifiable): a lane it refuses keeps every stop human.
+	LaneVerifiable func(lane string) bool
 }
 
 // Start instantiates the driver over the capsule and runs it.
@@ -191,6 +194,7 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 		OwnerWait:      cfg.OwnerWait,
 		HubWrites:      cfg.HubWrites,
 		Language:       cfg.Language,
+		LaneVerifiable: cfg.LaneVerifiable,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("driver: %w", err)

@@ -38,7 +38,8 @@ export async function checkModelContext(page) {
     if (await section.isVisible()) await section.selectOption("models");
     else await settings.getByRole("button", { name: "Models", exact: true }).click();
     const sectionHost = (id) => settings.locator(`.settings-section-host[data-settings-section="${id}"]:not([hidden])`);
-    await sectionHost("models").locator(".config-sidebar-item").filter({ hasText: "OpenAI Codex" }).click();
+    await sectionHost("models").locator('[data-model-subpage="providers"]').click();
+    await sectionHost("models").getByLabel("Provider", { exact: true }).selectOption("oauth:openai-codex");
   };
   const input = settings.getByRole("textbox", { name: "Context window for GPT-6 Astra", exact: true });
   const save = async () => {
@@ -62,7 +63,7 @@ export async function checkModelContext(page) {
     await settings.getByRole("button", { name: "Close", exact: true }).click();
     await open();
     assert.equal(await input.inputValue(), "500000");
-    assert.equal(await settings.locator(".config-sidebar-item").filter({ hasText: /^openai-codex$/ }).count(), 0,
+    assert.equal(await settings.getByLabel("Provider", { exact: true }).locator('option[value="provider:openai-codex"]').count(), 0,
       "An override-only entry must not create a duplicate custom provider");
 
     await input.fill("500k");

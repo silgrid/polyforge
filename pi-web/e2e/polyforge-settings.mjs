@@ -1,5 +1,5 @@
 // carries: components/PolyforgeConfig*, components/polyforge-config-helpers*, components/PolyforgeInstallCard*, lib/polyforge-install-pure*, app/api/polyforge/detect/*
-// carries: components/SettingsPanel*, components/SettingsUi*, components/settings-ui-helpers*, lib/settings-navigation*, lib/package-settings*, app/api/plugins/*
+// carries: components/SettingsPanel*, components/SettingsUi*, components/settings-ui-helpers*, components/AgentsConfig*, lib/settings-navigation*, lib/package-settings*, app/api/plugins/*
 // pi#122 (wi_Gvm8wRZcr88O) — Settings Polyforge section: end-to-end acceptance pass.
 //
 // Authored pre-code against artifacts/spec.md (AC1–AC12, AC14; AC13 is this file
@@ -26,7 +26,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { chromium } from "playwright";
-import { COLD_MS, NAV_MS } from "./timeouts.mjs";
+import { ACTION_MS, COLD_MS, NAV_MS } from "./timeouts.mjs";
 import { assertNoDevServer, createCheck, createHarness, reportTitled, root, writeFileAtomic, writeHostSession } from "./harness.mjs";
 
 assertNoDevServer();
@@ -147,6 +147,7 @@ const T = {
   S9: "S9: The detect response discloses no credentials, home paths or env values",
   S10: "S10: The pi package switch writes only through /api/plugins and auto re-detects",
   S11: "S11: Detection runs once per open, never polls, and 重新检测 bypasses the 60 s presence cache",
+  S13: "S13: The sub-agents settings are a sidebar destination and navigating them writes nothing (polyforge#271)",
   S12: "S12: Docs change with the code (polyforge-panel.md and settings-ui.md describe the section)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
@@ -255,6 +256,8 @@ const clipboard = (page) => page.evaluate(() => navigator.clipboard?.readText().
 // page opens on the Host pane, the install command's home).
 async function copiesNeedle(page, dialog, needle) {
   for (const button of await dialog.locator("main .config-detail").getByRole("button").all()) {
+    // polyforge#271: the package card's link leaves the section; it is not a copy control.
+    if (await button.getAttribute("data-package-manage") !== null) continue;
     await button.click({ timeout: 2000 }).catch(() => {});
     if (String(await clipboard(page)).includes(needle)) return true;
   }
@@ -391,32 +394,23 @@ try {
     }
     assert.equal((await get("/api/polyforge/detect")).json?.pfPresent, true, "non-force detect must answer too");
   });
-  // S10 — the pi package switch: exactly one switch (the Claude rows are
-  // read-only), one POST through the existing /api/plugins global write path,
-  // an automatic re-detect, and no other write anywhere.
-  await checkPage(T.S10, "the pi package switch", {}, async (page) => {
+  // S10 — the package card is read-only (polyforge#271 AC2/B2): it shows the
+  // package facts, its one control goes to the Plugins page, and Polyforge
+  // issues no package write.
+  await checkPage(T.S10, "the pi package card is read-only and links to Plugins", {}, async (page) => {
     resetFixtures();
     detectHits.length = 0;
     const cliBefore = readFileSync(cliToml, "utf8");
     const claudeBefore = readFileSync(claudeSettings, "utf8");
     const dialog = await openSettings(page);
     await pfTab(dialog).click();
-    await page.waitForRequest((request) => new URL(request.url()).pathname === "/api/polyforge/detect", { timeout: 15_000 }).catch(() => {});
-    // polyforge#240 adds a second switch (the browser-notification card), so
-    // the scenario names the package switch instead of counting the section.
-    const switches = dialog.locator("main").getByRole("switch", { name: "Polyforge package (global)" });
-    assert.equal(await switches.count(), 1, "the section offers the pi package switch (the Claude rows are read-only)");
-    assert.equal(await dialog.locator("main").getByRole("switch", { name: "Notify me about owner decisions" }).count(), 1,
-      "polyforge#240: the browser-notification switch is the section's own second switch");
-    // The switch renders as soon as detection reports the package, but it stays
-    // disabled until the section's package read (/api/plugins) answers. That
-    // first read is a cold route compile, which a loaded host can push past the
-    // 30 s action default; the one click then times out (full-1
-    // S10). Wait for the enabled switch under the suite's warm-open ceiling,
-    // before the write audit starts, so background session-lease writes during
-    // the wait are not counted against the toggle.
-    for (const deadline = Date.now() + NAV_MS; Date.now() < deadline && !(await switches.first().isEnabled().catch(() => false));) await delay(100);
-    const before = detectHits.length;
+    const card = dialog.locator("main [data-package-status]").first();
+    await card.waitFor({ state: "visible", timeout: COLD_MS });
+    for (const deadline = Date.now() + COLD_MS; Date.now() < deadline && (await card.getAttribute("data-package-status")) === "pending";) await delay(100);
+    assert.notEqual(await card.getAttribute("data-package-status"), "pending", "the package status settles");
+    assert.equal(await dialog.locator("main").getByRole("switch", { name: "Polyforge package (global)" }).count(), 0,
+      "the package switch is gone (the Plugins page is the write path)");
+    assert.match(await card.innerText(), /installed/, "the card shows the package fact as text");
     const posts = [];
     const otherWrites = [];
     page.on("request", (request) => {
@@ -425,20 +419,57 @@ try {
       const entry = { path: url.pathname, body: request.postData() ?? "" };
       (url.pathname === "/api/plugins" ? posts : otherWrites).push(entry);
     });
-    await switches.first().click();
-    await delay(4000);
-    assert.equal(posts.length, 1, `the switch issued ${posts.length} POSTs (want exactly one /api/plugins write)`);
-    assert.equal(posts[0]?.path, "/api/plugins");
-    const body = JSON.parse(posts[0]?.body ?? "{}");
-    assert.equal(body.action, "disable");
-    assert.equal(body.scope, "global");
-    assert.equal(body.source, clone);
-    assert.equal(body.cwd, project);
+    await dialog.locator("main").getByRole("button", { name: "Manage on the Plugins page" }).click();
+    // polyforge#271 round 2 (review r2#6): poll for the Plugins section host
+    // actually becoming visible — the always-present tab button proves nothing.
+    const pluginsShown = async () => (await dialog.locator('.settings-section-host[data-settings-section="plugins"]:not([hidden])').count()) > 0;
+    for (const deadline = Date.now() + ACTION_MS; Date.now() < deadline;) {
+      if (await pluginsShown()) break;
+      await delay(100);
+    }
+    assert.ok(await pluginsShown(), "the manage link did not open the Plugins section");
+    assert.equal(posts.length, 0, `browsing the package card issued ${posts.length} /api/plugins writes`);
     assert.deepEqual(otherWrites, [], "a write path other than /api/plugins was used");
-    assert.ok(detectHits.length > before, "detection did not re-run automatically after the toggle");
     assert.equal(readFileSync(cliToml, "utf8"), cliBefore, "cli.toml was written");
     assert.equal(readFileSync(claudeSettings, "utf8"), claudeBefore, "Claude Code config was written");
+    await pfTab(dialog).click();
+    await dialog.locator("main [data-package-status]").first().waitFor({ state: "visible", timeout: ACTION_MS });
   });
+  // S13 — polyforge#271 AC2 (B1, Q7 A): the sub-agents' settings are a
+  // sidebar destination; opening it and switching the selection writes nothing.
+  await checkPage(T.S13, "sub-agents settings is a sidebar destination", {}, async (page) => {
+    const writes = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.startsWith("/api/subagents") && request.method() !== "GET") {
+        writes.push({ path: url.pathname, method: request.method(), body: request.postData() ?? "" });
+      }
+    });
+    await page.context().route(/\/api\/subagents\/profiles\?/, (route) => route.fulfill({ json: { profiles: [{
+      name: "fixture-agent", displayName: "Fixture Agent", scope: "global", filePath: "/fixture/agents/fixture-agent.md",
+      description: "", systemPrompt: "", tools: ["read"], loadSkills: false, loadExtensions: false,
+      codemode: "off", mcp: "off", promptMode: "append", inheritContext: false, runInBackground: false, enabled: true,
+    }] } }));
+    await page.context().route(/\/api\/subagents\/settings$/, (route) => route.fulfill({ json: { enabled: true, maxConcurrent: 4 } }));
+    const dialog = await openSettings(page);
+    const subAgents = dialog.getByRole("button", { name: "Sub-agents", exact: true });
+    await subAgents.click({ timeout: ACTION_MS });
+    const settingsNav = dialog.locator('[data-agents-nav="settings"]');
+    await settingsNav.waitFor({ state: "visible", timeout: ACTION_MS });
+    const pane = dialog.locator('[data-agents-settings-pane]');
+    for (const deadline = Date.now() + ACTION_MS; Date.now() < deadline;) {
+      if (await pane.count()) break;
+      await delay(100);
+    }
+    assert.ok(await pane.count(), "the sidebar settings destination did not open its detail");
+    assert.equal(await pane.getByRole("switch").count(), 1, "the built-in sub-agent switch is not in the settings detail");
+    assert.equal(await pane.locator('input[type="number"]').count(), 1, "the concurrency field is not in the settings detail");
+    await dialog.getByRole("button", { name: "Fixture Agent", exact: true }).click({ timeout: ACTION_MS });
+    await settingsNav.click({ timeout: ACTION_MS });
+    await pane.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.deepEqual(writes, [], "navigating the sub-agent settings wrote to the server");
+  });
+
   // S11 — cadence: one detect per open, no polling, and the manual re-detect
   // control bypasses the 60 s presence cache (the stub version flips within the
   // cache window and the section must show the new value). Fixture: no global

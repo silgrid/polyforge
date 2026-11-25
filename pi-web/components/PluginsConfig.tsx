@@ -11,7 +11,9 @@ import type {
   ProjectTrustStatus,
 } from "@/lib/api-types";
 import { useI18n } from "@/hooks/useI18n";
+import { ConfigDangerMenu } from "./ConfigDangerMenu";
 import { shortenPath } from "@/lib/display-path";
+import { pluginRowName } from "@/lib/settings-display-names";
 import {
   getLastSettingsSelection,
   setLastSettingsSelection,
@@ -322,7 +324,7 @@ function AddPluginPanel({
   );
 }
 
-function PackageDetail({
+export function PackageDetail({
   pkg,
   cwd,
   busyKey,
@@ -430,14 +432,19 @@ function PackageDetail({
             >
                {reloadBusy ? t("i18n.reloading") : t("i18n.reloadSession")}
             </ConfigButton>
-            <ConfigButton
-              variant="danger"
-              size="small"
-              onClick={() => onAction("remove", pkg)}
-              disabled={busy || reloadBusy}
-            >
-               {busyKey === `remove:${key}` ? t("i18n.removing") : t("i18n.remove")}
-            </ConfigButton>
+            {/* The irreversible removal sits behind the shared ⋯ menu and asks
+                once (polyforge#259 T4 AC1). */}
+            <ConfigDangerMenu
+              texts={{
+                menu: t("settings.dangerMenu"),
+                action: t("i18n.remove"),
+                confirmText: t("settings.dangerConfirm", { action: t("i18n.remove") }),
+                confirm: t("i18n.remove"),
+                cancel: t("i18n.cancel"),
+              }}
+              busy={busy || reloadBusy}
+              onConfirm={() => onAction("remove", pkg)}
+            />
             <ConfigSwitch
               checked={enabled}
               loading={busy || reloadBusy}
@@ -975,8 +982,10 @@ export function PluginsConfig({
                               }}
                             >
                               <ConfigStatusDot active={!pkg.disabled} color={statusColor(pkg.status)} />
+                              {/* The package name leads; the install source stays in the
+                                  row's title and the detail's own path row (AC2). */}
                               <ConfigSidebarText className={`is-grow${pkg.disabled ? " is-muted" : ""}`}>
-                                {pkg.source}
+                                {pluginRowName(pkg)}
                               </ConfigSidebarText>
                               {updateStatuses[packageKey(pkg)]?.state === "update-available" && (
                                 <span title={t("i18n.updateAvailable")} className="skill-update-indicator">

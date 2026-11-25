@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { ConfigButton, ConfigEmptyState, ConfigErrorNotice, ConfigSkeleton } from "./SettingsUi";
 
 /**
  * The models page's Claude section (85a3-3): the editor of claude's own
@@ -25,9 +26,46 @@ type MigrationPreview = {
   shadowed: boolean;
 };
 
+/** The section's read states (polyforge#271 A4): skeleton, then either the
+ *  list, the empty state with its add action, or an alert with a retry.
+ *  Hook-free so the states render on their own. */
+export function ClaudeCustomReadStates({ loading, readError, t, onRetry, onAdd }: {
+  loading: boolean;
+  readError: string | null;
+  t: (key: string) => string;
+  onRetry: () => void;
+  onAdd?: () => void;
+}) {
+  if (loading) {
+    return <div data-claude-models-loading=""><ConfigSkeleton label={t("models.claudeCustomLoading")} lines={3} /></div>;
+  }
+  if (readError) {
+    return (
+      <div data-claude-models-retry="">
+        <ConfigErrorNotice
+          summary={t("models.claudeCustomReadFailed")}
+          details={readError}
+          detailsLabel={t("i18n.detailsLabel")}
+          action={<ConfigButton size="small" onClick={onRetry}>{t("i18n.retry")}</ConfigButton>}
+        />
+      </div>
+    );
+  }
+  if (onAdd) {
+    return (
+      <ConfigEmptyState action={<ConfigButton data-claude-models-add="" onClick={onAdd}>{t("models.claudeCustomEmptyAdd")}</ConfigButton>}>
+        {t("models.claudeCustomEmpty")}
+      </ConfigEmptyState>
+    );
+  }
+  return null;
+}
+
 export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
   const { t } = useI18n();
   const [names, setNames] = useState<string[] | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<MigrationPreview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [shadowed, setShadowed] = useState(false);
@@ -41,6 +79,7 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
   refreshRef.current = onRefresh;
 
   const load = useCallback(async () => {
+    setReadError(null);
     try {
       const response = await fetch("/api/harness/claude/model");
       const data = await response.json();
@@ -50,11 +89,9 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
       // enter this list nor a PUT body.
       setNames(Array.isArray(data.data?.userCustomModels) ? data.data.userCustomModels : []);
     } catch (cause) {
-      // A failed read must not leave the section loading forever (the page's
-      // other scenarios read its text): the editor offers the empty state
-      // with the reason beside it.
-      setNames([]);
-      setError(cause instanceof Error ? cause.message : String(cause));
+      // polyforge#271 A4: a failed read ends loading as an alert with a retry —
+      // it is never the empty list, so `names` stays null.
+      setReadError(cause instanceof Error ? cause.message : String(cause));
     }
   }, []);
 
@@ -149,64 +186,75 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
   }, [input, names, writeNames]);
 
   return (
-    <div data-claude-custom-models>
-      <h4>{t("models.claudeCustomHeading")}</h4>
+    <div data-claude-custom-models className="settings-claude-models">
+      <h4 className="settings-general-heading">{t("models.claudeCustomHeading")}</h4>
       {notice !== null && (
-        <p role="note">
+        <p role="note" className="settings-general-description">
           {t("models.claudeCustomBlocked")}
           <code>{notice}</code>
         </p>
       )}
       {preview !== null && (
-        <div data-claude-migration-preview>
-          <p>{t("models.claudeCustomPreviewTitle")}</p>
-          <p>{t("models.claudeCustomNativeKept")}</p>
-          <ul data-claude-preview-native>
+        <div data-claude-migration-preview className="settings-claude-preview">
+          <p className="settings-general-description">{t("models.claudeCustomPreviewTitle")}</p>
+          <p className="settings-general-description">{t("models.claudeCustomNativeKept")}</p>
+          <ul data-claude-preview-native className="settings-claude-names">
             {preview.native.map((row) => (
               <li key={row.model}>{row.label !== undefined ? `${row.model} (${row.label})` : row.model}</li>
             ))}
           </ul>
-          <p>{t("models.claudeCustomMissing")}</p>
-          <ul data-claude-preview-missing>
+          <p className="settings-general-description">{t("models.claudeCustomMissing")}</p>
+          <ul data-claude-preview-missing className="settings-claude-names">
             {preview.missing.map((model) => <li key={model}>{model}</li>)}
           </ul>
-          <button type="button" onClick={() => void confirmMerge()} disabled={busy}>{t("models.claudeCustomMerge")}</button>
-          <button type="button" onClick={() => setPreview(null)}>{t("common.cancel")}</button>
+          <div className="settings-claude-actions">
+            <ConfigButton onClick={() => void confirmMerge()} disabled={busy}>{t("models.claudeCustomMerge")}</ConfigButton>
+            <ConfigButton onClick={() => setPreview(null)}>{t("common.cancel")}</ConfigButton>
+          </div>
         </div>
       )}
-      {names === null ? (
-        <p>{t("models.claudeCustomLoading")}</p>
-      ) : names.length === 0 ? (
-        <p>{t("models.claudeCustomEmpty")}</p>
+      {(names === null || names.length === 0) ? (
+        <ClaudeCustomReadStates
+          loading={names === null && readError === null}
+          readError={readError}
+          t={t}
+          onRetry={() => void load()}
+          onAdd={names !== null && names.length === 0 ? () => inputRef.current?.focus() : undefined}
+        />
       ) : (
-        <ul data-claude-custom-list>
+        <ul data-claude-custom-list className="settings-claude-names">
           {names.map((model) => (
             <li key={model}>
               <code>{model}</code>
-              <button
-                type="button"
+              <ConfigButton
+                size="small"
+                variant="ghost"
                 aria-label={t("models.claudeCustomRemove", { model })}
                 disabled={busy}
                 onClick={() => void writeNames(names.filter((entry) => entry !== model))}
               >
                 ✕
-              </button>
+              </ConfigButton>
             </li>
           ))}
         </ul>
       )}
-      {shadowed && <p role="note">{t("models.claudeCustomShadowed")}</p>}
+      {shadowed && <p role="note" className="settings-general-description">{t("models.claudeCustomShadowed")}</p>}
+      <div className="settings-claude-add">
       <input
+        ref={inputRef}
+        className="settings-claude-model-input"
         value={input}
         placeholder={t("models.claudeCustomPlaceholder")}
         aria-label={t("models.claudeCustomPlaceholder")}
         disabled={busy || names === null}
         onChange={(event) => setInput(event.target.value)}
       />
-      <button type="button" onClick={add} disabled={busy || input.trim() === "" || names === null}>
+      <ConfigButton onClick={add} disabled={busy || input.trim() === "" || names === null}>
         {t("models.claudeCustomAdd")}
-      </button>
-      {error !== null && <p role="alert" style={{ color: "#dc2626" }}>{error}</p>}
+      </ConfigButton>
+      </div>
+      {error !== null && <p role="alert" className="config-add-source-error">{error}</p>}
     </div>
   );
 }

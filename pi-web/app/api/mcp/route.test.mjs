@@ -117,11 +117,13 @@ test("the project's trust is read fresh, exact or inherited", async (t) => {
 });
 
 test("a cwd outside the allowed folders, relative, with .., or not a folder is refused", async () => {
-  assert.deepEqual(await get(forCwd(outside)), { status: 403, body: { error: "Access denied", reason: "cwd-denied" } });
-  assert.deepEqual(await get(forCwd(`${cwd}/../project`)), { status: 403, body: { error: "Access denied", reason: "cwd-denied" } });
-  assert.deepEqual(await get("?cwd=project"), { status: 400, body: { error: "cwd must be an absolute path", reason: "cwd-invalid" } });
-  assert.deepEqual(await get("?cwd="), { status: 400, body: { error: "cwd must be an absolute path", reason: "cwd-invalid" } });
-  assert.deepEqual(await get(forCwd(projectPath)), { status: 400, body: { error: "cwd must be a directory", reason: "cwd-not-directory" } });
+  // polyforge#259 T4 (owner 2A): `code` rides beside the unchanged fields.
+  const code = (reason) => ({ reason, code: reason });
+  assert.deepEqual(await get(forCwd(outside)), { status: 403, body: { error: "Access denied", ...code("cwd-denied") } });
+  assert.deepEqual(await get(forCwd(`${cwd}/../project`)), { status: 403, body: { error: "Access denied", ...code("cwd-denied") } });
+  assert.deepEqual(await get("?cwd=project"), { status: 400, body: { error: "cwd must be an absolute path", ...code("cwd-invalid") } });
+  assert.deepEqual(await get("?cwd="), { status: 400, body: { error: "cwd must be an absolute path", ...code("cwd-invalid") } });
+  assert.deepEqual(await get(forCwd(projectPath)), { status: 400, body: { error: "cwd must be a directory", ...code("cwd-not-directory") } });
 });
 
 test("PI_WEB_DISABLE_MCP and -builtin:mcp turn MCP off with a reason, and the servers are still listed", async (t) => {

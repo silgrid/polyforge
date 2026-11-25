@@ -201,3 +201,23 @@ func TestDoctorDisplayGapKeepsExitCode(t *testing.T) {
 		t.Fatalf("claude statusline = %s, want warn", st)
 	}
 }
+
+// TestPiPackageCheckNamesBothModes (polyforge#166 u3, Q2): a missing pi
+// package warns with both install modes on the same line — the image
+// mainline (docs/getting-started.md) beside the host installer pointer
+// (re-run tools/install.sh) — the existing host substring kept, no runtime
+// mode detection.
+func TestPiPackageCheckNamesBothModes(t *testing.T) {
+	home := displayHome(t, "", "-")
+	t.Setenv("POLYFORGE_DATA_DIR", "")
+	layoutRelease(t, home)
+	c := piPackageCheck(filepath.Join(home, ".pi", "agent"), home)
+	if c.Status != "warn" {
+		t.Fatalf("a missing pi package must warn, got %s %q", c.Status, c.Detail)
+	}
+	for _, want := range []string{"docs/getting-started.md", "re-run tools/install.sh"} {
+		if !strings.Contains(c.Detail, want) {
+			t.Fatalf("the pi-package warn must name %q on the same line as the other mode's pointer (Q2): %s", want, c.Detail)
+		}
+	}
+}

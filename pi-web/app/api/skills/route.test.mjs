@@ -171,8 +171,9 @@ test("a pi item writes the preference alone; every SKILL.md stays byte-identical
     results: [
       { skill: visible, harness: "pi" },
       { skill: hidden, harness: "pi" },
-      { skill: outside, harness: "pi", error: "Access denied" },
-      { skill: missing, harness: "pi", error: "file not found" },
+      // polyforge#259 T4 (owner 2A): a refused item gained its code beside the words.
+      { skill: outside, harness: "pi", error: "Access denied", code: "skills-write-refused" },
+      { skill: missing, harness: "pi", error: "file not found", code: "skills-write-refused" },
     ],
   });
   assert.deepEqual(await mdHashes(root), before, "no SKILL.md may change by a single byte");
@@ -342,7 +343,21 @@ test("only the pi side accepts a preference, however the file is named (legacy g
   const single = await patchSkills({ skill: authPath, harness: "pi", state: "disabled" });
   assert.equal(single.status, 400);
   const batch = await patchSkills({ items: [{ skill: authPath, harness: "pi", state: "disabled" }] });
-  assert.deepEqual(await batch.json(), { results: [{ skill: authPath, harness: "pi", error: "Not a skill file" }] });
+  assert.deepEqual(await batch.json(), { results: [{ skill: authPath, harness: "pi", error: "Not a skill file", code: "skills-write-refused" }] });
   assert.equal(await readFile(authPath, "utf8"), auth);
+  assert.deepEqual(await readPreference(agentDir), {});
+});
+
+// polyforge#259 T4 (owner 2A: 向后兼容、只追加): a refused single-item PATCH
+// keeps its 400 and its `error` words, and gains the same code a refused
+// batch item carries. Caught change: the single path answering
+// `{ error }` alone (the code missing) or a different status.
+test("a refused single PATCH keeps its 400 and its words, and adds code skills-write-refused (owner 2A)", async () => {
+  const agentDir = await freshAgentDir("single-refused-code");
+  const authPath = join(agentDir, "auth.json");
+  await writeFile(authPath, JSON.stringify({}));
+  const single = await patchSkills({ skill: authPath, harness: "pi", state: "disabled" });
+  assert.equal(single.status, 400);
+  assert.deepEqual(await single.json(), { error: "Not a skill file", code: "skills-write-refused" });
   assert.deepEqual(await readPreference(agentDir), {});
 });

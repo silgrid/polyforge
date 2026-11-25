@@ -79,51 +79,6 @@ test("stepTierRowView classifies all / unset / specific (inconsistent or partial
   }, "a partly unset row is specific, with the unset harness listed");
 });
 
-test("a move's plan adds to the target first, then removes; a vacated tier unsets", () => {
-  // pi a/one: default → fast-chat (fast-chat already holds pi:b/two and pi:a/one)
-  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "a/one" }, "fast-chat"), [
-    { action: "set", tier: "fast-chat", candidates: ["pi:b/two", "pi:a/one", "pi:a/one:high"] },
-    { action: "set", tier: "default", candidates: ["claude:sonnet"] },
-  ], "add-first (the crash window keeps a duplicate, never a loss); the effort entry moves as it is; other candidates stay");
-  // claude sonnet → fast-chat: default keeps the pi entries (set, not unset)
-  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "claude", model: "sonnet" }, "fast-chat"), [
-    { action: "set", tier: "fast-chat", candidates: ["pi:b/two", "pi:a/one", "claude:sonnet"] },
-    { action: "set", tier: "default", candidates: ["pi:a/one", "pi:a/one:high"] },
-  ]);
-  // claude opus → default: zen would be left empty → unset, never an empty list (pf refuses one)
-  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "claude", model: "opus" }, "default"), [
-    { action: "set", tier: "default", candidates: ["pi:a/one", "pi:a/one:high", "claude:sonnet", "claude:opus:low"] },
-    { action: "unset", tier: "zen", candidates: [] },
-  ]);
-  // unset
-  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "b/two" }, null), [
-    { action: "set", tier: "fast-chat", candidates: ["pi:a/one"] },
-  ]);
-  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "claude", model: "opus" }, null), [
-    { action: "unset", tier: "zen", candidates: [] },
-  ]);
-  // a no-op move plans nothing
-  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "b/two" }, "fast-chat"), []);
-  // an UNSET model gains the tier: its candidate is the identity itself, no
-  // effort suffix (the S85-30 finding — a plan that only moved existing
-  // entries left the unset set a silent no-op)
-  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "claude", model: "sonnet-2" }, "default"), [
-    { action: "set", tier: "default", candidates: ["pi:a/one", "pi:a/one:high", "claude:sonnet", "claude:sonnet-2"] },
-  ]);
-  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "c/three" }, null), [], "an unset model's unset is still nothing");
-  // a multi-tier identity collapses to the target: the other tier loses it (here: vacated)
-  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "a/one" }, "zen"), [
-    { action: "set", tier: "zen", candidates: ["claude:opus:low", "pi:a/one", "pi:a/one:high"] },
-    { action: "set", tier: "default", candidates: ["claude:sonnet"] },
-    { action: "set", tier: "fast-chat", candidates: ["pi:b/two"] },
-  ], "the add precedes every removal; the two old tiers lose the identity in catalog order");
-  // a brand-new tier starts from the identity's entries
-  assert.deepEqual(m.stepTierWritePlan([{ tier: "default", candidates: ["pi:a/one"] }], { harness: "pi", model: "a/one" }, "fresh"), [
-    { action: "set", tier: "fresh", candidates: ["pi:a/one"] },
-    { action: "unset", tier: "default", candidates: [] },
-  ]);
-});
-
 test("the picker groups: default first then alphabetical, an invalid reference marked, the unset group last", () => {
   const defined = { pi: ["a/one", "c/three"], claude: ["sonnet", "opus"] };
   const groups = m.stepTierPickerGroups(CATALOG, defined);
@@ -147,4 +102,40 @@ test("the picker groups: default first then alphabetical, an invalid reference m
   assert.deepEqual(m.stepTierInvalidReferences(CATALOG, defined), ["pi:b/two"]);
   // a claude probe failure leaves the alias fallback: default itself is covered
   assert.deepEqual(m.stepTierInvalidReferences([{ tier: "default", candidates: ["claude:default"] }], { pi: [], claude: ["default"] }), []);
+});
+
+// polyforge#258 (T3): the step-tier drawer's write plan, restored after
+// #256 removed the editor. Expected values are hand-computed from pf's
+// [step_tiers] contract and the ticket's settled rules: 先加后删 (a crash
+// between the two keys leaves a duplicate, never a loss), effort entries move
+// exactly as they are, a vacated tier is unset (pf refuses an empty list),
+// and a move that changes nothing plans nothing.
+test("the write plan moves one identity add-before-remove", () => {
+  // pi:a/one sits in default (plain and :high) and fast-chat; moving it to zen
+  // must add both entries to zen first, then strip them from the two others.
+  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "a/one" }, "zen"), [
+    { action: "set", tier: "zen", candidates: ["claude:opus:low", "pi:a/one", "pi:a/one:high"] },
+    { action: "set", tier: "default", candidates: ["claude:sonnet"] },
+    { action: "set", tier: "fast-chat", candidates: ["pi:b/two"] },
+  ], "the add-target write leads; the effort variant moves as it is");
+
+  // a tier the move leaves empty is unset, never written as []
+  assert.deepEqual(m.stepTierWritePlan([{ tier: "only", candidates: ["pi:a/one"] }], { harness: "pi", model: "a/one" }, null), [
+    { action: "unset", tier: "only", candidates: [] },
+  ]);
+
+  // unset: the removals are planned in catalog order, the untouched tier absent
+  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "a/one" }, null), [
+    { action: "set", tier: "default", candidates: ["claude:sonnet"] },
+    { action: "set", tier: "fast-chat", candidates: ["pi:b/two"] },
+  ]);
+
+  // a model no tier names yet still gains the target as itself
+  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "new/model" }, "default"), [
+    { action: "set", tier: "default", candidates: ["pi:a/one", "pi:a/one:high", "claude:sonnet", "pi:new/model"] },
+  ]);
+
+  // moving to the tier it already sits in changes nothing
+  assert.deepEqual(m.stepTierWritePlan(
+    [{ tier: "default", candidates: ["pi:a/one"] }], { harness: "pi", model: "a/one" }, "default"), []);
 });

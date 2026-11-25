@@ -6,12 +6,14 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import {
   setLastSettingsSection,
   SETTINGS_TABS,
+  mayLeaveSection,
   settingsSectionRequiresProject,
   type SettingsSection,
 } from "@/lib/settings-navigation";
 import type { ProjectTrustStatus } from "@/lib/api-types";
 import { focusModalPanel, listenForPanelEscape } from "@/lib/stacked-dialog";
 import { ConfigDetailNavigationContext, type ConfigDetailNavigation } from "./SettingsUi";
+import { SettingsSectionTabs } from "./SettingsSectionTabs";
 import { HarnessGeneralSettings } from "./HarnessGeneralSettings";
 import { HarnessPermissionSettings } from "./HarnessPermissionSettings";
 import { HarnessModelSettings } from "./HarnessModelSettings";
@@ -32,6 +34,8 @@ interface Props {
   onSessionReloaded: () => void;
   quoteSelectionEnabled: boolean;
   onQuoteSelectionChange: (enabled: boolean) => void;
+  /** Reopen the first-time onboarding wizard (polyforge#167); absent on a host. */
+  onReopenOnboarding?: () => void;
   /** The page's trust status for `cwd`; Settings › MCP reloads when it changes, as after trusting. */
   projectTrust?: ProjectTrustStatus | null;
   /** Opens the page's trust dialog for `cwd`, above Settings; Settings › MCP's trust notice offers it. */
@@ -157,6 +161,7 @@ export function SettingsPanel({
   onSessionReloaded,
   quoteSelectionEnabled,
   onQuoteSelectionChange,
+  onReopenOnboarding,
   projectTrust,
   onOpenTrustDialog,
   onProjectTrustChanged,
@@ -166,13 +171,13 @@ export function SettingsPanel({
   const [mountedSections, setMountedSections] = useState<ReadonlySet<SettingsSection>>(
     () => new Set([section]),
   );
-  // The rail is one fact in lib/settings-navigation.ts (SETTINGS_TABS): nine
-  // new sections plus the two legacy-marked old pages (85a1b AC1).
-  const sections: { id: SettingsSection; label: string; legacy: boolean; requiresProject: boolean }[] = SETTINGS_TABS
+  // The rail is one fact in lib/settings-navigation.ts (SETTINGS_TABS): the
+  // nine sections, each with its translated label (polyforge#257 r2#9: the
+  // retired legacy-marked pages left no consumer of a `legacy` flag).
+  const sections: { id: SettingsSection; label: string; requiresProject: boolean }[] = SETTINGS_TABS
     .map((item) => ({
       id: item.id,
       label: t(item.labelKey),
-      legacy: "legacy" in item && item.legacy === true,
       requiresProject: settingsSectionRequiresProject(item.id),
     }));
   const sectionRequiresProject = settingsSectionRequiresProject(section);
@@ -188,10 +193,24 @@ export function SettingsPanel({
     shownPhoneLevelRef.current = phone.level;
     if (isPhone && from !== phone.level) animatePhoneLevelChange(mainRef.current, headerRef.current, from, phone.level);
   }, [isPhone, phone.level]);
+  // Each tab with a draft (the model page since T3, the sub-agent form since
+  // polyforge#259 T4) reports it: closing Settings or moving to another tab asks
+  // before the draft is dropped.
+  const [unsavedSections, setUnsavedSections] = useState<Record<string, boolean>>({});
+  const reportUnsaved = useCallback((id: SettingsSection, dirty: boolean) => {
+    setUnsavedSections((current) => (current[id] === dirty ? current : { ...current, [id]: dirty }));
+  }, []);
+  // The decision is lib/settings-navigation's pure fact (review #2: tested as
+  // behaviour, not as this file's source text).
+  const mayLeave = useCallback(
+    () => mayLeaveSection(unsavedSections, section, null, (question) => window.confirm(question), t("settings.unsavedLeave")),
+    [unsavedSections, section, t],
+  );
   const onClose = useCallback(() => {
+    if (!mayLeave()) return;
     dropHistory();
     closeSettings();
-  }, [closeSettings, dropHistory]);
+  }, [closeSettings, dropHistory, mayLeave]);
   const sectionLabel = sections.find((item) => item.id === section)?.label ?? t("settings.title");
   // Named by the detail's active row (ConfigSidebarItem); none until one reports.
   const [detailTitle, setDetailTitle] = useState<string | null>(null);
@@ -232,6 +251,8 @@ export function SettingsPanel({
   }, [cwd, sectionRequiresProject]);
 
   const activateSection = (nextSection: SettingsSection) => {
+    // Leaving the tab being edited with unsaved changes asks first (T4 AC1).
+    if (!mayLeaveSection(unsavedSections, section, nextSection, (question) => window.confirm(question), t("settings.unsavedLeave"))) return;
     setMountedSections((current) => new Set(current).add(nextSection));
     setSection(nextSection);
     setLastSettingsSection(nextSection);
@@ -288,26 +309,19 @@ export function SettingsPanel({
               ? t("settings.title")
               : phone.level === "section" ? sectionLabel : detailTitle}
           </strong>
-          <nav aria-label={t("settings.title")} className="settings-section-tabs">
-            {sections.map((item) => {
-              const selected = section === item.id;
-              const disabled = item.requiresProject && !cwd;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={item.legacy ? "settings-section-tab is-legacy" : "settings-section-tab"}
-                  disabled={disabled}
-                  title={disabled ? t("settings.projectRequired") : item.label}
-                  aria-current={selected ? "page" : undefined}
-                  onClick={() => activateSection(item.id)}
-                >
-                  <SettingsSectionIcon section={item.id} />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
+          {/* The tab bar and its scroll hint (polyforge#259 T4 AC3). */}
+          <SettingsSectionTabs
+            label={t("settings.title")}
+            tabs={sections.map((item) => ({
+              id: item.id,
+              label: item.label,
+              disabled: item.requiresProject && !cwd,
+              icon: <SettingsSectionIcon section={item.id} />,
+            }))}
+            active={section}
+            projectRequiredLabel={t("settings.projectRequired")}
+            onSelect={activateSection}
+          />
           <button type="button" onClick={onClose} title={t("i18n.close")} aria-label={t("i18n.close")} className="config-close-button settings-dialog-close">×</button>
         </div>
 
@@ -343,24 +357,24 @@ export function SettingsPanel({
             </nav>
           )}
           <ConfigDetailNavigationContext.Provider value={detailNavigation}>
-          {sectionHost("general", <HarnessGeneralSettings cwd={cwd} sessionId={sessionId} onSessionReloaded={onSessionReloaded} quoteSelectionEnabled={quoteSelectionEnabled} onQuoteSelectionChange={onQuoteSelectionChange} />)}
+          {sectionHost("general", <HarnessGeneralSettings cwd={cwd} sessionId={sessionId} onSessionReloaded={onSessionReloaded} quoteSelectionEnabled={quoteSelectionEnabled} onQuoteSelectionChange={onQuoteSelectionChange} onReopenOnboarding={onReopenOnboarding} />)}
           {/* 85a2's account tab replaced the 85a1b placeholder; the models
               placeholder is 85a3's; the permission page is 85a4's, mounted
               above (its Claude part is where a stored old `claude` navigation
               value lands). */}
-          {sectionHost("account", <AccountSettings />)}
-          {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} onOpenAccount={() => activateSection("account")} />)}
+          {sectionHost("account", <AccountSettings onOpenModels={() => activateSection("models")} />)}
+          {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} onOpenAccount={() => activateSection("account")} onUnsavedChange={(dirty) => reportUnsaved("models", dirty)} />)}
           {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}
           {/* No project needed either (85d AC3): the user scope lists alone, a
               project adds its group. */}
           {sectionHost("skills", <SkillsConfig embedded key={cwd ?? ""} cwd={cwd} trust={projectTrust} onClose={onClose} />)}
-          {cwd && sectionHost("agents", <AgentsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} />)}
+          {cwd && sectionHost("agents", <AgentsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} onUnsavedChange={(dirty) => reportUnsaved("agents", dirty)} />)}
           {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} />)}
           {/* No project needed: the global mcp.json is listed alone, and a project adds its group. */}
           {sectionHost("mcp", <McpConfig embedded key={cwd ?? ""} cwd={cwd} trust={projectTrust} onTrustProject={onOpenTrustDialog} onProjectTrustChanged={onProjectTrustChanged} onClose={onClose} />)}
-          {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} active={section === "polyforge"} />)}
+          {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} active={section === "polyforge"} onOpenPlugins={() => activateSection("plugins")} />)}
           </ConfigDetailNavigationContext.Provider>
         </main>
       </div>

@@ -60,6 +60,15 @@ export interface PolyforgeOverrideStepRow {
   pending?: boolean;
   effective?: string[];
   source?: string;
+  /** polyforge#270: whether the daemon accepts a models/tier overlay on
+   *  this step now, for its NEXT dispatch — a done step a later gate can
+   *  rewind to and the running step itself included. */
+  canOverrideModels?: boolean;
+  /** Why `canOverrideModels` is false (the step will not run again). */
+  modelOverrideReason?: string;
+  /** When an accepted models/tier overlay applies: `next_dispatch` — the
+   *  step's next dispatch, never the finished round or a live dispatch. */
+  modelEffectScope?: string;
 }
 
 /** One param override of a row: the value it sets, with the operator
@@ -171,6 +180,9 @@ function sanitizeStepRow(value: unknown): PolyforgeOverrideStepRow | null {
     ...(row.pending === true ? { pending: true } : {}),
     ...(list("effective") ? { effective: list("effective") } : {}),
     ...(strings("source") ? { source: strings("source") } : {}),
+    ...(typeof row.can_override_models === "boolean" ? { canOverrideModels: row.can_override_models } : {}),
+    ...(strings("model_override_reason") ? { modelOverrideReason: strings("model_override_reason") } : {}),
+    ...(strings("model_effect_scope") ? { modelEffectScope: strings("model_effect_scope") } : {}),
   };
   return out;
 }

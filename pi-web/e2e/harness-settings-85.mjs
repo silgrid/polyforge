@@ -1,12 +1,12 @@
-// carries: components/HarnessModelSettings*, lib/harness/model-view*
+// carries: components/HarnessModelSettings*, components/ModelStepTierDrawer*, components/EnabledModelsSection*, lib/harness/model-view*, lib/model-page-draft*, lib/polyforge-version*
 // carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
 // carries: components/HarnessPermissionSettings*, components/ClaudePermissionSettings*, lib/harness-permissions-view*, lib/harness-settings-view*, lib/harness/diagnostics*, app/api/harness/*
 // carries: components/AccountSettings*, components/PiAccountLogin*, components/ModelsConfig*, app/api/settings/account/*, lib/provider-listing*, lib/harness/account*, lib/polyforge-doctor*
 // carries: components/ClaudeCustomModels*
 // carries: lib/step-tiers*, lib/step-tier-defined-models*, lib/models-load*, lib/claude-models*
 // (polyforge#151: the tier column's projection chain, and the write gate's defined-model set behind it)
-// #85 设置页、账号页、统一模型页和权限页：九个导航分区，旧模型页已移除。
-// 模型页场景保留 provider 编辑、账号跳转与三列清单的行为校验。
+// #85 设置页、账号页、模型页和权限页：九个导航分区，旧模型页已移除。
+// 模型页场景覆盖四个子页、扁平化 Provider 编辑与账号跳转、显式保存、步骤档抽屉与 CAS 写入。
 //
 // pi's 不做审批 / 无沙箱 notes, claude's own sections, the Pi Web approval
 // channel and the rules editor) and the stored old navigation values
@@ -25,7 +25,7 @@
 // `PASS harness-settings-85` only when every scenario passed. Every wait
 // polls its condition to a bounded deadline; no fixed sleep.
 import assert from "node:assert/strict";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { chromium } from "playwright";
@@ -42,13 +42,18 @@ mkdirSync(agentDir, { recursive: true });
 // prints its ready line and waits — a real claude prints the authorization
 // URL and waits for the pasted code. Anything else delegates to the
 // recorded unit stub (the initialize probe). Only S85-12's terminal runs
-// it; every other claude face is mocked at the browser.
+// it; every other claude face is mocked at the browser. After its one
+// print it appends the epoch ms to s12StubStamps (polyforge#272 U7a): when
+// it printed, and how many times it ran — read only by S12's failure
+// diagnostics, the output itself still printed once.
 const stubBin = join(work, "stub-bin");
 mkdirSync(stubBin, { recursive: true });
 const stubClaude = join(stubBin, "claude");
+const s12StubStamps = join(work, "s12-stub-stamps");
 writeFileSync(stubClaude, `#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
   printf '%s\r\n' "85 STUB LOGIN READY - open the URL and paste the code"
+  date +%s%3N >> '${s12StubStamps}'
   sleep 60
   exit 0
 fi
@@ -136,6 +141,8 @@ const seedTiers = (tiers) => {
 };
 const tierState = () => JSON.parse(readFileSync(tierStateFile, "utf8"));
 const tierArgv = () => (existsSync(tierArgvFile) ? readFileSync(tierArgvFile, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
+/** The next step-tier write is refused once by pf's CAS (the fixture's one-shot marker). */
+const refuseNextTierWrite = () => writeFileSync(tierRefuseFile, "1");
 
 // ---- the mocked adapter contract (the shapes 85a1's routes answer) ----
 const HARNESS_LIST = {
@@ -275,11 +282,15 @@ const T = {
   S21: "S85-21: General has no claude permission controls; its hook switch stays",
   S22: "S85-22: the table and the editor share one enabledModels controller — a Save never re-enables a model the table just disabled (review r1#1)",
   S23: "S85-23: the models page's Claude section merges the retired custom models under a preview and edits the native picker with full-list writes (85a3-3)",
-  S30: "S85-30: the model list's step-tier column sets a tier for every harness of the row and reads the state back (85b2 AC1/AC3)",
-  S31: "S85-31: a specific-mode claude-only tier save writes only claude (pi untouched) and reads back 指定 with the per-harness lines (85b2 AC3)",
-  S32: "S85-32: an unsaved row never offers the tier setter; an incapable catalog read leaves the column read-only with its reason (85b2 AC1/AC3)",
-  S33: "S85-33: a concurrent external write survives the tier column's save (the per-step re-read), and a refused write keeps the draft, reported per harness (85b2 AC1, review r2 #1)",
-  S34: "S85-34: an inconsistent row restores to 全部 through a unify save — cli.toml reads back the merged tier and the vacated one unsets (85b2 AC3)",
+  S30: "S85-30: the step-tier label opens a drawer; opening it writes nothing, saving reports the write and the label follows the Host catalog (polyforge#258 T3 AC2)",
+  S31: "S85-31: differing harnesses show their own 归属 in the drawer (pi: default / claude: fast-chat) and the cell carries no inline editor (polyforge#258 T3 AC2)",
+  S32: "S85-32: an incapable catalog read leaves the column a read-only dash with a localized 0.2.4-0 reason, the other columns untouched (polyforge#256 B1)",
+  S33: "S85-33: 应用到 inside the drawer writes only the chosen harness and leaves the other harness's tier alone (polyforge#258 T3 AC2)",
+  S34: "S85-34: an external [step_tiers] write is what the labels show after a reload (polyforge#258 T3 AC2)",
+  S35: "S85-35: default model and reasoning change nothing until Save; a delayed save locks the controls, a failed save keeps its draft, a partial save shows the landed value and retries (polyforge#258 r2 #1/#2/#3)",
+  S36: "S85-36: a 409 on the drawer's first harness keeps the draft, marks the rest not attempted and retries successfully (polyforge#258 r2 #1)",
+  S37: "S85-37: Escape closes only the drawer and returns focus to its label (polyforge#258 r2 #5)",
+  S38: "S85-38: the Provider editor's models.json draft survives a subpage round trip and sends no save (polyforge#258 r3 #1)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -295,6 +306,132 @@ async function part(id, label, fn) {
     failures.get(title).push(`${label}: ${String(error?.message ?? error).split("\n")[0]}`);
     console.log(`FAIL ${id} ${label}: ${error?.message ?? error}`);
   }
+}
+
+// ---- polyforge#272 U7a: S12's failure timeline (diagnostics only) ----
+// S12 records, from just before its click (t0), the /api/terminal requests
+// the page makes and the terminal EventSource's life in the page; only
+// when its output poll fails does s12Diagnose collect the terminal DOM,
+// that record, the stub's print stamps, the server's own backlog and the
+// server log tails, and answer them as lines each opening "  s12-diag ",
+// appended under the original failure line — no assertion, timeout or
+// stub output changes, and a passing run prints none of it.
+const S12_DIAG_CUT = 400;
+const s12Cut = (value, n = S12_DIAG_CUT) => JSON.stringify(String(value ?? "").slice(0, n));
+const s12Bounded = (promise, ms = 2_000) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms))]);
+
+/** Starts S12's request timeline and wraps the page's terminal EventSource; call before the click. */
+async function s12Watch(page) {
+  const watch = { t0: 0, net: [], id: null };
+  const isTerminal = (url) => new URL(url).pathname.startsWith("/api/terminal");
+  const note = (ev, request, extra = {}) => {
+    const url = new URL(request.url());
+    watch.net.push({ at: Date.now(), ev, method: request.method(), path: url.pathname, ...extra });
+  };
+  page.on("request", (request) => {
+    if (!isTerminal(request.url())) return;
+    note("request", request);
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/terminal") {
+      try { watch.id = JSON.parse(request.postData() ?? "{}").id ?? watch.id; } catch { /* the response names it too */ }
+    }
+  });
+  page.on("response", (response) => {
+    const request = response.request();
+    if (!isTerminal(request.url())) return;
+    note("response", request, { status: response.status() });
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/terminal") {
+      response.json().then((body) => { if (body?.id) watch.id = body.id; note("response-body", request, { id: body?.id ?? null, error: body?.error ?? null }); }).catch(() => {});
+    }
+  });
+  page.on("requestfailed", (request) => {
+    if (isTerminal(request.url())) note("requestfailed", request, { failure: request.failure()?.errorText ?? null });
+  });
+  await page.evaluate(() => {
+    const record = { sources: [] };
+    window.__s12 = record;
+    const Original = window.EventSource;
+    window.EventSource = class extends Original {
+      constructor(url, init) {
+        super(url, init);
+        if (!String(url).includes("/api/terminal/")) return;
+        const source = { url: String(url), createdAt: Date.now(), openAt: null, errorAt: [], firstMessageAt: null, readyAt: null, resets: 0, types: [] };
+        record.sources.push(source);
+        this.addEventListener("open", () => { source.openAt ??= Date.now(); });
+        this.addEventListener("error", () => { if (source.errorAt.length < 20) source.errorAt.push(Date.now()); });
+        this.addEventListener("message", (message) => {
+          source.firstMessageAt ??= Date.now();
+          let event = null;
+          try { event = JSON.parse(message.data); } catch { /* not JSON */ }
+          if (source.types.length < 20) source.types.push(event?.type ?? "?");
+          if (event?.reset) source.resets += 1;
+          if (source.readyAt === null && typeof event?.data === "string" && event.data.includes("85 STUB LOGIN READY")) source.readyAt = Date.now();
+        });
+      }
+    };
+  });
+  return watch;
+}
+
+/** S12's failure diagnostics: one "  s12-diag " line per fact, every time relative to t0 (ms). */
+async function s12Diagnose(page, terminal, watch) {
+  const lines = [];
+  const rel = (at) => (typeof at === "number" ? at - watch.t0 : at);
+  const fact = async (name, collect) => {
+    try { lines.push(`${name}: ${await s12Bounded(collect())}`); } catch (error) { lines.push(`${name}: (unavailable: ${String(error?.message ?? error).split("\n")[0]})`); }
+  };
+  await fact("terminal innerText", async () => s12Cut(await terminal.innerText({ timeout: 1_500 })));
+  await fact("xterm-rows textContent", async () => s12Cut(await terminal.locator(".xterm-rows").first().textContent({ timeout: 1_500 })));
+  await fact("xterm-accessibility textContent", async () => s12Cut(await terminal.locator(".xterm-accessibility").first().textContent({ timeout: 1_500 })));
+  await fact("status dot", async () => s12Cut(await terminal.locator(".terminal-status-dot").first().getAttribute("class", { timeout: 1_500 })));
+  await fact("panel error", async () => (await terminal.locator(".terminal-panel-error").count() ? s12Cut(await terminal.locator(".terminal-panel-error").first().innerText({ timeout: 1_500 })) : "(none)"));
+  await fact("panel exit", async () => (await terminal.locator(".terminal-panel-exit").count() ? s12Cut(await terminal.locator(".terminal-panel-exit").first().innerText({ timeout: 1_500 })) : "(none)"));
+  lines.push(`terminal id: ${JSON.stringify(watch.id)}`);
+  for (const n of watch.net.slice(0, 40)) lines.push(`net +${rel(n.at)}ms ${n.ev} ${n.method} ${n.path}${n.status !== undefined ? ` status=${n.status}` : ""}${n.id !== undefined ? ` id=${JSON.stringify(n.id)}` : ""}${n.error ? ` error=${s12Cut(n.error, 200)}` : ""}${n.failure ? ` failure=${s12Cut(n.failure, 200)}` : ""}`);
+  if (!watch.net.length) lines.push("net: (no /api/terminal request seen after t0)");
+  await fact("page EventSource", async () => {
+    const record = await page.evaluate(() => window.__s12 ?? null);
+    if (!record) return "(no record)";
+    if (!record.sources.length) return "(no terminal EventSource constructed)";
+    return record.sources.map((s) => JSON.stringify({ url: s.url, created: rel(s.createdAt), open: rel(s.openAt), errors: s.errorAt.map(rel), firstMessage: rel(s.firstMessageAt), ready: rel(s.readyAt), resets: s.resets, types: s.types })).join(" | ");
+  });
+  await fact("stub stamps", async () => {
+    if (!existsSync(s12StubStamps)) return "(no stamp file: the stub never printed)";
+    const stamps = readFileSync(s12StubStamps, "utf8").split("\n").filter(Boolean).map(Number);
+    return `${stamps.length} print(s) at ${JSON.stringify(stamps.map(rel))}`;
+  });
+  if (watch.id) {
+    await fact("server backlog", async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1_800);
+      let text = "";
+      let status = null;
+      try {
+        const response = await fetch(`${h.base}/api/terminal/${encodeURIComponent(watch.id)}/events?after=0`, { signal: controller.signal });
+        status = response.status;
+        const reader = response.body?.getReader();
+        while (reader && !text.includes("85 STUB LOGIN READY")) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          text += new TextDecoder().decode(value);
+        }
+        await reader?.cancel().catch(() => {});
+      } catch { /* the read is bounded by its abort */ } finally {
+        clearTimeout(timer);
+      }
+      return `status=${status} ready=${text.includes("85 STUB LOGIN READY")} bytes=${text.length} head=${s12Cut(text, 300)}`;
+    });
+  } else {
+    lines.push("server backlog: (no terminal id to read)");
+  }
+  try {
+    for (const name of readdirSync(work).filter((f) => /^server-.*\.log$/.test(f)).sort()) {
+      const tail = readFileSync(join(work, name), "utf8").split("\n").filter(Boolean).slice(-20);
+      for (const line of tail) lines.push(`${name}: ${s12Cut(line, 300)}`);
+    }
+  } catch (error) {
+    lines.push(`server logs: (unavailable: ${String(error?.message ?? error).split("\n")[0]})`);
+  }
+  return lines.map((line) => `  s12-diag ${line}`).join("\n");
 }
 
 /** The tier scenarios' own server, started once: the real config routes
@@ -373,6 +510,15 @@ async function openSettings(page) {
   return dialog(page);
 }
 
+const modelSubpage = (page, id) => sectionHost(page, "models").locator(`[data-model-subpage="${id}"]`);
+const openModelSubpage = async (page, id) => {
+  await modelSubpage(page, id).click({ timeout: ACTION_MS });
+  // polyforge#271: a subpage's first read is a skeleton now; a scenario that
+  // reads the pane right after the click must wait for that read to settle.
+  const host = sectionHost(page, "models");
+  await waitFor(async () => (await host.locator("[data-model-skeleton], [data-models-config-loading], [data-claude-models-loading]").count()) === 0,
+    ACTION_MS, `the ${id} subpage stayed loading`);
+};
 const generalSidebarItems = (page) => sectionHost(page, "general").locator(".config-sidebar-item");
 const generalPane = (page, pane) => sectionHost(page, "general").locator(`[data-general-pane="${pane}"]`);
 
@@ -465,10 +611,15 @@ try {
     const host = sectionHost(page, "models");
     await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     const modelText = await host.innerText();
-    assert.ok(modelText.includes("Default model"), "the unified model page lacks the default model");
-    assert.ok(modelText.includes("Model list"), "the unified model page lacks the model list");
-    assert.ok(modelText.includes("Chat availability"), "the unified model page lacks the chat availability column");
-    assert.ok(modelText.includes("pi"), "the unified model page lacks the pi editor");
+    for (const label of ["Default model", "Model list", "pi Providers", "Claude custom models"]) {
+      assert.ok(modelText.includes(label), `the model page lacks the ${label} subpage`);
+    }
+    assert.ok(!modelText.includes("Chat availability"), "only the chosen subpage renders");
+    await openModelSubpage(page, "list");
+    await host.getByText("Chat availability", { exact: true }).first().waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.ok((await host.innerText()).includes("Chat availability"), "the model list subpage lacks the chat availability column");
+    await openModelSubpage(page, "providers");
+    await host.getByRole("button", { name: "Add provider", exact: true }).first().waitFor({ state: "visible", timeout: COLD_MS });
     await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
     const permission = sectionHost(page, "permission");
     await permission.locator(".config-sidebar-item").first().waitFor({ state: "visible", timeout: ACTION_MS });
@@ -556,6 +707,11 @@ try {
       ],
     };
     await page.context().route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: PROVIDERS }));
+    await page.context().route(/\/api\/models\/enabled/, (route) => route.fulfill({ json: {
+      allEnabled: true, patterns: [], stalePatterns: [], enabledTotal: 0, availableTotal: 0,
+      scope: "global", settingsPath: "fixture/settings.json", editable: true,
+      providers: [{ id: "google", name: "Google", kind: "oauth", enabledCount: 0, models: [] }],
+    } }));
     await openSettings(page);
     // The unified Models page owns the model table and Pi editor, while login
     // remains on Account › pi; no duplicate legacy page exists. The managed
@@ -565,7 +721,10 @@ try {
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const models = sectionHost(page, "models");
     await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
-    await models.locator(".config-sidebar-item").filter({ hasText: "Google" }).first().click({ timeout: ACTION_MS });
+    await openModelSubpage(page, "providers");
+    const providerPicker = models.getByLabel("Provider", { exact: true });
+    await providerPicker.waitFor({ state: "visible", timeout: ACTION_MS });
+    await providerPicker.selectOption("oauth:google");
     const detailText = await waitFor(async () => {
       const detail = models.locator(".enabled-models-section, .enabled-models-empty, .enabled-models-error").first();
       if (!(await detail.count())) return false;
@@ -583,13 +742,24 @@ try {
     await tab(page, /^Account$/).click({ timeout: ACTION_MS });
     const account = sectionHost(page, "account");
     await account.locator(".config-sidebar-item").filter({ hasText: /^pi$/ }).click({ timeout: ACTION_MS });
+    // polyforge#271 B3: the pane lists connected credentials only — Google's
+    // OAuth and API-key rows — and reaches the unconnected entries through the
+    // Add-provider picker, never by listing them as not connected.
     const piText = await waitFor(async () => {
       const text = await account.innerText();
-      return text.includes("ChatGPT Plus/Pro") ? text : false;
-    }, ACTION_MS, "the account pi pane never listed the offered providers");
+      return text.includes("Google") && text.includes("API key") ? text : false;
+    }, ACTION_MS, "the account pi pane never listed the connected providers");
     assert.ok(piText.includes("Add provider"), "the account pi pane lost the Add provider entry");
-    assert.ok(piText.includes("Anthropic"), "the Anthropic API-key entry is gone from the account pane");
-    assert.ok(!piText.includes("Anthropic (Claude Pro/Max)"), "the never-offered Anthropic subscription appears");
+    assert.ok(!piText.includes("ChatGPT Plus/Pro"), "an unconnected provider is listed as connected");
+    assert.ok(!piText.includes("Anthropic"), "an unconfigured API key is listed as connected");
+    await account.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
+    const pickerText = await waitFor(async () => {
+      const text = await account.innerText();
+      return text.includes("ChatGPT Plus/Pro") ? text : false;
+    }, ACTION_MS, "the picker never offered the unconnected providers");
+    assert.ok(pickerText.includes("Anthropic"), "the Anthropic API-key entry is gone from the picker");
+    assert.ok(!pickerText.includes("Anthropic (Claude Pro/Max)"), "the never-offered Anthropic subscription appears");
+    await page.keyboard.press("Escape");
     await page.context().close();
   });
 
@@ -622,15 +792,23 @@ try {
     await account.locator(".config-sidebar-item").filter({ hasText: "Claude" }).click({ timeout: ACTION_MS });
     const loginButton = account.locator('[data-login-command="auth-login"]');
     await loginButton.waitFor({ state: "visible", timeout: ACTION_MS });
+    const watch = await s12Watch(page);
+    watch.t0 = Date.now();
     await loginButton.click({ timeout: ACTION_MS });
     // the panel attaches and the command's output streams: poll the
     // terminal's own text, not a static heading
     const terminal = account.locator("[data-account-login-terminal]");
     await terminal.waitFor({ state: "visible", timeout: ACTION_MS });
-    const termText = await waitFor(async () => {
-      const text = await terminal.innerText();
-      return text.includes("85 STUB LOGIN READY") ? text : false;
-    }, ACTION_MS, "the login terminal never showed the command's output");
+    let termText;
+    try {
+      termText = await waitFor(async () => {
+        const text = await terminal.innerText();
+        return text.includes("85 STUB LOGIN READY") ? text : false;
+      }, ACTION_MS, "the login terminal never showed the command's output");
+    } catch (error) {
+      // the original failure line first, unchanged; the timeline under it
+      throw new Error(`${error?.message ?? error}\n${await s12Diagnose(page, terminal, watch)}`);
+    }
     assert.ok(!termText.includes("SENTINEL"), "a value leaked into the terminal");
     // closing tears it down: the panel goes and the terminal with it
     await account.getByRole("button", { name: "Close terminal" }).click({ timeout: ACTION_MS });
@@ -645,10 +823,12 @@ try {
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const models = sectionHost(page, "models");
     await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
-    await models.locator(".config-sidebar-list").first().waitFor({ state: "visible", timeout: COLD_MS });
-    assert.ok((await models.innerText()).includes("Model list"), "the unified model table is missing");
-    await models.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
-    await models.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
+    await models.getByText("Model list", { exact: true }).first().waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.ok((await models.innerText()).includes("Model list"), "the model list subpage is missing");
+    await openModelSubpage(page, "providers");
+    await models.getByRole("button", { name: "Add provider", exact: true }).first().waitFor({ state: "visible", timeout: ACTION_MS });
+    await models.getByRole("button", { name: "Add provider", exact: true }).first().click({ timeout: ACTION_MS });
     await models.getByPlaceholder("provider-name", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     await page.context().close();
   });
@@ -715,6 +895,8 @@ try {
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const models = sectionHost(page, "models");
     await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
+    assert.equal(await models.locator("[data-model-bulk]").count(), 1, "the model list keeps the provider bulk entry");
     const m1Row = models.getByRole("row").filter({ hasText: "gateway/m1" });
     const m1Toggle = m1Row.getByRole("checkbox");
     await m1Toggle.waitFor({ state: "visible", timeout: ACTION_MS });
@@ -722,7 +904,12 @@ try {
     await waitFor(async () => puts.some((body) => body.op === "models" && body.refs.includes("gateway/m1"))
       && !(await m1Toggle.isChecked()),
       ACTION_MS, "the table toggle never reached the writer");
-    await models.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    await openModelSubpage(page, "providers");
+    assert.equal(await models.getByRole("switch").count(), 0, "the Provider subpage carries no chat-availability switch");
+    const save = models.getByRole("button", { name: "Save", exact: true });
+    await save.waitFor({ state: "visible", timeout: ACTION_MS });
+    await waitFor(async () => !(await save.isDisabled()), ACTION_MS, "the models.json Save stayed disabled");
+    await save.click({ timeout: ACTION_MS });
     const resync = await waitFor(() => puts.find((body) => body.op === "resync") ?? false,
       ACTION_MS, "the Save never re-verified the stored patterns");
     assert.ok(!(resync.fullyEnabled ?? []).includes("gateway"),
@@ -837,7 +1024,9 @@ try {
     // claude's own sections: the extra values' radio, denyInsteadOfPrompting,
     // and the Pi Web approval channel (the moved claude tool permissions).
     await pane.getByRole("radio", { name: /bypassPermissions/ }).waitFor({ state: "visible", timeout: ACTION_MS });
-    await pane.getByRole("switch", { name: "denyInsteadOfPrompting" }).waitFor({ state: "visible", timeout: ACTION_MS });
+    // polyforge#259 T4 AC2: the switch is named by its display name now; the raw
+    // key stays as the second line inside it.
+    await pane.getByRole("switch", { name: /deny instead of prompting/i }).waitFor({ state: "visible", timeout: ACTION_MS });
     await pane.getByRole("radiogroup", { name: "Permission mode", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     await pane.getByRole("switch", { name: "Push a reminder when a permission waits" }).waitFor({ state: "visible", timeout: ACTION_MS });
     // The retired page's Claude Code report block renders again (owner
@@ -1028,6 +1217,7 @@ try {
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const models = sectionHost(page, "models");
+    await openModelSubpage(page, "claude");
     const section = models.locator("[data-claude-custom-models]");
     await section.waitFor({ state: "visible", timeout: ACTION_MS });
     const banner = section.locator("[data-claude-migration-preview]");
@@ -1059,174 +1249,474 @@ try {
       ACTION_MS, "the add never wrote the full next list");
     await page.context().close();
   });
-  // S85-30 — polyforge#151 (85b2 AC1/AC3): the model list's step-tier column,
-  // against the real /api/polyforge/config route and the stub pf's fixture
-  // state: a merged pi+claude row sets a tier with 应用到：全部 — one Host
-  // write per harness of the row, the CAS along — and the read-back shows
-  // 全部 from the storage the writes really changed.
-  await part("S30", "step-tier column", async () => {
+  // S85-30 — polyforge#258 T3 AC2: the step-tier label opens the right-side
+  // drawer, which holds the tier choice and 应用到. Opening it is a read;
+  // applying an unset writes the Host catalog through the CAS route, and the
+  // label follows the re-read.
+  await part("S30", "step-tier drawer edit", async () => {
     await startTierServer();
     const page = await newPage();
-    seedTiers({ default: ["pi:tierdemo/legacy"] });
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const host = sectionHost(page, "models");
     await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
     const cell = host.locator("[data-step-tier-cell]").first();
     await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /Not set/, "an unset row shows 未设置");
-    await cell.locator("[data-step-tier-select]").selectOption("default");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
-      ACTION_MS, "the row never read back 全部：default");
-    // the writes landed in the stub's storage: one per harness, the plan's
-    // whole-key lists, the CAS expectation of the state each write saw
-    assert.deepEqual(tierState().tiers.default, ["pi:tierdemo/legacy", "pi:anthropic/opus", "claude:opus"],
-      "the storage the read-back comes from");
-    const writes = tierArgv().filter((a) => a.includes("set"));
-    assert.equal(writes.length, 2, "one write per harness of the row");
-    for (const write of writes) {
-      assert.ok(write.includes("--host"), "the write is Host-scoped");
-      assert.ok(write.includes("--expect-state"), "the CAS expectation travels with the write");
-    }
+    assert.match(await cell.innerText(), /default/, "a shared tier shows its name");
+    const tierWrites = () => tierArgv().filter((args) => (args.includes("set") || args.includes("unset"))
+      && args.some((entry) => String(entry).startsWith("step_tiers.")));
+    const before = tierWrites().length;
+    await cell.click({ timeout: ACTION_MS });
+    const drawer = host.locator("[data-step-tier-drawer]");
+    await drawer.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(tierWrites().length, before, "opening the drawer writes nothing");
+    const drawerText = await drawer.innerText();
+    assert.ok(drawerText.includes("Apply to"), "the drawer lost the 应用到 control");
+    assert.match(drawerText, /pi: default/, "the drawer shows pi's current tier");
+    assert.match(drawerText, /claude: default/, "the drawer shows claude's current tier");
+    await drawer.locator("[data-step-tier-select]").selectOption("");
+    await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(() => tierWrites().some((args) => args.includes("unset") && args.includes("step_tiers.default")),
+      ACTION_MS, "the drawer's unset never reached pf");
+    await waitFor(() => tierWrites().length >= 2, ACTION_MS, "the second tier write never reached pf");
+    await waitFor(async () => (await drawer.innerText()).includes("Applied"),
+      ACTION_MS, "the drawer never reported the applied write");
+    await drawer.getByRole("button", { name: "Close", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => (await host.locator("[data-step-tier-cell]").first().innerText()).trim() === "—",
+      ACTION_MS, "the label never followed the unset");
     await page.context().close();
   });
 
-  // S85-31 — polyforge#151 (85b2 AC3): a row at 全部：default switches 应用到
-  // to 指定 with ONLY claude checked and saves a tier change — only claude is
-  // written (pi's candidate untouched), and the read-back lists the row as
-  // 指定 with each harness's own tier in the 不一致 lines.
-  await part("S31", "specific-mode write + read-back", async () => {
-    const page = await newPage();
-    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["pi:tierdemo/other"] });
-    await tierPageMocks(page);
-    await openSettings(page);
-    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
-    const host = sectionHost(page, "models");
-    const cell = host.locator("[data-step-tier-cell]").first();
-    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /All: default/, "the row starts at 全部：default");
-    await cell.getByLabel("Specific harnesses").check();
-    await cell.locator('[data-harness="claude"] input[type="checkbox"]').check();
-    await cell.locator("[data-step-tier-select]").selectOption("fast-chat");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("Specific"),
-      ACTION_MS, "the row never read back 指定");
-    const stateText = await cell.locator("[data-step-tier-state]").innerText();
-    assert.match(stateText, /Inconsistent: pi is currently in default/, "pi's own tier is listed");
-    assert.match(stateText, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
-    // only claude was written: pi's candidate stays in default, untouched
-    const state = tierState();
-    assert.deepEqual(state.tiers.default, ["pi:anthropic/opus"], "pi's candidate is untouched by the claude-only write");
-    assert.deepEqual(state.tiers["fast-chat"], ["pi:tierdemo/other", "claude:opus"], "claude moved over, the other candidate kept");
-    await page.context().close();
-  });
-
-  // S85-32 — polyforge#151 (85b2 AC1/AC3): an incapable catalog read (pf
-  // below the family's own floor) leaves the column read-only with its
-  // reason while the other columns stay; an unsaved provider draft adds no
-  // row to the unified list, so it never offers the tier setter.
-  await part("S32", "unsaved row + read-only column", async () => {
-    const page = await newPage();
-    await tierPageMocks(page);
-    // the client-side degradation: the page's own read answers the floor reason
-    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
-      pfPresent: true, pfVersion: "v2.20.21", capable: true,
-      stepTiersReason: "the step-tier catalog needs pf 0.2.4 or newer (found v2.20.21)",
-      items: [], file: { sha256: "e2e-sha", exists: true }, mapped: false } }));
-    await openSettings(page);
-    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
-    const host = sectionHost(page, "models");
-    const cell = host.locator("[data-step-tier-cell]").first();
-    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await host.locator("[data-step-tier-reason]").innerText(), /needs pf 0\.2\.4/, "the read-only reason shows once");
-    assert.equal(await host.locator("[data-step-tier-select]").count(), 0, "an incapable catalog read leaves the column read-only");
-    assert.ok((await host.innerText()).includes("Chat availability"), "the other columns are untouched");
-    // an unsaved provider draft is not a defined model: no row, no tier setter
-    await host.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
-    await host.getByPlaceholder("provider-name", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.equal(await host.locator("[data-step-tier-cell]").count(), 1, "a saved row only — an unsaved draft never offers the tier setter");
-    await page.context().close();
-  });
-
-  // S85-33 — polyforge#151 (85b2, review r2 #1): the per-step re-read. The
-  // row starts SET (全部：default); an external writer (another tab, the CLI)
-  // then adds a candidate to that same tier between the page load and the
-  // save. The write plan must come from the SAME fresh read that carries the
-  // CAS hash, so the external candidate survives the move — a plan from the
-  // page-load catalog would unset the tier and destroy it while the fresh
-  // hash lets the CAS pass. The stub's one-shot refusal then pins the kept
-  // draft and the per-harness reporting of a conflict.
-  await part("S33", "concurrent external write preserved", async () => {
-    const page = await newPage();
-    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["pi:tierdemo/other"] });
-    await tierPageMocks(page);
-    await openSettings(page);
-    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
-    const host = sectionHost(page, "models");
-    const cell = host.locator("[data-step-tier-cell]").first();
-    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /All: default/, "the row starts set");
-    // the external write lands after the page load, before the save
-    seedTiers({ default: ["pi:anthropic/opus", "claude:opus", "pi:tierdemo/external"], "fast-chat": ["pi:tierdemo/other"] });
-    await cell.locator("[data-step-tier-select]").selectOption("fast-chat");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: fast-chat"),
-      ACTION_MS, "the row never read back 全部：fast-chat");
-    const state = tierState();
-    assert.deepEqual(state.tiers["fast-chat"], ["pi:tierdemo/other", "pi:anthropic/opus", "claude:opus"], "the row moved over");
-    assert.deepEqual(state.tiers.default, ["pi:tierdemo/external"],
-      "the external concurrent candidate is preserved — never silently overwritten by a stale plan");
-    // a refused write (the stub's one-shot CAS conflict) keeps the draft and
-    // reports per harness: the refused one the conflict, the next unattempted
-    writeFileSync(tierRefuseFile, "");
-    await cell.locator("[data-step-tier-select]").selectOption("default");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    const results = cell.locator(".harness-apply-to-results li");
-    await results.first().waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator('.harness-apply-to-results [data-harness="pi"]').innerText(), /the file changed since it was read/, "the refused harness reports the conflict");
-    assert.match(await cell.locator('.harness-apply-to-results [data-harness="claude"]').innerText(), /not attempted after the earlier failure/, "the unattempted harness says so");
-    assert.equal(await cell.locator("[data-step-tier-select]").inputValue(), "default", "the draft is kept for the retry");
-    await page.context().close();
-  });
-  // S85-34 — polyforge#151 (85b2 AC3, review r2 #2): the restore path. A
-  // row starts inconsistent (pi in default, claude in fast-chat); choosing
-  // default with 应用到：全部 saves claude over and unsets the vacated
-  // fast-chat — the read-back returns to 全部：default, from the storage the
-  // writes really changed.
-  await part("S34", "inconsistent restored to all", async () => {
+  // S85-31 — polyforge#258 T3 AC2: differing harnesses keep their real 归属,
+  // shown inside the drawer; the cell carries no inline editor.
+  await part("S31", "per-harness badges in the drawer", async () => {
     const page = await newPage();
     seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
     const cell = host.locator("[data-step-tier-cell]").first();
     await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    await waitFor(async () => /Specific/.test(await cell.locator("[data-step-tier-state]").innerText()),
-      ACTION_MS, "the row never read back 指定");
-    const stateText = await cell.locator("[data-step-tier-state]").innerText();
-    assert.match(stateText, /Inconsistent: pi is currently in default/, "pi's own tier is listed");
-    assert.match(stateText, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
-    // the restore: default (pi's tier) applied to ALL harnesses
-    const argvBefore = tierArgv().length;
-    await cell.locator("[data-step-tier-select]").selectOption("default");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
-      ACTION_MS, "the row never read back 全部：default");
-    // the fixture storage: claude moved over, the vacated tier unset (never an empty list)
-    const state = tierState();
-    assert.deepEqual(state.tiers.default, ["pi:anthropic/opus", "claude:opus"], "the merged tier is what cli.toml reads back");
-    assert.equal(state.tiers["fast-chat"], undefined, "the vacated tier was unset, never left as an empty list");
-    // only claude was written: one set and one unset, both Host-scoped
-    const writes = tierArgv().slice(argvBefore).filter((args) => (args.includes("set") || args.includes("unset")) && args.some((entry) => String(entry).startsWith("step_tiers.")));
-    assert.equal(writes.length, 2, "one write per plan step of the moved harness");
-    for (const write of writes) assert.ok(write.includes("--host"), "the write is Host-scoped");
-    assert.ok(writes.some((args) => args.includes("config") && args.includes("set") && args.some((entry) => entry === "step_tiers.default")), "the merged tier was written");
-    assert.ok(writes.some((args) => args.includes("config") && args.includes("unset") && args.some((entry) => entry === "step_tiers.fast-chat")), "the vacated tier was unset");
+    const text = await cell.innerText();
+    assert.match(text, /pi: default/, "pi's own tier is named with its harness");
+    assert.match(text, /claude: fast-chat/, "claude's own tier is named with its harness");
+    assert.equal(await cell.locator("select, input").count(), 0, "no inline editor renders in the cell");
+    await cell.click({ timeout: ACTION_MS });
+    const drawer = host.locator("[data-step-tier-drawer]");
+    await drawer.waitFor({ state: "visible", timeout: ACTION_MS });
+    const drawerText = await drawer.innerText();
+    assert.match(drawerText, /pi: default/, "the drawer shows pi's own tier");
+    assert.match(drawerText, /claude: fast-chat/, "the drawer shows claude's own tier");
     await page.context().close();
   });
+
+  // S85-32 — polyforge#256 B1: an incapable catalog read (pf below the
+  // family's 0.2.4-0 floor) leaves the column read-only with a localized
+  // reason naming the found version, while the other columns stay.
+  await part("S32", "localized read-only reason", async () => {
+    const page = await newPage();
+    await tierPageMocks(page);
+    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
+      pfPresent: true, pfVersion: "v0.2.3", capable: true,
+      stepTiersReason: "the step-tier catalog needs pf 0.2.4-0 or newer (found v0.2.3)",
+      items: [], file: { sha256: "e2e-sha", exists: true }, mapped: false } }));
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await openModelSubpage(page, "list");
+    const reason = host.locator("[data-step-tier-reason]");
+    await reason.waitFor({ state: "visible", timeout: ACTION_MS });
+    const text = await reason.innerText();
+    assert.match(text, /needs pf 0\.2\.4-0/, "the reason names the new floor");
+    assert.match(text, /v0\.2\.3/, "the reason names the found version");
+    assert.ok(!text.startsWith("the step-tier catalog needs"), "the reason is localized, not the server's English sentence");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    assert.equal(await cell.getAttribute("data-step-tier-cell"), "readonly", "an incapable catalog leaves the cell a read-only dash");
+    assert.equal(await cell.locator("button, select, input").count(), 0, "the incapable cell has no control");
+    assert.ok((await host.innerText()).includes("Chat availability"), "the other columns are untouched");
+    await page.context().close();
+  });
+
+  // S85-33 — polyforge#258 T3 AC2: 应用到 inside the drawer writes only the
+  // chosen harness; the other harness's tier is untouched.
+  await part("S33", "apply-to scopes the write", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["claude:opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    const tierWrites = () => tierArgv().filter((args) => (args.includes("set") || args.includes("unset"))
+      && args.some((entry) => String(entry).startsWith("step_tiers.")));
+    const before = tierWrites().length;
+    await cell.click({ timeout: ACTION_MS });
+    const drawer = host.locator("[data-step-tier-drawer]");
+    await drawer.waitFor({ state: "visible", timeout: ACTION_MS });
+    await drawer.getByRole("radio", { name: "Specific harnesses", exact: true }).check({ timeout: ACTION_MS });
+    await drawer.getByRole("checkbox", { name: "pi", exact: true }).check({ timeout: ACTION_MS });
+    await drawer.locator("[data-step-tier-select]").selectOption("fast-chat");
+    await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
+    const writes = await waitFor(async () => {
+      const found = tierWrites();
+      if (found.length <= before) return false;
+      // the drawer's own round is done when claude's untouched tier is visible
+      return (await drawer.innerText()).includes("Applied") ? found.slice(before) : false;
+    }, ACTION_MS, "the targeted tier write never reached pf");
+    const fast = writes.find((args) => args.includes("step_tiers.fast-chat"));
+    const kept = writes.find((args) => args.includes("step_tiers.default"));
+    assert.ok(fast?.includes(JSON.stringify(["claude:opus", "pi:anthropic/opus"])),
+      `the target tier never received the moved identity: ${JSON.stringify(writes)}`);
+    assert.ok(kept?.includes(JSON.stringify(["claude:opus"])),
+      `the selected write removed claude's entry from the source tier: ${JSON.stringify(writes)}`);
+    assert.ok(!writes.some((args) => args.includes("unset")), "a targeted move unsets a tier");
+    await page.context().close();
+  });
+
+  // S85-34 — polyforge#258 T3 AC2: the labels follow the Host storage. An
+  // external writer changes [step_tiers]; a reload shows the new 归属.
+  await part("S34", "external write re-read", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
+    let cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await cell.innerText(), /default/, "the row starts sharing default");
+    // the external write (another tab, the CLI) moves claude to fast-chat
+    seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
+    await goto(page);
+    await clickSettingsButton(page);
+    await dialog(page).waitFor({ state: "visible", timeout: COLD_MS });
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
+    cell = sectionHost(page, "models").locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    const text = await cell.innerText();
+    assert.match(text, /pi: default/, "the reload shows pi's new 归属");
+    assert.match(text, /claude: fast-chat/, "the reload shows claude's new 归属");
+    await page.context().close();
+  });
+
+
+  // S85-35 — polyforge#258 r2 #1/#2/#3: the default model and per-model
+  // reasoning are a real interaction. Nothing is written before the explicit
+  // Save; while the first write is in flight the draft controls are locked, so
+  // a late answer never overwrites a newer edit; a failed write keeps its
+  // draft, while an earlier landed write is shown from the saved value; the
+  // model page guards a leave with the unsaved draft.
+  await part("S35", "explicit save interactions", async () => {
+    const page = await newPage();
+    let savedDefault = { provider: "gateway", modelId: "m1" };
+    const efforts = {};
+    const defaultPuts = [];
+    const effortPuts = [];
+    let failEffort = false;
+    let holdDefault = null;
+    let holdCatalog = null;
+    let holdEffort = null;
+    let catalogGets = 0;
+    let catalogSentinel = false;
+    const modelsAnswer = () => ({
+      models: {}, modelList: [
+        { id: "m1", name: "Gateway One", provider: "gateway" },
+        { id: "m2", name: "Gateway Two", provider: "gateway" },
+        ...(catalogSentinel ? [{ id: "m3", name: "Readback Sentinel", provider: "gateway" }] : []),
+      ], defaultModel: { provider: savedDefault.provider, modelId: savedDefault.modelId },
+      thinkingLevels: { "gateway:m1": ["low", "medium", "high"], "gateway:m2": ["low", "high"] },
+      thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false,
+    });
+    const piModelAnswer = () => ({ harness: "pi", concept: "model", data: {
+      defaultProvider: savedDefault.provider, defaultModel: savedDefault.modelId,
+      reasoningEffort: { neutral: "high", raw: "high" },
+      perModelReasoningEffort: Object.fromEntries(Object.entries(efforts).map(([key, level]) => [key, { neutral: level, raw: level }])),
+      providers: [], customModels: [],
+    } });
+    await page.route(/\/api\/models\?scope=all/, async (route) => {
+      catalogGets += 1;
+      if (holdCatalog) await holdCatalog.promise;
+      return route.fulfill({ json: modelsAnswer() });
+    });
+    await page.route("**/api/models/default", async (route) => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON();
+        defaultPuts.push(body);
+        if (holdDefault) await holdDefault.promise;
+        savedDefault = { provider: body.provider, modelId: body.modelId };
+        return route.fulfill({ json: { ok: true } });
+      }
+      return route.fulfill({ json: { defaultHarness: "pi", claudeDefaultModel: "default", claudeDefaultEffort: "default" } });
+    });
+    await page.route("**/api/harness/pi/model", async (route) => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON();
+        effortPuts.push(body);
+        if (holdEffort) await holdEffort.promise;
+        if (failEffort) return route.fulfill({ status: 500, json: { error: "fixture effort save failed" } });
+        const { key, level } = body.modelThinkingLevel;
+        if (level === null) delete efforts[key];
+        else efforts[key] = level;
+        return route.fulfill({ json: { ok: true } });
+      }
+      return route.fulfill({ json: piModelAnswer() });
+    });
+    await page.route("**/api/claude", (route) => route.fulfill({ json: { models: [] } }));
+    await page.route("**/api/models/enabled*", (route) => route.fulfill({ json: {
+      allEnabled: true, patterns: null, stalePatterns: [], enabledTotal: 2, availableTotal: 2,
+      scope: "global", settingsPath: "fixture/settings.json", editable: true, providers: [],
+    } }));
+    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
+      pfPresent: true, pfVersion: "v0.2.3", capable: false, stepTiersReason: "old", items: [],
+      file: { sha256: "x", exists: true } } }));
+    await page.route("**/api/models-config", (route) => route.fulfill({ json: { providers: {} } }));
+    await page.route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: { providers: [], oauthProviders: [], apiKeyProviders: [] } }));
+    await page.route("**/api/claude-models-migration", (route) => route.fulfill({ json: { status: "none" } }));
+    await page.route("**/api/provider-usage/query", (route) => route.fulfill({ json: { providers: [] } }));
+    let dismissed = 0;
+    const dialogAnswers = [];
+    page.on("dialog", (dialog) => {
+      const answer = dialogAnswers.shift() ?? "accept";
+      if (answer === "dismiss") { dismissed += 1; void dialog.dismiss(); }
+      else void dialog.accept();
+    });
+    const answerNextDialog = (answer) => { dialogAnswers.push(answer); };
+    const expected = (model) => JSON.stringify({ harness: "pi", provider: "gateway", id: model });
+
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    const defaultSelect = host.locator(".settings-model-default-select");
+    await defaultSelect.waitFor({ state: "visible", timeout: ACTION_MS });
+    await defaultSelect.selectOption({ label: "pi · gateway/m2" }, { timeout: ACTION_MS });
+    assert.equal(defaultPuts.length, 0, "a default model change writes nothing before Save");
+
+    // the unsaved draft guards a tab switch: cancel stays, accept leaves (run
+    // before any other dialog, so this asserts the guard alone)
+    answerNextDialog("dismiss");
+    await tab(page, /^General$/).click({ timeout: ACTION_MS });
+    await waitFor(() => dismissed === 1, ACTION_MS, "leaving the model page with a draft asked nothing");
+    assert.ok(await host.isVisible(), "a cancelled leave keeps the model page");
+    answerNextDialog("accept");
+    await tab(page, /^General$/).click({ timeout: ACTION_MS });
+    await waitFor(async () => !(await host.isVisible()), ACTION_MS, "an accepted leave never switched the section");
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(await defaultSelect.inputValue(), expected("m2"), "the model page keeps its draft after the asked leave");
+
+    // #2/#4: the default control itself is locked while its own save runs, and
+    // the saved value survives the held post-save read (a bounded poll, never
+    // one read after Save's text settled).
+    let releaseDefault;
+    holdDefault = { promise: new Promise((resolve) => { releaseDefault = resolve; }) };
+    let releaseCatalog;
+    holdCatalog = { promise: new Promise((resolve) => { releaseCatalog = resolve; }) };
+    const save = host.locator("[data-model-save]");
+    const catalogBefore = catalogGets;
+    await save.click({ timeout: ACTION_MS });
+    await waitFor(() => defaultPuts.length === 1, ACTION_MS, "the default write never started");
+    await waitFor(async () => (await defaultSelect.isDisabled()) && (await save.isDisabled()),
+      ACTION_MS, "the default control and Save stayed editable during the default's own save");
+    holdDefault = null;
+    releaseDefault();
+    await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the default save never cleared its draft");
+    await waitFor(() => catalogGets > catalogBefore, ACTION_MS, "the saved round never re-read the catalog");
+    assert.equal(await defaultSelect.inputValue(), expected("m2"), "the landed default shows before the read settles");
+    assert.deepEqual(defaultPuts[0], { provider: "gateway", modelId: "m2" }, "the default request carries the chosen model");
+    // Release the held read with a model that only this response carries: its
+    // appearance proves the page consumed this round, not just that the
+    // request started or that the local draft already showed m2.
+    catalogSentinel = true;
+    holdCatalog = null;
+    releaseCatalog();
+    await defaultSelect.locator("option").filter({ hasText: /gateway\/m3/ }).waitFor({ state: "attached", timeout: ACTION_MS });
+    await waitFor(async () => (await defaultSelect.inputValue()) === expected("m2"),
+      ACTION_MS, "the post-save read reverted the default");
+
+    answerNextDialog("accept");
+    await openModelSubpage(page, "list");
+    const reasoning = host.getByLabel("Reasoning / thinking — gateway/m1", { exact: true });
+    await reasoning.waitFor({ state: "visible", timeout: ACTION_MS });
+    await reasoning.selectOption("low", { timeout: ACTION_MS });
+    assert.equal(effortPuts.length, 0, "a reasoning change writes nothing before Save");
+    let releaseEffort;
+    holdEffort = { promise: new Promise((resolve) => { releaseEffort = resolve; }) };
+    await save.click({ timeout: ACTION_MS });
+    await waitFor(() => effortPuts.length === 1, ACTION_MS, "the reasoning write never ran");
+    await waitFor(async () => (await reasoning.isDisabled()) && (await save.isDisabled()),
+      ACTION_MS, "the reasoning control and Save stayed editable during the reasoning's own save");
+    holdEffort = null;
+    releaseEffort();
+    assert.deepEqual(effortPuts[0], { modelThinkingLevel: { key: "gateway/m1", level: "low" } });
+    await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the reasoning save never cleared its draft");
+
+    // #3: two writes, the second fails — the landed default shows its saved
+    // value, the failed reasoning stays in the draft and retries.
+    failEffort = true;
+    await openModelSubpage(page, "default");
+    await defaultSelect.selectOption({ label: "pi · gateway/m1" }, { timeout: ACTION_MS });
+    answerNextDialog("accept");
+    await openModelSubpage(page, "list");
+    await reasoning.selectOption("high", { timeout: ACTION_MS });
+    await save.click({ timeout: ACTION_MS });
+    await waitFor(() => defaultPuts.length === 2 && effortPuts.length === 2, ACTION_MS, "the partial save never reached both writers");
+    await host.getByText("fixture effort save failed", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal((await save.innerText()).trim(), "Save (1)", "only the failed reasoning stays in the draft");
+    answerNextDialog("accept");
+    await openModelSubpage(page, "default");
+    await waitFor(async () => (await defaultSelect.inputValue()) === expected("m1"),
+      ACTION_MS, "the landed default never showed its saved value");
+    answerNextDialog("accept");
+    await openModelSubpage(page, "list");
+    assert.equal(await reasoning.inputValue(), "high", "the failed reasoning keeps its draft");
+    failEffort = false;
+    await save.click({ timeout: ACTION_MS });
+    await waitFor(async () => (await save.innerText()).trim() === "Save", ACTION_MS, "the retried reasoning never landed");
+    assert.equal(efforts["gateway/m1"], "high");
+
+    await page.context().close();
+  });
+
+  // S85-36 — polyforge#258 r2 #1: the drawer's CAS conflict. The first
+  // harness is refused (409) and the round stops there: the draft stays, the
+  // second harness is marked not attempted, and the same draft retries green.
+  await part("S36", "drawer CAS conflict and retry", async () => {
+    await startTierServer();
+    const page = await newPage();
+    // One tier per harness: the round has no multi-tier confirmation to answer.
+    seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    await cell.click({ timeout: ACTION_MS });
+    const drawer = host.locator("[data-step-tier-drawer]");
+    await drawer.waitFor({ state: "visible", timeout: ACTION_MS });
+    const tierWrites = () => tierArgv().filter((args) => (args.includes("set") || args.includes("unset"))
+      && args.some((entry) => String(entry).startsWith("step_tiers.")));
+    const before = tierWrites().length;
+    await drawer.locator("[data-step-tier-select]").selectOption("fast-chat", { timeout: ACTION_MS });
+    refuseNextTierWrite();
+    await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(() => tierWrites().length > before, ACTION_MS, "the refused write never reached pf");
+    await waitFor(async () => (await drawer.innerText()).includes("Not attempted"),
+      ACTION_MS, "the harness after the refused one was never marked not attempted");
+    assert.equal(tierWrites().length, before + 1, "a refused first harness attempted the next one");
+    // polyforge#259 T4 AC2: the refusal's own words sit in the result's details
+    // fold, so the check reads the text content rather than the visible text.
+    const drawn = await drawer.locator(".harness-apply-to-results").evaluate((node) => node.textContent ?? "");
+    assert.match(drawn, /config-cas-409|changed since it was read/i, "the drawer shows the CAS refusal");
+    assert.equal(await drawer.locator("[data-step-tier-select]").inputValue(), "fast-chat", "the draft target survives the conflict");
+    await drawer.getByRole("button", { name: "Apply", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => ((await drawer.innerText()).match(/Applied/g) ?? []).length >= 2,
+      ACTION_MS, "the retried draft never applied to both harnesses");
+    assert.ok(tierWrites().length >= before + 2, "the retry wrote the moved identity");
+    await page.context().close();
+  });
+
+  // S85-37 — polyforge#258 r2 #5: the drawer takes Escape in the capture
+  // phase like every stacked dialog: one Escape closes the drawer alone and
+  // focus returns to the label that opened it.
+  await part("S37", "drawer escape and focus", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "list");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    await cell.click({ timeout: ACTION_MS });
+    await host.locator("[data-step-tier-drawer]").waitFor({ state: "visible", timeout: ACTION_MS });
+    await page.keyboard.press("Escape");
+    await waitFor(async () => (await host.locator("[data-step-tier-drawer]").count()) === 0,
+      ACTION_MS, "Escape never closed the drawer");
+    assert.ok(await page.getByRole("dialog", { name: "Settings", exact: true }).isVisible(),
+      "Escape closed Settings instead of only the drawer");
+    await waitFor(async () => await page.evaluate(() => document.activeElement?.hasAttribute("data-step-tier-open") ?? false),
+      ACTION_MS, "focus never returned to the tier label");
+    await page.context().close();
+  });
+
+
+  // S85-38 — polyforge#258 r3 #1: the Provider editor's models.json draft
+  // survives a subpage switch. The editor stays mounted once visited, so a
+  // Base URL edit is still there after 模型清单 → pi Providers, and no save
+  // was sent to keep it.
+  await part("S38", "provider draft across subpages", async () => {
+    const page = await newPage();
+    const config = { providers: { gateway: {
+      baseUrl: "https://gw.example/v1", api: "openai-completions",
+      models: [{ id: "m1", name: "Gateway One" }],
+    } } };
+    let configPuts = 0;
+    await page.route("**/api/models-config", (route) => {
+      if (route.request().method() === "PUT") {
+        configPuts += 1;
+        return route.fulfill({ json: { success: true } });
+      }
+      return route.fulfill({ json: config });
+    });
+    await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: {
+      models: {}, modelList: [{ id: "m1", name: "Gateway One", provider: "gateway" }],
+      defaultModel: { provider: "gateway", modelId: "m1" }, thinkingLevels: {},
+      thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false,
+    } }));
+    await page.route("**/api/models/default", (route) => route.fulfill({ json: {
+      defaultHarness: "pi", claudeDefaultModel: "default", claudeDefaultEffort: "default" } }));
+    await page.route("**/api/claude", (route) => route.fulfill({ json: { models: [] } }));
+    await page.route("**/api/harness/pi/model", (route) => route.fulfill({ json: { harness: "pi", concept: "model", data: {
+      defaultProvider: "gateway", defaultModel: "m1", reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: [] } } }));
+    await page.route("**/api/harness/claude/model", (route) => route.fulfill({ json: { harness: "claude", concept: "model", data: {
+      defaultProvider: null, defaultModel: null, reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: [] } } }));
+    await page.route("**/api/models/enabled*", (route) => route.fulfill({ json: {
+      allEnabled: true, patterns: null, stalePatterns: [], enabledTotal: 1, availableTotal: 1,
+      scope: "global", settingsPath: "fixture/settings.json", editable: true,
+      providers: [{ id: "gateway", name: "Gateway", kind: "custom", enabledCount: 1,
+        models: [{ id: "m1", name: "Gateway One", ref: "gateway/m1", enabled: true, contextWindow: 128000 }] }],
+    } }));
+    await page.route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: { providers: [], oauthProviders: [], apiKeyProviders: [] } }));
+    await page.route("**/api/claude-models-migration", (route) => route.fulfill({ json: { status: "none" } }));
+    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
+      pfPresent: true, pfVersion: "v0.2.3", capable: false, stepTiersReason: "old", items: [],
+      file: { sha256: "x", exists: true } } }));
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await openModelSubpage(page, "providers");
+    const baseUrl = host.locator(".config-field-label").filter({ hasText: /^Base URL$/ }).locator("..").locator("input");
+    await baseUrl.waitFor({ state: "visible", timeout: ACTION_MS });
+    await baseUrl.fill("https://changed.example/v1");
+    await openModelSubpage(page, "list");
+    await openModelSubpage(page, "providers");
+    await waitFor(async () => (await baseUrl.inputValue()) === "https://changed.example/v1",
+      ACTION_MS, "the Provider draft was lost on the subpage round trip");
+    assert.equal(configPuts, 0, "the draft round trip must not save");
+    await page.context().close();
+  });
+
 } finally {
   await h.close();
 }

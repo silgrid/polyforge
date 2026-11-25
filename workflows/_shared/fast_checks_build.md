@@ -6,7 +6,12 @@ artifacts/build/fast-checks/<repo>.json` (the engine in this lane's
 snapshot; the command runs the engine itself — no command line of the
 report is ever copied out by hand; `--root .` names the repository's own
 root, a nested root its directory, and a name that is neither is a usage
-error). It runs the named roots' fast commands in order — never one whose
+error). It runs the named roots' fast commands group by group — a
+command's group is the group its report bound it to (polyforge#244) else
+its report's root, the groups side by side at most `--parallel N` at once
+(the repository's declared `full_parallel` when it names one, else
+default 2; one group, or `--parallel 1`, is the serial plan), each
+group's own commands in the plan's order — never one whose
 `phase` is `full` or `scoped` (the scoped selection is the close's own,
 never the per-unit's) — each in the report's `root`, with each entry's own
 `timeout`; a command missing its `requires_env` or `requires_cmd`
@@ -53,8 +58,11 @@ whole change, after the fast checks — reusing the green runs whose key
 matches on the host (a boxed close consumes no `--reuse` green evidence,
 the image and tool caches staying shared), never per unit, and in the
 repository's declared verification image when its HEAD carries
-`.polyforge/Dockerfile.verify` — the same isolation verification uses, the
-result recording which isolation ran (`details.isolation`) — while a repo
-without the declaration keeps the host close and the per-unit runs stay
-on the host; a container the close cannot build, start or keep is the
-run's error, never a red of the change's, never a host stand-in.
+`.polyforge/Dockerfile.verify` — the same isolation verification uses (a
+boxed close gives one container per group: a container's reap kills every
+process in it after a command, so commands sharing one container would
+kill each other), the result recording which isolation ran
+(`details.isolation`) — while a repo without the declaration keeps the
+host close and the per-unit runs stay on the host; a container the close
+cannot build, start or keep is the run's error, never a red of the
+change's, never a host stand-in.

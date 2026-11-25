@@ -402,7 +402,7 @@ try {
     // folds server and user_id, and the [daemon] zone has no advanced row).
     const topCount = (await zoneToggleOf("user_id").innerText()).trim();
     assert.match(topCount, /2/, `the top-level zone's counted control does not count 2: "${topCount}"`);
-    const daemonZone = page.locator(".polyforge-config-zone.is-daemon").first();
+    const daemonZone = page.locator('.polyforge-config-zone[data-zone="daemon"]').first();
     assert.equal(await daemonZone.locator("button.polyforge-disclosure-toggle").count(), 0, "the [daemon] zone folds a row the cli.toml card no longer holds");
     // A draft keeps its zone open and says so; the confirmation is never hidden.
     await page.locator('input[aria-label="user_id"]').first().fill("u_e2e_9955");
@@ -574,11 +574,15 @@ try {
     // the refusal reaches the row only after the route's pf spawns
     // answer, which a fixed 500 ms dwell outran on GitHub's 2-core runner; wait
     // for pf's text (bounded), then assert on the row as before.
-    const rowText = async () => (await rowOf("claude_bin").innerText()).replace(/\s+/g, " ");
+    // polyforge#259 T4 AC2 (review r4#1): pf's own words and its diff now sit in
+    // the row's closed 详情 fold, which innerText does not read; textContent does.
+    const rowText = async () => ((await rowOf("claude_bin").textContent()) ?? "").replace(/\s+/g, " ");
     for (const deadline = Date.now() + 20_000; Date.now() < deadline && !/must be a URL/.test(await rowText());) await delay(100);
     const refused = await rowText();
     assert.match(refused, /must be a URL/, `pf's own refusal is not on the row: ${refused.slice(0, 200)}`);
     assert.match(refused, /claude_bin/, "the row does not show pf's key-level diff");
+    const shown = (await rowOf("claude_bin").locator(".polyforge-config-row-feedback").innerText()).replace(/\s+/g, " ");
+    assert.doesNotMatch(shown, /must be a URL/, `pf's own words are the row's main line, not folded: ${shown.slice(0, 200)}`);
     assert.equal(sha(readFileSync(cliToml, "utf8")), CLI_SHA, "pi-web wrote cli.toml itself");
   });
 } catch (error) {

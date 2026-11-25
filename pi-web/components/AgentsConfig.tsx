@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { dirtyCount } from "@/lib/settings-dirty";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { ProjectTrustStatus, SubagentProfilesResponse, SubagentSettingsResponse } from "@/lib/api-types";
 import { sendAgentCommand } from "@/lib/agent-client";
@@ -20,11 +21,13 @@ import {
   ConfigDetailHeader,
   ConfigDetailHeaderInfo,
   ConfigDetailStack,
+  ConfigDetailTitle,
   ConfigEmptyState,
   ConfigField,
   ConfigFooter,
   ConfigListAction,
   ConfigPanelShell,
+  ConfigSaveFooter,
   ConfigSaveTarget,
   ConfigScopeTag,
   ConfigSidebar,
@@ -36,10 +39,20 @@ import {
   ConfigStatusDot,
   ConfigSwitch,
 } from "./SettingsUi";
+import { ConfigDangerMenu } from "./ConfigDangerMenu";
 import { ModelSelector } from "./ModelSelector";
 import { projectTrustReloadKey } from "./settings-ui-helpers";
 
 const TOOL_OPTIONS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+/** 侧栏的「设置」项：与 profile 的 `scope:name` 键分开命名（polyforge#271 Q7 A）。 */
+const AGENT_SETTINGS_SELECTION = "__subagent-settings__";
+
+/** 并发输入框失焦时是否要写：只有合法且真的改变的值才提交，读回值未变不写（polyforge#271 r2 #2）。 */
+export function concurrencyCommit(raw: string, current: number): number | null {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 32 || value === current) return null;
+  return value;
+}
 const THINKING_OPTIONS = ["", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 type EditableProfile = Omit<SubagentProfile, "scope" | "filePath">;
@@ -153,10 +166,121 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function Toggle({ checked, disabled, label, onChange }: { checked: boolean; disabled: boolean; label: string; onChange: (checked: boolean) => void }) {
   return (
-    <label style={{ display: "flex", alignItems: "center", gap: 7, color: disabled ? "var(--text-dim)" : "var(--text-muted)", fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
+    <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 7, color: disabled ? "var(--text-dim)" : "var(--text-muted)", fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
       {label}
     </label>
+  );
+}
+
+/** The saved profile's header actions: Duplicate, the ⋯ delete menu (writable
+ *  scope in edit mode only, polyforge#259 T4 AC1), and the enable switch. */
+export function AgentDetailActions({
+  canDuplicate,
+  deletableName,
+  busy,
+  enabled,
+  switchDisabled,
+  onDuplicate,
+  onDelete,
+  onToggle,
+}: {
+  canDuplicate: boolean;
+  /** The profile's display name when it can be deleted here, otherwise null. */
+  deletableName: string | null;
+  busy: boolean;
+  enabled: boolean;
+  switchDisabled: boolean;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onToggle: (checked: boolean) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <ConfigDetailActions>
+      {canDuplicate && <ConfigButton size="small" onClick={onDuplicate} disabled={busy}>{t("agents.duplicate")}</ConfigButton>}
+      {deletableName !== null && (
+        <ConfigDangerMenu
+          texts={{
+            menu: t("settings.dangerMenu"),
+            action: t("agents.delete"),
+            confirmText: t("agents.deleteConfirm", { name: deletableName }),
+            confirm: t("agents.delete"),
+            cancel: t("i18n.cancel"),
+          }}
+          busy={busy}
+          onConfirm={onDelete}
+        />
+      )}
+      <ConfigSwitch checked={enabled} disabled={switchDisabled} label={enabled ? t("agents.disable") : t("agents.enable")} onChange={onToggle} />
+    </ConfigDetailActions>
+  );
+}
+
+/** 内置子代理设置（polyforge#271 AC2）：原先顶部 banner 的开关、并发与
+ *  reload 提示搬进侧栏「设置」选中后的详情；纯展示，写入仍由页面回调做。 */
+export function AgentFeatureSettings({ builtInEnabled, maxConcurrent, settingsLoading, settingsSaving, reloadNeeded, reloading, sessionId, onToggle, onMaxConcurrent, onReload }: {
+  builtInEnabled: boolean;
+  maxConcurrent: number;
+  settingsLoading: boolean;
+  settingsSaving: boolean;
+  reloadNeeded: boolean;
+  reloading: boolean;
+  sessionId?: string | null;
+  onToggle: (enabled: boolean) => void;
+  onMaxConcurrent: (value: number) => void;
+  onReload: () => void;
+}) {
+  const { t } = useI18n();
+  // The field is controlled: a value read back after the panel mounted (or
+  // clamped by the server) replaces what it shows (polyforge#271 r3#1).
+  const [draft, setDraft] = useState(String(maxConcurrent));
+  useEffect(() => { setDraft(String(maxConcurrent)); }, [maxConcurrent]);
+  return (
+    <ConfigDetailStack data-agents-settings-pane="">
+      <ConfigDetailHeader>
+        <ConfigDetailHeaderInfo>
+          <ConfigDetailTitle>{t("agents.settingsNav")}</ConfigDetailTitle>
+        </ConfigDetailHeaderInfo>
+      </ConfigDetailHeader>
+      <div className="agents-feature-setting">
+        <div className="agents-feature-copy">
+          <strong>{t("agents.builtInTitle")}</strong>
+          <span>{t("agents.builtInDescription")}</span>
+          {reloadNeeded && <span role="status" className="agents-feature-reload-notice">{t("agents.reloadRequired")}</span>}
+        </div>
+        <div className="agents-feature-actions">
+          {reloadNeeded && sessionId && (
+            <ConfigButton size="small" data-agents-reload="" onClick={onReload} disabled={reloading || settingsSaving}>
+              {reloading ? t("agents.reloading") : t("agents.reloadSession")}
+            </ConfigButton>
+          )}
+          <label className="agents-concurrency-control" title={t("agents.maxConcurrentDescription")}>
+            <span>{t("agents.maxConcurrent")}</span>
+            <input
+              aria-label={t("agents.maxConcurrent")}
+              type="number"
+              min={1}
+              max={32}
+              value={draft}
+              disabled={settingsLoading || settingsSaving}
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={() => {
+                const next = concurrencyCommit(draft, maxConcurrent);
+                if (next !== null) onMaxConcurrent(next);
+              }}
+            />
+          </label>
+          <ConfigSwitch
+            checked={builtInEnabled}
+            disabled={settingsLoading || reloading}
+            loading={settingsSaving}
+            label={t("agents.builtInTitle")}
+            onChange={onToggle}
+          />
+        </div>
+      </div>
+    </ConfigDetailStack>
   );
 }
 
@@ -167,6 +291,7 @@ export function AgentsConfig({
   onReloaded,
   embedded = false,
   trust,
+  onUnsavedChange,
 }: {
   cwd: string;
   sessionId?: string | null;
@@ -175,6 +300,8 @@ export function AgentsConfig({
   embedded?: boolean;
   /** The page's trust status for `cwd`; a new decision loads the model list again. */
   trust?: ProjectTrustStatus | null;
+  /** Whether the open draft has unsaved changes; Settings asks before dropping it (T4 AC1). */
+  onUnsavedChange?: (dirty: boolean) => void;
 }) {
   const isMobile = useIsMobile();
   const { t } = useI18n();
@@ -182,8 +309,11 @@ export function AgentsConfig({
   const [modelOptions, setModelOptions] = useState<ModelsData["modelList"]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelsError, setModelsError] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(() => getLastSettingsSelection("agents", cwd));
+  const [selectedKey, setSelectedKey] = useState<string | null>(() => getLastSettingsSelection("agents", cwd) ?? AGENT_SETTINGS_SELECTION);
   const [draft, setDraft] = useState<EditableProfile>(EMPTY_PROFILE);
+  // The profile as last read or saved: the footer's dirty count is the draft
+  // against it (polyforge#259 T4 AC1).
+  const [baseDraft, setBaseDraft] = useState<EditableProfile>(EMPTY_PROFILE);
   const [mode, setMode] = useState<EditorMode>("view");
   const [targetScope, setTargetScope] = useState<SubagentWritableScope>("global");
   const [loading, setLoading] = useState(true);
@@ -219,14 +349,11 @@ export function AgentsConfig({
       const next = data.profiles ?? [];
       setProfiles(next);
       const rememberedKey = preferredKey ?? getLastSettingsSelection("agents", cwd);
-      const chosen = next.find((profile) => profileKey(profile) === rememberedKey)
-        ?? next.find((profile) => profile.scope === "project")
-        ?? next.find((profile) => profile.scope === "global")
-        ?? next[0]
-        ?? null;
-      setSelectedKey(chosen ? profileKey(chosen) : null);
+      const chosen = rememberedKey ? next.find((profile) => profileKey(profile) === rememberedKey) ?? null : null;
+      setSelectedKey(chosen ? profileKey(chosen) : AGENT_SETTINGS_SELECTION);
       if (chosen) {
         setDraft(editableProfile(chosen));
+        setBaseDraft(editableProfile(chosen));
         setMode(isWritableScope(chosen.scope) ? "edit" : "view");
         if (isWritableScope(chosen.scope)) setTargetScope(chosen.scope);
       }
@@ -301,8 +428,15 @@ export function AgentsConfig({
   const selectProfile = (profile: SubagentProfile) => {
     setSelectedKey(profileKey(profile));
     setDraft(editableProfile(profile));
+    setBaseDraft(editableProfile(profile));
     setMode(isWritableScope(profile.scope) ? "edit" : "view");
     if (isWritableScope(profile.scope)) setTargetScope(profile.scope);
+    setError(null);
+  };
+
+  const selectSettings = () => {
+    setSelectedKey(AGENT_SETTINGS_SELECTION);
+    setMode("view");
     setError(null);
   };
 
@@ -312,6 +446,7 @@ export function AgentsConfig({
     while (profiles.some((profile) => profile.name === name)) name = `custom-agent-${suffix++}`;
     setSelectedKey(null);
     setDraft({ ...EMPTY_PROFILE, name, displayName: name });
+    setBaseDraft({ ...EMPTY_PROFILE, name, displayName: name });
     setMode("create");
     setTargetScope("global");
     setError(null);
@@ -343,6 +478,7 @@ export function AgentsConfig({
       });
       const data = await response.json() as { profile?: SubagentProfile; error?: string };
       if (!response.ok || data.error || !data.profile) throw new Error(data.error ?? `HTTP ${response.status}`);
+      setBaseDraft(draft);
       await loadProfiles(profileKey(data.profile));
       setSavedOk(true);
       setTimeout(() => setSavedOk(false), 2000);
@@ -355,7 +491,7 @@ export function AgentsConfig({
 
   const remove = async () => {
     if (!selected || !isWritableScope(selected.scope)) return;
-    if (!window.confirm(t("agents.deleteConfirm", { name: selected.displayName }))) return;
+    // The ⋯ menu asked already (polyforge#259 T4 AC1).
     setSaving(true);
     setError(null);
     try {
@@ -400,6 +536,13 @@ export function AgentsConfig({
   const switchDisabled = creating
     ? disabled
     : !selected || !isTogglableScope(selected.scope) || saving || toggling;
+  const dirty = dirtyCount(baseDraft as unknown as Record<string, unknown>, draft as unknown as Record<string, unknown>);
+  // Settings asks before it drops an unsaved draft (T4 AC1): the footer's count
+  // is that fact, reported to the panel that owns the tab bar.
+  useEffect(() => {
+    onUnsavedChange?.(dirty > 0);
+  }, [dirty, onUnsavedChange]);
+
   const update = <K extends keyof EditableProfile>(key: K, value: EditableProfile[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
   };
@@ -488,43 +631,16 @@ export function AgentsConfig({
 
   return (
     <ConfigPanelShell embedded={embedded} title={t("common.agents")} subtitle={shortenPath(cwd)} closeLabel={t("agents.close")} onClose={onClose}>
-      <div className="agents-feature-setting">
-        <div className="agents-feature-copy">
-          <strong>{t("agents.builtInTitle")}</strong>
-          <span>{t("agents.builtInDescription")}</span>
-          {reloadNeeded && <span role="status" className="agents-feature-reload-notice">{t("agents.reloadRequired")}</span>}
-        </div>
-        <div className="agents-feature-actions">
-          {reloadNeeded && sessionId && (
-            <ConfigButton size="small" onClick={() => void reloadSession()} disabled={reloading || settingsSaving}>
-              {reloading ? t("agents.reloading") : t("agents.reloadSession")}
-            </ConfigButton>
-          )}
-          <label className="agents-concurrency-control" title={t("agents.maxConcurrentDescription")}>
-            <span>{t("agents.maxConcurrent")}</span>
-            <input
-              aria-label={t("agents.maxConcurrent")}
-              type="number"
-              min={1}
-              max={32}
-              value={maxConcurrent}
-              disabled={settingsLoading || settingsSaving}
-              onChange={(event) => setMaxConcurrent(Number(event.target.value))}
-              onBlur={() => void updateMaxConcurrent(maxConcurrent)}
-            />
-          </label>
-          <ConfigSwitch
-            checked={builtInEnabled}
-            disabled={settingsLoading || reloading}
-            loading={settingsSaving}
-            label={t("agents.builtInTitle")}
-            onChange={(enabled) => void toggleBuiltInSubagents(enabled)}
-          />
-        </div>
-      </div>
       <ConfigSplitView>
         <ConfigSidebar>
           <ConfigSidebarList>
+              <ConfigSidebarItem
+                data-agents-nav="settings"
+                active={selectedKey === AGENT_SETTINGS_SELECTION}
+                onClick={selectSettings}
+              >
+                <ConfigSidebarText className="is-grow">{t("agents.settingsNav")}</ConfigSidebarText>
+              </ConfigSidebarItem>
               {loading ? (
                 <div style={{ padding: 10, color: "var(--text-dim)", fontSize: 12 }}>{t("agents.loading")}</div>
               ) : (["project", "global", "workspace", "builtin"] as const).map((scope) => {
@@ -561,7 +677,20 @@ export function AgentsConfig({
 
         <ConfigDetail>
           <ConfigDetailStack className="is-fill">
-              {!selected && !creating ? (
+              {selectedKey === AGENT_SETTINGS_SELECTION ? (
+                <AgentFeatureSettings
+                  builtInEnabled={builtInEnabled}
+                  maxConcurrent={maxConcurrent}
+                  settingsLoading={settingsLoading}
+                  settingsSaving={settingsSaving}
+                  reloadNeeded={reloadNeeded}
+                  reloading={reloading}
+                  sessionId={sessionId}
+                  onToggle={(enabled) => void toggleBuiltInSubagents(enabled)}
+                  onMaxConcurrent={(value) => void updateMaxConcurrent(value)}
+                  onReload={() => void reloadSession()}
+                />
+              ) : !selected && !creating ? (
                 <ConfigEmptyState>{t("agents.empty")}</ConfigEmptyState>
               ) : (
                 <ConfigDetailStack>
@@ -591,11 +720,16 @@ export function AgentsConfig({
                         </>
                       )}
                     </ConfigDetailHeaderInfo>
-                    <ConfigDetailActions>
-                      {selected && (mode === "view" || mode === "edit") && <ConfigButton size="small" onClick={beginDuplicate} disabled={saving || toggling}>{t("agents.duplicate")}</ConfigButton>}
-                      {selected && isWritableScope(selected.scope) && mode === "edit" && <ConfigButton variant="danger" size="small" onClick={() => void remove()} disabled={saving || toggling}>{t("agents.delete")}</ConfigButton>}
-                      <ConfigSwitch checked={draft.enabled} disabled={switchDisabled} label={draft.enabled ? t("agents.disable") : t("agents.enable")} onChange={(checked) => void toggleEnabled(checked)} />
-                    </ConfigDetailActions>
+                    <AgentDetailActions
+                      canDuplicate={!!selected && (mode === "view" || mode === "edit")}
+                      deletableName={selected && isWritableScope(selected.scope) && mode === "edit" ? selected.displayName : null}
+                      busy={saving || toggling}
+                      enabled={draft.enabled}
+                      switchDisabled={switchDisabled}
+                      onDuplicate={beginDuplicate}
+                      onDelete={() => void remove()}
+                      onToggle={(checked) => void toggleEnabled(checked)}
+                    />
                   </ConfigDetailHeader>
 
                   <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 1fr) minmax(0, 1fr)", gap: 12 }}>
@@ -718,23 +852,19 @@ export function AgentsConfig({
           </ConfigDetailStack>
         </ConfigDetail>
       </ConfigSplitView>
-      <ConfigFooter status={(settingsError || error) && <span role="alert" style={{ color: "#ef4444" }}>{settingsError || error}</span>}>
-        {editing && (
-          <ConfigButton
-            variant="primary"
-            onClick={() => void save()}
-            disabled={saving || savedOk || toggling || !draft.name.trim()}
-            className={savedOk ? "is-success" : undefined}
-          >
-            {savedOk && (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="config-button-success-icon">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            )}
-            <span>{savedOk ? t("i18n.saved") : saving ? t("agents.saving") : t("agents.save")}</span>
-          </ConfigButton>
-        )}
-      </ConfigFooter>
+      {/* One footer save for the whole draft: the count is the fields it would
+          write, and a clean profile offers no button (polyforge#259 T4 AC1). */}
+      <ConfigSaveFooter
+        status={(settingsError || error)
+          ? <span role="alert" style={{ color: "#ef4444" }}>{settingsError || error}</span>
+          : dirty > 0 ? t("settings.unsavedCount", { count: dirty }) : undefined}
+        dirty={editing ? dirty : 0}
+        saving={saving || toggling}
+        discardLabel={t("settings.discard")}
+        saveLabel={(count) => t("settings.saveWithCount", { count })}
+        onDiscard={() => setDraft(baseDraft)}
+        onSave={() => void save()}
+      />
     </ConfigPanelShell>
   );
 }

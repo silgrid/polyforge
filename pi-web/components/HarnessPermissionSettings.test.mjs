@@ -71,6 +71,41 @@ test("the unified block's values: pi's own note where it does not support the fi
   assert.deepEqual(view.unifiedValues("sandbox", null, { pi: "", claude: "" }), []);
 });
 
+// polyforge#256 (T1, B6): a supported-but-unset sandbox is 「未设置」, never the
+// 「没有已安装的 harness 支持此项」 state; the UnifiedSetting protocol is
+// unchanged (status stays `ready`, the display carries the localized text),
+// and pi's own unsupported note stays exactly as it was.
+test("supported unset sandbox is not unsupported: ready with a localized 未设置, pi still unsupported", async () => {
+  const unsetCompare = {
+    field: "sandbox",
+    status: "inconsistent",
+    values: {
+      pi: { supported: false, neutral: null, raw: null },
+      claude: { supported: true, neutral: null, raw: null },
+    },
+  };
+  const sandbox = view.unifiedValues("sandbox", unsetCompare, { pi: "pi has no sandbox", claude: "", unset: "Not set" });
+  assert.deepEqual(sandbox, [
+    { harness: "pi", status: "unsupported", value: null, reason: "pi has no sandbox" },
+    { harness: "claude", status: "ready", value: "Not set" },
+  ], "claude's unset sandbox is ready with 「未设置」, not unsupported");
+  const { unifiedStatus } = await jiti.import("./UnifiedSetting.tsx");
+  assert.equal(unifiedStatus(sandbox), "inconsistent", "the page must not claim no harness supports the sandbox");
+  // a supported and set sandbox still shows its own value, never the unset text
+  const setCompare = { ...unsetCompare, values: { ...unsetCompare.values, claude: { supported: true, neutral: "on", raw: "on" } } };
+  assert.equal(view.unifiedValues("sandbox", setCompare, { pi: "pi has no sandbox", claude: "", unset: "Not set" })[1].value, "on");
+  // pi alone unsupported (no claude support at all) stays unsupported
+  const noneCompare = { ...unsetCompare, values: { pi: { supported: false, neutral: null, raw: null }, claude: { supported: false, neutral: null, raw: null } } };
+  assert.equal(unifiedStatus(view.unifiedValues("sandbox", noneCompare, { pi: "pi has no sandbox", claude: "no claude", unset: "Not set" })), "unsupported");
+  // without the unset text the helper keeps the old protocol shape (null)
+  assert.equal(view.unifiedValues("sandbox", unsetCompare, { pi: "pi has no sandbox", claude: "" })[1].value, null);
+  // the page passes the localized unset text to the sandbox projection only
+  const source = await jiti.import("node:fs/promises").then((fs) => fs.readFile(new URL("./HarnessPermissionSettings.tsx", import.meta.url), "utf8"));
+  assert.match(source, /values=\{unifiedValues\("sandbox", sandboxCompare, \{/, "the sandbox block reads the projection");
+  assert.match(source, /unset: t\("settings\.permissionSandboxUnset"\)/, "the sandbox block passes the localized unset text");
+  assert.match(source, /onChange=\{\(enabled\) => void saveClaude\(\{ sandboxEnabled: enabled \}\)\}/, "the switch writes only on the user's change");
+});
+
 test("the trust unify target: every differing harness set to the first ready value, null when they agree or none answers", () => {
   // pi trusted, claude not: claude is the target, written to pi's value.
   assert.deepEqual(view.trustUnifyTargets({
@@ -160,4 +195,34 @@ test("the Claude Code report block renders claude's version, capabilities and th
   // A failed read is its own visible line, never silence.
   const failed = renderToStaticMarkup(h(I18nProvider, null, h(ClaudeCodeReport, { report: null, error: "HTTP 500" })));
   assert.ok(failed.includes("HTTP 500"), "the failed read is not shown");
+});
+
+// polyforge#259 T4 AC2 (u3, review r3#1): claude's own approval modes read by
+// their display names, the raw mode id only as the second line. Expected names
+// hand-copied from lib/i18n/messages/en.ts (settings.permissionMode*), the ids
+// from claude's modes (lib/harness/concepts.ts). Caught change: an option whose
+// main text is the raw id again (e.g. `acceptEdits`), or one losing its id line.
+test("claude's approval modes read by their display names, the raw id only on the second line (T4 AC2, review r3#1)", () => {
+  const html = renderToStaticMarkup(h(I18nProvider, null, h(HarnessPermissionSettings, { cwd: null, sessionId: null })))
+    .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+  const zone = html.slice(html.indexOf('data-permission-zone="claude"'));
+  assert.ok(html.includes('data-permission-zone="claude"'), "the page renders no Claude zone");
+  const group = zone.match(/<div role="radiogroup" aria-label="[^"]*" class="settings-agent-language-options">([\s\S]*?)<\/div>/)?.[1];
+  assert.ok(group, "the page renders no radio group for claude's modes");
+  const options = [...group.matchAll(/<button[^>]*role="radio"[^>]*>([\s\S]*?)<\/button>/g)].map((match) => match[1]);
+  const lines = options.map((option) => {
+    const stack = option.match(/<span class="settings-name-stack"><span>([^<]*)<\/span><code class="settings-secondary-id">([^<]*)<\/code><\/span>/);
+    return stack ? { name: stack[1], id: stack[2] } : { unstacked: option.replace(/<[^>]+>/g, "") };
+  });
+  assert.deepEqual(lines, [
+    { name: "Default (ask each time)", id: "default" },
+    { name: "Accept edits", id: "acceptEdits" },
+    { name: "Plan mode (read-only)", id: "plan" },
+    { name: "Auto review", id: "auto" },
+    { name: "Don't ask, deny", id: "dontAsk" },
+    { name: "Bypass permissions", id: "bypassPermissions" },
+  ]);
+  // `acceptEdits` appears once in the group, and that once is the id line.
+  assert.equal(group.split("acceptEdits").length - 1, 1, "acceptEdits shows outside its id line");
+  assert.match(group, /<code class="settings-secondary-id">acceptEdits<\/code>/);
 });

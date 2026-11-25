@@ -233,6 +233,10 @@ func (d *Daemon) overrideView(wi string, item *api.WorkItem) (*protocol.Override
 		a := applied[spec.ID]
 		row.Pending = a.Models || a.Tier || a.Skip || a.Params
 		fillEffective(&row, ov, a, sources)
+		row.CanOverrideModels, row.ModelOverrideReason = d.modelOverlayFace(scene, wf, spec.ID)
+		if row.CanOverrideModels { // a step with no next dispatch never claims one (review r1#4)
+			row.ModelEffectScope = modelEffectNextDispatch
+		}
 		out.Steps = append(out.Steps, row)
 	}
 	return out, nil
@@ -311,6 +315,47 @@ func laneProject(item *api.WorkItem, scene *overrideScene) string {
 		return item.ProjectName
 	}
 	return capsuleIdentityOf(scene.capsuleDir).Project
+}
+
+// modelEffectNextDispatch is the models/tier overlay's effect scope
+// (polyforge#270): the step's NEXT dispatch, never the finished round or a
+// live dispatch. It is the one value the view and the write answer carry.
+const modelEffectNextDispatch = "next_dispatch"
+
+// modelOverlayChange reports whether the change is one of the two model
+// aspects a step's next dispatch takes — models/tier set or clear
+// (polyforge#270, Q2 B). A skip or a param is not one: those keep the old
+// step-status rules.
+func modelOverlayChange(req protocol.OverrideWriteRequest) bool {
+	return req.Models != nil || req.ClearModels || req.Tier != "" || req.ClearTier
+}
+
+// modelOverlayFace answers whether a models/tier write on the step is
+// accepted now, and the reason when it is not (polyforge#270). The GET view
+// and the POST answer both read it — one judgement, two projections (Q6 B).
+func (d *Daemon) modelOverlayFace(scene *overrideScene, wf *driver.Workflow, step string) (bool, string) {
+	if wf.FutureDispatchable(step, scene.execOf(), driver.EffectiveSkips(scene.capsuleDir)) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("step %s will not be dispatched again from the work item's current position (no runnable later step can rewind to it): the model overlay is for a step that runs again", step)
+}
+
+// modelOverlayProblem answers the typed refusal a models/tier write takes
+// when the step has no next dispatch (nil = accepted).
+func (d *Daemon) modelOverlayProblem(scene *overrideScene, wf *driver.Workflow, step string) *api.Error {
+	if ok, why := d.modelOverlayFace(scene, wf, step); !ok {
+		return &api.Error{Code: api.ErrDaemonConflict, Detail: why}
+	}
+	return nil
+}
+
+// appendOverrideNote joins the write's note with one more line (a space
+// between two non-empty notes, the new one alone otherwise).
+func appendOverrideNote(note, more string) string {
+	if note == "" {
+		return more
+	}
+	return note + " " + more
 }
 
 // POST /jobs/{wi}/overrides: one change, one action.
@@ -427,11 +472,20 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	status := scene.statusOf(req.Step)
-	// the write's step-status rule, by posture: a live dispatch is
-	// refused; a parked work item's frozen current step accepts a model
-	// chain (the change-before-wake window); done/skipped steps never
-	// accept anything; the skip switch is for steps that never started.
-	if req.Skip == nil && (status == capsule.StepDone || status == capsule.StepSkipped) {
+	// the write's step-status rule, by posture (polyforge#270): the two
+	// model aspects (models/tier set or clear) are accepted on ANY step
+	// the lane can still dispatch again — a done step a later gate can
+	// rewind to and the running step itself included — because they
+	// govern its NEXT dispatch, never the round that already ran or the
+	// dispatch in flight (Q1 B, Q2 B). The skip switch and a param keep
+	// the old step-status rules.
+	modelChange := modelOverlayChange(req)
+	if modelChange {
+		if ae := d.modelOverlayProblem(scene, wf, req.Step); ae != nil {
+			writeErrOf(w, ae)
+			return
+		}
+	} else if req.Skip == nil && (status == capsule.StepDone || status == capsule.StepSkipped) {
 		writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s already ran (its status is %s): the overlay is for steps that have not started", req.Step, status))
 		return
 	}
@@ -475,8 +529,8 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	} else if status == capsule.StepInProgress && scene.live && scene.posture == runtime.OverridePostureRunning {
-		writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has a live dispatch (its status is %s): the overlay is for steps without one — set it while the work item is parked, or on another step", req.Step, status))
+	} else if !modelChange && status == capsule.StepInProgress && scene.live && scene.posture == runtime.OverridePostureRunning {
+		writeErr(w, api.ErrDaemonConflict, fmt.Sprintf("step %s has a live dispatch (its status is %s): only a model chain or a tier is recorded for its next dispatch — the skip switch and a param need a step that has not started, or a parked work item", req.Step, status))
 		return
 	}
 	// the chain's shape, and the pi models' membership in the Cell's
@@ -516,6 +570,19 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	if out.Entry != nil {
 		fillRow(&row, out.Entry)
 	}
+	row.CanOverrideModels, row.ModelOverrideReason = d.modelOverlayFace(scene, wf, req.Step)
+	if row.CanOverrideModels { // a step with no next dispatch never claims one (review r1#4)
+		row.ModelEffectScope = modelEffectNextDispatch
+	}
+	note := out.Note
+	if out.Changed && modelChange {
+		switch status {
+		case capsule.StepDone:
+			note = appendOverrideNote(note, "the change applies on the step's next dispatch; the round that already ran is unchanged")
+		case capsule.StepInProgress:
+			note = appendOverrideNote(note, "the change applies on the step's next dispatch; the live dispatch is not interrupted")
+		}
+	}
 	if out.Changed && out.Posture == runtime.OverridePostureBlocked {
 		row.Pending = true
 	}
@@ -535,7 +602,7 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, protocol.OverrideWriteResult{
 		WorkItem: wi, Changed: out.Changed, Posture: out.Posture, Published: out.Published,
-		Note: out.Note, Step: row,
+		Note: note, Step: row,
 	})
 }
 

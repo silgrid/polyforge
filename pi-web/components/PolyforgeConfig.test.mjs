@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
+import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const fixture = (name) => fileURLToPath(new URL(`../hooks/__fixtures__/${name}`, import.meta.url));
@@ -70,25 +71,16 @@ test("the re-detect control bypasses the 60s presence cache with ?force=1", () =
   assert.match(source, /disabled=\{!detect\}/, "re-detect waits for a first detection");
 });
 
-test("the toggle writes only through the existing /api/plugins global path", () => {
-  assert.match(
-    source,
-    /fetch\("\/api\/plugins", \{\s*\n\s*method: "POST",\s*\n\s*headers: \{ "Content-Type": "application\/json" \},\s*\n\s*body: JSON\.stringify\(\{ action: enabled \? "enable" : "disable", source: sourceState\.source, scope: "global", cwd \}\),/,
-    "the exact PluginsConfig package-switch call shape",
-  );
-  // The package switch is one POST; the configuration panel adds its own
-  // write/reload/rollback POSTs.
-  assert.ok((source.match(/method: "POST"/g) ?? []).length >= 1, "the package switch POST exists");
-  // Auto re-detect after the write settles (non-force).
-  assert.match(source, /await runDetect\(false\)/, "detection re-runs automatically after the toggle");
-  // The source is resolved from the listing join, never from the detect
-  // response (which carries no paths).
-  assert.match(
-    source,
-    /pkg\.scope === "global" && pkg\.packageName === "polyforge"/,
-    "the source joins the listing on scope + packageName",
-  );
-  assert.match(source, /\/api\/plugins\?cwd=\$\{encodeURIComponent\(cwd\)\}/, "the listing is the existing GET /api/plugins");
+test("the package card never writes; the Plugins page is the one write path", () => {
+  // polyforge#271 AC2/B2: the enable/disable POST and its toggle are gone from
+  // this page; the card reads the package facts and links to the Plugins page.
+  assert.doesNotMatch(source, /fetch\("\/api\/plugins", \{\s*\n\s*method: "POST"/, "no package enable/disable POST remains");
+  assert.doesNotMatch(source, /togglePackage/, "the old toggle write path is gone");
+  // The card reads detection alone: no package listing read, no source join.
+  assert.doesNotMatch(source, /\/api\/plugins\?cwd=/, "the card must not wait on a package listing read");
+  assert.doesNotMatch(source, /packageName === "polyforge"/, "the removed source join is gone");
+  assert.match(source, /<PackageStatusCard status=\{packageStatus\} cwd=\{cwd\} onManage=\{onOpenPlugins\} \/>/, "the read-only card takes the injected navigation");
+  assert.match(source, /const packageStatus: PackageStatus = !detect/, "the status comes from detection");
 });
 
 test("no other write exists: no cli.toml, no Claude config, no install execution of its own", () => {
@@ -106,26 +98,8 @@ test("no other write exists: no cli.toml, no Claude config, no install execution
   assert.match(source, /navigator\.clipboard\.writeText\(installCommand\)/);
 });
 
-test("the pi package switch renders only when the skill is installed; disabled reasons are visible text", () => {
-  // The switch block is gated on piSkillInstalled (未安装 shows no toggle).
-  assert.match(source, /\{detect\?\.piSkillInstalled && \(\s*\n\s*<ConfigSwitch/);
-  // Disabled = no project or no resolved source, with the reason as visible
-  // text under the switch's line (describedBy), never only a tooltip.
-  assert.match(source, /disabled=\{!cwd \|\| !sourceState\.source\}/);
-  assert.match(source, /describedBy=\{switchReason \? switchReasonId : undefined\}/);
-  assert.match(source, /<span id=\{switchReasonId\} className="config-scope-switch-reason">/, "the reason renders as visible text");
-  const reasons = [
-    "polyforge.settings.switchNeedsProject",
-    "polyforge.settings.switchResolving",
-    "polyforge.settings.switchNoPackage",
-  ];
-  for (const key of reasons) {
-    assert.match(source, new RegExp(`t\\("${key.replace(/\./g, "\\.")}"\\)`), `the section carries ${key}`);
-  }
-});
-
 test("the section reuses the shared SettingsUi blocks and every word is a prop", () => {
-  for (const block of ["ConfigButton", "ConfigDetailGrid", "ConfigDetailGridRow", "ConfigDetailStack", "ConfigFooter", "ConfigFooterStatus", "ConfigSectionTitle", "ConfigSwitch"]) {
+  for (const block of ["ConfigButton", "ConfigDetailGrid", "ConfigDetailGridRow", "ConfigDetailStack", "ConfigFooter", "ConfigFooterStatus", "ConfigSectionTitle"]) {
     assert.match(source, new RegExp(`<${block}[\\s>]`), `the section renders through ${block}`);
   }
   // The section label reuses the existing polyforge.title key (no new label).
@@ -140,7 +114,7 @@ test("the panel hosts the section without a project and re-detects on every open
   const { settingsSectionRequiresProject, SETTINGS_TABS } = await import("../lib/settings-navigation.ts");
   assert.equal(SETTINGS_TABS.find((entry) => entry.id === "polyforge")?.labelKey, "polyforge.title");
   assert.equal(settingsSectionRequiresProject("polyforge"), false);
-  assert.match(panelSource, /<PolyforgeConfig cwd=\{cwd\} active=\{section === "polyforge"\} \/>/);
+  assert.match(panelSource, /<PolyforgeConfig cwd=\{cwd\} active=\{section === "polyforge"\} onOpenPlugins=\{\(\) => activateSection\("plugins"\)\} \/>/);
   // Not cwd-gated: the section host renders without a selected project.
   const hostLine = panelSource.slice(panelSource.indexOf('sectionHost("polyforge"'));
   assert.doesNotMatch(hostLine.split("\n")[0], /cwd &&/, "the polyforge section host is not project-gated");
@@ -232,7 +206,7 @@ test("visible reasons: capability floor and an incomplete workflow read are text
   assert.doesNotMatch(source, /config\.mapped|configUnmapped/);
   // the step facts moved to the workflow card, whose failed or
   // daemon-less read is a visible alert line (the old steps_complete note's role).
-  assert.match(source, /\{readError && <p role="alert" className="config-add-source-error">\{readError\}<\/p>\}/);
+  assert.match(source, /<FailureNotice failure=\{readError\} t=\{t\} \/>/);
   assert.match(source, /polyforge\.settings\.configMachineScope/);
 });
 
@@ -249,7 +223,9 @@ test("one cli.toml card holds the top-level, [daemon] and [summarize] zones, eac
   assert.match(source, /flat: "",\s*\n\s*daemon: " \[daemon\]",\s*\n\s*model: " \[model\]",\s*\n\s*summarize: " \[summarize\]",/);
   assert.match(source, /<p className="polyforge-config-zone-title">\{`\$\{file\}\$\{ZONE_SECTION\[zone\.id\]\}`\}<\/p>/);
   assert.match(source, /const file = polyforgeCellFileName\(profile\);/, "the file is the Cell's own (cli.toml / cli-<profile>.toml)");
-  assert.match(source, /<div key=\{zone\.id\} className=\{`polyforge-config-zone is-\$\{zone\.id\}`\}>/);
+  // polyforge#257 r1#2: the zone id is a data attribute, not a class with no
+  // rule — every className a settings component renders must resolve.
+  assert.match(source, /<div key=\{zone\.id\} className="polyforge-config-zone" data-zone=\{zone\.id\}>/);
   // One card: one section opens before the zone loop, the loop lives inside it.
   const cli = source.slice(source.indexOf('className="polyforge-config-card polyforge-config-cli"'), source.indexOf("the connection-key confirmation renders"));
   assert.ok(cli.length > 0, "the cli.toml card exists");
@@ -555,7 +531,7 @@ test("the confirmed page order and the default-collapsed read-outs", async () =>
     [hostPane, [
       "polyforge-config-card polyforge-config-status",
       "data-pf-host-region",
-      "polyforge-config-card polyforge-config-package",
+      "<PackageStatusCard",
       "polyforge-config-card polyforge-config-cards",
       "aria-label={t(\"polyforge.settings.configHistory\")}",
       "polyforge-config-card polyforge-config-install",
@@ -621,9 +597,9 @@ test("per-key results render under their own row; the footer keeps page-level st
   assert.match(source, /setInstallMessage\(t\("polyforge\.settings\.installCopied"\)\)/);
   assert.doesNotMatch(source, /setActionMessage\(t\("polyforge\.settings\.installCopied"\)\)/);
   // The footer's summary is the page-level status.
-  assert.match(source, /summary=\{actionError \?\? actionMessage \?\? \(detect \? t\("polyforge\.settings\.detected"\) : t\("polyforge\.loading"\)\)\}/);
+  assert.match(source, /summary=\{actionError\?\.text \?\? actionMessage \?\? \(detect \? t\("polyforge\.settings\.detected"\) : t\("polyforge\.loading"\)\)\}/);
   // Element budget: still exactly one switch; numeric inputs only via the two preference rows plus pf's own int keys.
-  assert.equal((source.match(/<ConfigSwitch\b/g) ?? []).length, 1, "exactly one role=switch");
+  assert.equal((source.match(/<ConfigSwitch\b/g) ?? []).length, 0, "the package switch is gone; the page has no role=switch");
   const css = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
   assert.match(css, /\.polyforge-config-row-feedback \{[^}]*grid-column: 1 \/ -1;/, "the result spans the row");
 });
@@ -656,7 +632,7 @@ test("the workflow card reads its own route afresh per click with the #204 refre
   // A failed read keeps the last good list: it never clears `read`.
   assert.doesNotMatch(workflowCard, /setRead\(null\)/);
   assert.match(workflowCard, /if \(!good\) \{\s*\n\s*\/\/ Keep the list on screen; the error sits above it\.\s*\n\s*setReadError\(/);
-  assert.match(workflowCard, /\{readError && <p role="alert" className="config-add-source-error">\{readError\}<\/p>\}/);
+  assert.match(workflowCard, /<FailureNotice failure=\{readError\} t=\{t\} \/>/);
   // The 26px ↻: disabled, aria-busy and spinning while the newest read is in flight; the existing keys.
   assert.match(workflowCard, /className=\{`polyforge-workflow-refresh\$\{refreshing \? " animate-spin" : ""\}`\}/);
   assert.match(workflowCard, /disabled=\{refreshing\}\s*\n\s*aria-busy=\{refreshing\}/);
@@ -780,7 +756,7 @@ test("the machine-scope hint has its own class and title; .config-scope-switch-r
   // the workflow submit note leaves for its own class, so 7 remain.
   // adds two: a Cell's no-workspace reason (the default Cell's head, a named Cell's workspace card).
   // those two become one (every Cell's 工作区 card) and the file card's api_key set state joins.
-  assert.ok((source.match(/className="config-scope-switch-reason"/g) ?? []).length === 9, "the shared class keeps its other call sites (owner-intended)");
+  assert.ok((source.match(/className="config-scope-switch-reason"/g) ?? []).length === 10, "the shared class keeps its other call sites plus the package card's no-cwd reason (owner-intended)");
   const css = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
   assert.match(css, /\n\.config-scope-switch-reason \{\n  max-width: 320px;\n  color: var\(--text-dim\);\n  font-size: 11px;\n  line-height: 1\.4;\n\}/, "the shared rule is untouched");
   assert.match(css, /\n\.config-machine-scope-hint \{\n  min-width: 0;\n  color: var\(--text-dim\);\n  font-size: 11px;\n  line-height: 1\.4;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n\}/, "desktop: one ellipsised line");
@@ -921,7 +897,11 @@ test("the Cell lifecycle reads /api/polyforge/cells, gates on the capability, ke
   assert.match(add, /setDraft\(\(current\) => \(\{ \.\.\.current, apiKey: "" \}\)\)/, "the key is cleared on every submit");
   assert.match(source, /<AddCellPane\s*\n\s*read=\{cellsRead !== null\}\s*\n\s*supported=\{cellsSupported\}/, "the pane gets the capability gate");
   assert.match(source, /\{cell && cellsSupported && \(\s*\n\s*<ConfigDetailActions>/, "repair/remove only with the capabilities");
-  assert.match(source, /profile !== POLYFORGE_DEFAULT_PROFILE && \(confirmRemove === profile \?/, "remove needs a confirmation and never offers default");
+  // polyforge#259 T4 AC1: the Cell's removal is the shared ⋯ menu, which asks
+  // once before it writes and never offers the default Cell. Asserted where it
+  // renders — e2e/w364-cell-master-detail.mjs M3 (the trigger is visible on the
+  // Cell's pane and no bare Remove button is) — not as a regex over this file's
+  // source (review #5).
   assert.doesNotMatch(source, /cells\/[^"`]*cleanup|"cleanup"/, "no permanent-cleanup control on the page");
 });
 
@@ -938,7 +918,8 @@ test("the page is layered — a Host region of Host-only keys, each Cell's file 
   assert.match(region, /HOST_SCALAR_KEYS\.map\(\(key\) => \(/, "the scalar Host keys keep the one-line row");
   assert.match(region, /HOST_LIST_KEYS\.map\(\(key\) => \(/, "the pattern lists render their own editor");
   assert.match(region, /data-pf-pattern-list=\{key\}/, "the list editor is addressable");
-  assert.match(region, /split\("\\n"\)/, "the list is edited one pattern per line");
+  // polyforge#277: the line split lives in lib/host-pattern-lines.ts (its own unit test).
+  assert.match(region, /patternLines\(/, "the list is edited one pattern per line");
   assert.match(source, /polyforge\.settings\.hostPatternsHint/, "the list editor carries its hint");
   assert.doesNotMatch(source, /ScopedSettingsRegion|CELL_REGION_KEYS|regionEditableKeys/, "no Cell region is left");
   // a Cell's api_key: write-only in its file card — a password input, its set state, never its value
@@ -1007,7 +988,7 @@ test("the page is master-detail — a Host entry, every Cell with its state, Add
   const cellPanes = source.slice(source.indexOf("const renderCellHead = (profile: string) =>"), source.indexOf("const renderHostPane = () =>"))
     + source.slice(source.indexOf("const renderCellPane = (profile: string) =>"), source.indexOf("// A pane mounts on its first selection"))
     + source.slice(source.indexOf("function CellSettings("), source.indexOf("function HostSettingsRegion("));
-  for (const marker of ["polyforge-config-status", "data-pf-host-region", "polyforge-config-package", "polyforge-config-cards", "polyforge.settings.configHistory", "polyforge-config-install"]) {
+  for (const marker of ["polyforge-config-status", "data-pf-host-region", "<PackageStatusCard", "polyforge-config-cards", "polyforge.settings.configHistory", "polyforge-config-install"]) {
     assert.ok(hostPane.includes(marker), `${marker} lives in the Host pane`);
     assert.ok(!cellPanes.includes(marker), `${marker} never renders in a Cell pane`);
   }
@@ -1080,6 +1061,13 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
   const jiti = createJiti(import.meta.url, {
     jsx: { runtime: "automatic" },
     alias: {
+      // build finding u12#3: the page's new dirty model import (tsconfig's `@/`
+      // alias, which would otherwise pull the real i18n provider in here).
+      "@/lib/settings-dirty": modulePath("lib/settings-dirty.ts"),
+      // build finding u14#1: the page's error splitter, through the package alias.
+      "@/lib/server-error": modulePath("lib/server-error.ts"),
+      // polyforge#277: the Host pattern lists' written lines, one pure module.
+      "@/lib/host-pattern-lines": modulePath("lib/host-pattern-lines.ts"),
       react: fixture("react-hook-shim.mjs"),
       "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
       "@/hooks/useI18n": fixture("polyforge-tasks-stubs.mjs"),
@@ -1097,6 +1085,10 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
       "@/hooks/usePolyforgeDisclosure": modulePath("hooks/usePolyforgeDisclosure.ts"),
       "@/lib/polyforge-disclosure": modulePath("lib/polyforge-disclosure.ts"),
       "@/lib/polyforge-install-pure": modulePath("lib/polyforge-install-pure.ts"),
+      // polyforge#256: the install card's browser-safe version comparator is a
+      // new edge of PolyforgeConfig.tsx's graph; the controlled alias table
+      // needs its entry or the picker test dies with MODULE_NOT_FOUND.
+      "@/lib/polyforge-version": modulePath("lib/polyforge-version.ts"),
       // polyforge#177's install card's sibling: PolyforgeConfig.tsx imports
       // ./ComponentsUpdateCard, which imports this client. The alias table is
       // controlled (main #151), so the new edge needs its entry here or the
@@ -1173,4 +1165,85 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// polyforge#259 T4 AC2 (owner 2A, review r3#1): a config row's write refused
+// with `{error, code: "config-cas-409"}` reads, on a Chinese page, as the
+// conflict line — chosen by the route's code — and the server's English (with
+// its diff) sits only inside the 详情 fold. Expected lines are hand-copied from
+// lib/i18n/messages/zh-CN.ts (serverError.conflict / serverError.forbidden /
+// i18n.detailsLabel), never from the page's own output.
+async function feedbackSsr() {
+  // The step-tier test above loads the page against the hook shim; drop that
+  // build from the shared module cache so react-dom/server gets the real one
+  // (lib/server-error.ts stays shared, so the page and the test read one
+  // ServerError class).
+  delete createRequire(import.meta.url).cache[modulePath("components/PolyforgeConfig.tsx")];
+  const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+  const React = await jiti.import("react");
+  const { renderToStaticMarkup } = await jiti.import("react-dom/server");
+  const { RowFeedbackLine, failureLine } = await jiti.import("./PolyforgeConfig.tsx");
+  const { responseError } = await jiti.import("../lib/server-error.ts");
+  const { zhCNLocale } = await jiti.import("../lib/i18n/messages/zh-CN.ts");
+  const { translateMessage } = await jiti.import("../lib/i18n/format.ts");
+  const t = (key, params) => translateMessage("zh-CN", key, { "zh-CN": zhCNLocale.messages }, params);
+  const render = (line) => {
+    const html = renderToStaticMarkup(React.createElement(RowFeedbackLine, {
+      feedback: { tone: "error", message: line.text, ...(line.details ? { details: line.details } : {}) },
+      detailsLabel: t("i18n.detailsLabel"),
+    }));
+    const fold = /<details[^>]*>([\s\S]*?)<\/details>/.exec(html);
+    const outside = html.replace(/<details[^>]*>[\s\S]*?<\/details>/g, "").replace(/<[^>]+>/g, "");
+    return { html, fold: fold ? fold[1].replace(/<[^>]+>/g, "") : null, outside };
+  };
+  return { failureLine, responseError, t, render };
+}
+
+test("a row's refused write reads as the conflict line in Chinese, and the raw words sit inside the details fold", async () => {
+  const { failureLine, responseError, t, render } = await feedbackSsr();
+  const line = failureLine(t, responseError({ error: "config changed since it was read", code: "config-cas-409", diff: { "daemon.port": [1, 2] } }, 409));
+  const { fold, outside } = render(line);
+  assert.ok(fold !== null && fold.includes("config changed since it was read"), "the raw words sit inside the details fold");
+  assert.ok(fold.startsWith("详情"), "the fold is not labelled 详情");
+  assert.ok(fold.includes("daemon.port"), "the CAS diff was dropped from the fold");
+  assert.equal(outside, "目标在此期间被别的写入改过，请重新读取后再试。", "the main line is not the conflict line");
+  assert.ok(!outside.includes("config changed"), "the server's English is the main line");
+});
+
+test("a row's refused write with no body reads as the forbidden line in Chinese", async () => {
+  const { failureLine, responseError, t, render } = await feedbackSsr();
+  const { fold, outside } = render(failureLine(t, responseError(null, 403)));
+  assert.equal(outside, "服务端拒绝了这次改动，原文在「详情」里。");
+  assert.ok(fold !== null && fold.includes("HTTP 403"), "the status line is not kept for the fold");
+});
+
+// polyforge#271 AC2 (B2, Q4 A): the package card is read-only and links to the
+// Plugins page; it never issues an /api/plugins write. Without a cwd the link
+// is disabled with a readable reason, and a failed detection is its own status,
+// never a fake "not installed".
+test("package status never writes and management navigates", async () => {
+  const ssr = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+  const React = await ssr.import("react");
+  const { PackageStatusCard } = await ssr.import("./PolyforgeConfig.tsx");
+  const { renderToStaticMarkup } = await ssr.import("react-dom/server");
+  const { I18nProvider } = await ssr.import("@/hooks/useI18n");
+  const h = React.createElement;
+  const render = (props) => renderToStaticMarkup(h(I18nProvider, null, h(PackageStatusCard, {
+    onManage: () => {}, cwd: "/tmp/project", ...props,
+  })));
+  for (const [status, text] of [["enabled", "installed · enabled"], ["disabled", "installed · disabled"], ["missing", "not installed"]]) {
+    const html = render({ status });
+    assert.ok(html.includes(text), `${status} is shown as its own fact`);
+    assert.ok(!html.includes('role="switch"'), "the card offers no package switch");
+    assert.match(html, /data-package-manage=""/, "the card links to the Plugins page");
+    assert.ok(html.includes("Manage on the Plugins page"));
+  }
+  const noCwd = render({ status: "enabled", cwd: null });
+  assert.match(noCwd, /data-package-manage=""[^>]*disabled/);
+  assert.ok(noCwd.includes("Choose a project folder before you manage plugins."));
+
+  const failed = render({ status: "unknown" });
+  assert.ok(failed.includes("Status unavailable"), "a failed detection is not 'not installed'");
+  assert.ok(!failed.includes("not installed"));
+  assert.ok(render({ status: "unknown" }).includes("settings.packageUnknownHint") === false, "the hint is localized text, not a key");
 });

@@ -269,3 +269,105 @@ test("Models keeps credential login on Account while allowing native provider de
 // r1#5) — the managed provider's detail is the shared EnabledModelsSection,
 // pinned by e2e/harness-settings-85.mjs S11 at its new position.
 
+
+// polyforge#259 T4 AC1 (owner 1A, review r3#2): deleting a provider and removing
+// a model sit behind their detail header's ⋯ menu; neither header has a bare
+// Delete / Remove button.
+const tsxJiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+const React = await tsxJiti.import("react");
+const { renderToStaticMarkup } = await tsxJiti.import("react-dom/server");
+const { I18nProvider } = await tsxJiti.import("@/hooks/useI18n");
+const { ProviderDetail, ModelDetail, ModelsConfig } = await tsxJiti.import("./ModelsConfig.tsx");
+
+function renderDetail(component, props) {
+  return renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(component, props)));
+}
+
+function headerActions(html) {
+  const actions = html.match(/<div class="config-detail-actions">([\s\S]*?)<\/div>/)?.[1];
+  assert.ok(actions, "the detail header renders its actions");
+  return actions;
+}
+
+test("a provider's deletion is behind the detail header's ⋯, with no bare Delete button (review r3#2)", () => {
+  const html = renderDetail(ProviderDetail, {
+    name: "my-provider",
+    editingName: "my-provider",
+    provider: { baseUrl: "https://llm.example.test/v1", api: "openai-completions", models: [] },
+    onChange: () => {},
+    onEditingNameChange: () => {},
+    onRename: () => {},
+    onDelete: () => {},
+    onAddModels: () => {},
+    enabledModels: {},
+    contextOnly: true,
+  });
+  assert.match(headerActions(html), /<button[^>]*class="config-danger-menu-trigger"[^>]*aria-label="More actions"/);
+  assert.doesNotMatch(html, /<button[^>]*>\s*Delete\s*<\/button>/);
+  assert.doesNotMatch(html, /config-button-danger/);
+});
+
+test("a model's removal is behind the detail header's ⋯, with no bare Remove button (review r3#2)", () => {
+  const html = renderDetail(ModelDetail, {
+    providerName: "my-provider",
+    provider: { baseUrl: "https://llm.example.test/v1", api: "openai-completions" },
+    model: { id: "my-model" },
+    onChange: () => {},
+    onDelete: () => {},
+  });
+  assert.match(headerActions(html), /<button[^>]*class="config-danger-menu-trigger"[^>]*aria-label="More actions"/);
+  assert.doesNotMatch(html, /<button[^>]*>\s*Remove\s*<\/button>/);
+  assert.doesNotMatch(html, /config-button-danger/);
+});
+
+// polyforge#271 AC1 (A4): the Providers subpage's first read is a skeleton; a
+// successful `{providers:{}}` is 「没有 Provider」 with the add action; a failed
+// read is an alert with a retry, never the empty state.
+test("editor read states preserve drafts", () => {
+  const loading = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ModelsConfig, {
+    embedded: true, cwd: null, onClose: () => {},
+    enabledModels: { view: { editable: true, providers: [] }, pending: null, failure: null, setModels: () => {}, setProvider: () => {} },
+  })));
+  assert.match(loading, /data-models-config-loading/, "the first models.json read is a skeleton");
+  assert.ok(!loading.includes("No provider is configured"), "a pending read is not the empty state");
+});
+
+// polyforge#271 round 2 (review r2#5): the Providers subpage's three states
+// render as shared blocks: skeleton, 「没有 Provider」 with Add, and an alert
+// with a retry that calls the page's reload.
+test("providers read states render skeleton empty and retry", async () => {
+  const { ProvidersReadStates } = await tsxJiti.import("./ModelsConfig.tsx");
+  const t = (key) => key;
+  let retries = 0;
+  const walk = (node, out = []) => {
+    if (Array.isArray(node)) { for (const child of node) walk(child, out); return out; }
+    if (!node || typeof node !== "object" || !("props" in node)) return out;
+    if (typeof node.type === "function") return walk(node.type(node.props), out);
+    out.push(node);
+    walk(node.props.children, out);
+    return out;
+  };
+  const loading = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ProvidersReadStates, {
+    loading: true, loadError: null, providerCount: 0, t, onRetry: () => {}, onAdd: () => {},
+  })));
+  assert.match(loading, /data-models-config-loading/);
+  assert.ok(!loading.includes("models.configNoProviders"), "a pending read is not the empty state");
+
+  const empty = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ProvidersReadStates, {
+    loading: false, loadError: null, providerCount: 0, t, onRetry: () => {}, onAdd: () => {},
+  })));
+  assert.match(empty, /data-models-config-add=""/);
+  assert.ok(empty.includes("models.configNoProviders"));
+
+  const failedTree = ProvidersReadStates({ loading: false, loadError: "boom", providerCount: 0, t, onRetry: () => { retries += 1; }, onAdd: () => {} });
+  const failed = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ProvidersReadStates, {
+    loading: false, loadError: "boom", providerCount: 0, t, onRetry: () => { retries += 1; }, onAdd: () => {},
+  })));
+  assert.match(failed, /role="alert"/);
+  assert.match(failed, /data-models-config-retry=""/);
+  assert.ok(!failed.includes("models.configNoProviders"), "a failed read is not the empty state");
+  const retry = walk(failedTree).find((node) => node.props?.["data-models-config-retry"] !== undefined);
+  assert.ok(retry, "the retry control is rendered");
+  retry.props.onClick();
+  assert.equal(retries, 1, "the retry control did not call the reload");
+});

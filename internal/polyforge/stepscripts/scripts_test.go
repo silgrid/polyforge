@@ -203,7 +203,13 @@ func orEmpty(xs []api.WorkItem) []api.WorkItem {
 // fakeDocker is a docker client whose "containers" run every command here
 // on the host — in the same directory, under the image's PATH and the
 // environment the call adds — each call logged (FAKE_DOCKER_LOG beside
-// it); FAKE_DOCKER_DOWN beside it makes the engine unavailable.
+// it); FAKE_DOCKER_DOWN beside it makes the engine unavailable. A
+// container's /tmp is its own directory under the fake's root, one
+// namespace per container id (map_tmp): a container path is never a real
+// host path, so the command writes under the fake and the reap removes
+// only the fake container's copy — the outer run's TMPDIR, whose Go
+// $WORK a container command would otherwise delete, stays as it was
+// (polyforge#263).
 const fakeDocker = `#!/usr/bin/env python3
 import json, os, shutil, subprocess, sys
 here = os.path.dirname(os.path.abspath(__file__))
@@ -241,17 +247,24 @@ if cmd == "exec":
             k, _, v = args[i + 1].partition("=")
             env[k] = v
         i += 2
+    cid = args[i]
+    def map_tmp(p):
+        # a container /tmp path -> this fake container's own directory
+        if p == "/tmp" or p.startswith("/tmp/"):
+            return os.path.join(here, "tmp", cid, p[len("/tmp"):].lstrip("/"))
+        return p
     argv = args[i + 1:]
     if workdir is None and argv[:2] == ["sh", "-c"]:
         script = argv[2]
         if "kill -9" in script:
             for p in argv[4:]:
-                shutil.rmtree(p, ignore_errors=True)
+                shutil.rmtree(map_tmp(p), ignore_errors=True)
             sys.exit(0)
         if "keepalive" in script:
             sys.exit(0)
     full = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/")}
-    full.update(env)
+    for k, v in env.items():
+        full[k] = map_tmp(v) if k == "TMPDIR" else v
     sys.exit(subprocess.run(argv, cwd=workdir, env=full).returncode)
 if cmd in ("rm", "ps", "volume"):
     sys.exit(0)

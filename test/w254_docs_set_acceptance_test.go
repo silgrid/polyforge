@@ -48,6 +48,7 @@ var w254Pages = []string{
 	"docs/install.md",
 	"docs/quickstart-developers.md",
 	"docs/quickstart-macos.md",
+	"docs/getting-started.md",
 	"docs/extending.md",
 	"docs/bundles.md",
 	"docs/architecture.md",
@@ -69,6 +70,7 @@ var w254Pages = []string{
 // catches a stray insert).
 var w254PureEnglishPages = []string{
 	"docs/workstation.md",
+	"docs/getting-started.md",
 }
 
 // w254CJKRe matches any CJK codepoint: the CJK blocks (radicals
@@ -503,7 +505,9 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.4 section appended with the first boot: identity, config and the persistent volumes (polyforge#176: six independent volumes — pf-home owning /root whole with the data dir nested inside it, the components volume, the AIHub store, /workspace beside the existing polyforge-data and podman-storage; the aihub boot becomes the default (workstation, profile aihub) with workstation-noaihub the explicit opt-out; pf first-boot runs before supervise and installs the seed, establishes the daily identity in-process through the new pf aihub init entry (no listener, refused in step/task env and beside a live server — a fresh store never gets the server's bootstrap admin), writes cli.toml's default Cell (container_engine podman, the /workspace mapping), merges the harness references toward /components/current and publishes the phase record <data-dir>/workstation/first-boot.json, never a credential; a completed boot skips, an interrupted one resumes without duplicating the user and with the in-progress record — not the environment — as the authority for the choice (owner ruling of 2026-11-20 on review r1#1), done-without-cell or cell-without-record refuses to start; the external mode takes WORKSTATION_AIHUB_SERVER/KEY/PROJECT from the environment and creates nothing remote; smoke first-boot [--external] asserts the whole half with a counting stub, allowing only POST /api/v1/machines/heartbeat and rejecting creation or unknown requests)
 // - v0.2.4 容器内组件更新（polyforge#190：版本卷、排空、状态重连、退出码 75 与回退边界）
 // - the v0.2.4 section appended with the workstation release image (polyforge#86: buildx builds linux/amd64 and linux/arm64 before the claim and pushes after it, workstation-image.digest joins SHA256SUMS and the manifest, --verify checks the index digest, both platforms and the public channel's anonymous read, resume and the fresh-refusal cover both images, the preflight demands buildx and arm64 binfmt, a suffixed line must set RELEASE_WORKSTATION_IMAGE, and the image exports the host-side files from /opt/polyforge/host-files)
+// - the v0.2.4 section appended with the mechanical facts gate (polyforge#241: develop's build declares facts_proof — facts.py handoff summarises build --replay, plan-conformance, carries, analysis and the deterministic test_weakened markers into one pf-step-result/1 at the declared path, any deterministic hit refuses done and is returned hit by hit (an existing test changed outside the plan's write set included), an unjudged sub-item is not_judged while carries keeps exit 2 no pass; review recomputes the same facts — a gate-covered mechanical hit alone is non-blocking and recorded as the gate should have refused it, and a bypassed or forged gate is blocking guarantee; documented in the workflow reference, bundles, concepts, commands and the develop README)
 // - the v0.2.4 section appended with review-firstpass blocking findings and the suspected false-positive rate (polyforge#242: --events reads every artifacts/review.md version from the capsule's git history — the stamped hand-off sections when no history is readable, never both — extracts each blocker, chains it by the `r<n>#<k>` reference and the owner's asks.jsonl rulings, and reports the outcome, the rate by class and by model with the unknown reasons counted apart; with --csv it writes one row per chain to <csv>.blocking.csv and the existing CSV gains no column; no upgrade action)
+// - the v0.2.4 section appended with the low-star question card's automatic reply (polyforge#239: a card whose every row is ★/★★ is answered by the daemon's reserved `daemon:auto-recommendation` after the Cell's `ask_auto_reply_timeout` (default 30m) with the real elapsed wait, never the threshold; a ★★★ row, an unparsable/missing star, a non-strict or second table, no trustworthy T0, a protected_stop/gate, an unverifiable lane, or a confirm_plan ticket keeps waiting; the automatic line is never a `--per-owner` authorization and the decision feed shows the fixed 「已自动按推荐继续」 entry; two Cell/live keys ask_auto_reply_enabled (unset = on) and ask_auto_reply_timeout, live on reload; no upgrade action beyond the new pf, a pre-change wait without an awaiting record is never auto-answered)
 // - the v0.2.4 section appended with the landing lock's lease base (polyforge#247: AIHub's leases/lease_waiters/repo_aliases tables in the v0.2.4 window, the three signed lease routes and lookup-by-request-id authorized by the machine operator, the ticket project write and current session, the server-clock 300 s lease / 60 s waiter liveness / FIFO order with a SHA-256-only token, the daemon's private request journal (request id / key / cycle, no token), the probe answering apply on a database that already ran the old v0.2.4, an idempotent upgrade and a rollback dropping the lease tables; upgrade the AIHub server first, no lane changes in this unit)
 // - the v0.2.4 section appended with the landing lock's lane interval and before-merge check (polyforge#248: the lane-declared landing_lock: {enter, exit} interval, develop and epic declaring sync..merge, the daemon holding the server landing lease across it and releasing on an exit, a leave, an ask or a lost lease; a lost lease and an ask of a non-gate step re-enter at enter charged to no rewind while a gate's ask resumes the gate (owner 1A); the in-memory mergeLocks deleted, micro/integrate single-dispatch locks and merge.py/revert.py's pf step lock-check on the same server lease; upgrade AIHub first, then the daemon, old capsules drained)
 // upgrade-sections:end
@@ -512,7 +516,7 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "685fc12e131a7e58492230d68a7d7104533a4db9b7ff621d5d15a5aed3f8e7aa" {
+	if got := hex.EncodeToString(sum[:]); got != "ed243f98adf89e9c8a1188220584a32fa31d60cb1067b34259b90d75a309a45a" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

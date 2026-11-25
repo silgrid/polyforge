@@ -144,6 +144,20 @@ type Config struct {
 	MaxStepFailures int
 	// Now overrides the clock (tests).
 	Now func() time.Time
+	// LaneVerifiable, when set, answers whether the workflow's lane is one
+	// this build can verify (the daemon enumerates the shipped lanes): a
+	// lane it refuses keeps every stop human (polyforge#239). nil = the
+	// lane is trusted (tests and an embedded driver).
+	LaneVerifiable func(lane string) bool
+	// AutoAnswerBeforeCommit, when set, runs inside the automatic reply's
+	// serialized section, after its re-read and before its append (tests
+	// start the owner relay in a goroutine there to prove it waits). nil
+	// in production.
+	AutoAnswerBeforeCommit func()
+	// AutoAnswerChecked, when set, runs at every automatic-reply check
+	// (tests wait on it to assert that a due check happened and wrote
+	// nothing). nil in production.
+	AutoAnswerChecked func()
 	// Sleep overrides the driver's waits (the D7 rate-limit backoff);
 	// nil = a real timer cut short by the context. Tests inject a
 	// recorder so the backoff curve is asserted without the wall time.
@@ -224,8 +238,13 @@ type Driver struct {
 	// (capsule.json repos, read once in New).
 	claimRepos []string
 
-	mu     sync.Mutex // serializes every transition (the single write entry)
-	spawnN int64
+	mu sync.Mutex // serializes every transition (the single write entry)
+	// askWriteMu serializes the append-only asks.jsonl read-check-append
+	// pairs the relay and the automatic reply commit (polyforge#239): the
+	// record's own order decides who wrote first, so no reply is lost or
+	// doubled.
+	askWriteMu sync.Mutex
+	spawnN     int64
 	// initialized records that execution.json exists on disk (loaded,
 	// or written by the init transition).
 	initialized bool
@@ -424,6 +443,11 @@ func (d *Driver) Run(ctx context.Context) error {
 			return fmt.Errorf("driver: execution init failed: %w", err)
 		}
 	}
+	// polyforge#239 (owner ruling Q6 A): an automatic reply is the
+	// authority; a restart rebuilds the auto_answered event/feed entry a
+	// crash after the append may have lost. The feed dedupes by question
+	// id, so this never adds a second entry or a second reply.
+	d.replayAutoAnswerAudit()
 	// a question the daemon worded itself before the
 	// upgrade is withdrawn; its step runs again under the new rules
 	// polyforge#79 era: the recovery path's interrupted-dispatch

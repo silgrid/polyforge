@@ -52,6 +52,52 @@ type State struct {
 	// agentLanguageFallback supplies the default Cell's live language for a
 	// named Cell that leaves its own key unset.
 	agentLanguageFallback func() string
+	// askAutoReply is the Cell's automatic-reply switch and timeout for a
+	// low-star question card (polyforge#239; nil / 0 = unset). Live.
+	askAutoReplyEnabled *bool
+	askAutoReplyTimeout time.Duration
+}
+
+// AskAutoReplyEnabled answers the Cell's automatic-reply switch (nil =
+// unset: on).
+func (s *State) AskAutoReplyEnabled() *bool {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.askAutoReplyEnabled
+}
+
+// SetAskAutoReplyEnabled swaps the switch (nil = unset).
+func (s *State) SetAskAutoReplyEnabled(v *bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.askAutoReplyEnabled = v
+	s.mu.Unlock()
+}
+
+// AskAutoReplyTimeout answers the Cell's automatic-reply timeout (0 =
+// unset: the documented default).
+func (s *State) AskAutoReplyTimeout() time.Duration {
+	if s == nil {
+		return 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.askAutoReplyTimeout
+}
+
+// SetAskAutoReplyTimeout swaps the timeout (0 = unset).
+func (s *State) SetAskAutoReplyTimeout(v time.Duration) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.askAutoReplyTimeout = v
+	s.mu.Unlock()
 }
 
 // New builds a state from the startup values. A nil mapping is treated as

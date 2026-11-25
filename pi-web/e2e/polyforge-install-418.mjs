@@ -1,4 +1,4 @@
-// carries: components/PolyforgeInstallCard*, lib/polyforge-install*, app/api/polyforge/install/*, app/api/polyforge/polyforge-install-routes*
+// carries: components/PolyforgeInstallCard*, lib/polyforge-install*, lib/polyforge-version*, app/api/polyforge/install/*, app/api/polyforge/polyforge-install-routes*
 // — Settings › Polyforge: install / update pf from the release
 // channel, end to end in the browser. It NEVER runs a real installer: `gh`
 // and `pf` are stubs first on PATH, and the tools/install.sh the stub `gh`
@@ -27,7 +27,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { chromium } from "playwright";
-import { COLD_MS, NAV_MS } from "./timeouts.mjs";
+import { ACTION_MS, COLD_MS, NAV_MS } from "./timeouts.mjs";
 import { assertNoDevServer, createCheck, createHarness, reportTitled, root, writeFileAtomic, writeHostSession } from "./harness.mjs";
 
 assertNoDevServer();
@@ -140,6 +140,7 @@ const T = {
   E6: "E6 (AC2/AC6): a failing install, and a failed fetch of install.sh, conclude failed with the reason",
   E7: "E7 (AC4): the copyable command installs from the internal channel with PF_INSTALL_REPO",
   E8: "E8 (AC5): the in-route gate refuses a foreign Host; no 5xx or console error on the page",
+  E9: "E9 (AC2/B2): an installed version ahead of the channel hides the update entry; dev.49 < v0.2.4 still offers the update",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -192,7 +193,6 @@ async function openCard(page) {
   await dialog.getByRole("button", { name: "Polyforge", exact: true }).click();
   const card = dialog.locator("[data-pf-install]");
   await card.waitFor({ timeout });
-  await card.locator("[data-pf-install-start]").waitFor({ timeout });
   return { dialog, card };
 }
 const conclusion = (card, state) => card.locator(`[data-pf-install-conclusion="${state}"]`);
@@ -283,7 +283,7 @@ try {
   // The fake holds after its first lines until released, so "the early lines
   // are on the page while the run still runs" never depends on a sleep.
   await check(T.E3, "update", async () => {
-    setState({ script: "hold" });
+    setState({ script: "hold", tag: "v0.2.7" });
     rmSync(releaseFile, { force: true });
     rmSync(recordLog, { force: true });
     const page = await openPage();
@@ -308,7 +308,7 @@ try {
 
   // ---- E4: the run outlives its page; one at a time; reopening shows it ----
   await check(T.E4, "close and reopen", async () => {
-    setState({ script: "hold" });
+    setState({ script: "hold", tag: "v0.2.8" });
     rmSync(releaseFile, { force: true });
     const first = await openPage();
     let card;
@@ -364,7 +364,7 @@ try {
 
   // ---- E5: refused while jobs run; a separately confirmed force ----
   await check(T.E5, "refusal and force", async () => {
-    setState({ script: "refuse", jobs: [{ work_item_id: "wi_e2e7", slug: "demo#7", status: "running" }] });
+    setState({ script: "refuse", tag: "v0.2.9", jobs: [{ work_item_id: "wi_e2e7", slug: "demo#7", status: "running" }] });
     rmSync(recordLog, { force: true });
     const page = await openPage();
     try {
@@ -397,7 +397,7 @@ try {
 
   // ---- E6: failures ----
   await check(T.E6, "failures", async () => {
-    setState({ script: "fail" });
+    setState({ script: "fail", tag: "v0.2.10" });
     const page = await openPage();
     try {
       const { card } = await openCard(page);
@@ -423,6 +423,33 @@ try {
       assert.ok(copied.includes(`https://raw.githubusercontent.com/${CHANNEL}/main/tools/install.sh`), copied);
       assert.ok(copied.includes(`PF_INSTALL_REPO=${CHANNEL} bash -s --`), copied);
       assert.ok(copied.includes("<api-key>"), "the key stays a placeholder");
+    } finally { await page.context().close(); }
+  });
+
+  // ---- E9: ahead of the channel never offers a downgrade ----
+  await check(T.E9, "ahead of channel", async () => {
+    rmSync(recordLog, { force: true });
+    setState({ pfAbsent: false, pf: "v0.2.4-dev.49", daemon: "v0.2.4-dev.49", tag: "v0.2.3", jobs: [], script: "ok", fetchFail: false });
+    const page = await openPage();
+    try {
+      let { dialog: settings, card } = await openCard(page);
+      const ahead = card.locator('[data-pf-install-flag="ahead"]');
+      await ahead.waitFor({ timeout: NAV_MS });
+      assert.match(await ahead.innerText(), /installed prerelease is ahead of the release channel/, "a prerelease ahead says so");
+      assert.equal(await card.locator('[data-pf-install-flag="update"]').count(), 0, "dev.49 > v0.2.3 is never an update");
+      assert.equal(await card.locator("[data-pf-install-start]").count(), 0, "no 「更新 pf」 entry on an ahead machine");
+      assert.equal(await card.locator("[data-pf-install-hint]").count(), 0, "no install.sh line on an ahead machine");
+      // a stable installed version above the channel is worded as a version, never a prerelease
+      setState({ pf: "v0.2.5", daemon: "v0.2.5", tag: "v0.2.4" });
+      await settings.getByRole("button", { name: "Re-detect", exact: true }).click({ timeout: ACTION_MS });
+      await card.locator('[data-pf-install-flag="ahead"]', { hasText: "installed version is ahead" }).waitFor({ timeout: ACTION_MS });
+      assert.equal(await card.locator("[data-pf-install-start]").count(), 0);
+      // below the channel release: the update entry returns
+      setState({ pf: "v0.2.4-dev.49", daemon: "v0.2.4-dev.49", tag: "v0.2.4" });
+      await settings.getByRole("button", { name: "Re-detect", exact: true }).click({ timeout: ACTION_MS });
+      await card.locator('[data-pf-install-flag="update"]').waitFor({ timeout: ACTION_MS });
+      assert.equal((await card.locator("[data-pf-install-start]").innerText()).trim(), "Update pf", "dev.49 < v0.2.4 offers the update");
+      assert.deepEqual(records(), [], "no run started from any of the ahead/current states");
     } finally { await page.context().close(); }
   });
 

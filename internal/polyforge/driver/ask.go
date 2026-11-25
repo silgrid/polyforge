@@ -156,6 +156,7 @@ func (d *Driver) ownerWait(waiting bool) {
 // event finds the slot already released. Called once per dispatch, from
 // the dispatch wait.
 func (d *Driver) markAwaitingOwner(stepID string, n int64, ask *capsule.AskLine) {
+	d.recordAwaitingStart(stepID, n, ask)
 	d.mu.Lock()
 	d.parked = ask
 	d.inputEventFor = ask.At
@@ -210,6 +211,9 @@ func (d *Driver) awaitParkedAsk(ctx context.Context, ask *capsule.AskLine) error
 			d.parked = cur
 			d.mu.Unlock()
 			return nil // plan re-reads the state
+		}
+		if d.autoAnswer(cur) {
+			return nil // the ask is answered: plan re-reads and resumes the step
 		}
 		t := time.NewTimer(d.askPoll())
 		select {

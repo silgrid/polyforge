@@ -76,6 +76,7 @@ var stepKeys = map[string]keySpec{
 	"skippable":        {Type: "bool (default false): a project may switch the step off with `steps.<project>.<step>.skip: true` in its workspace yaml, fixed when the work item is first claimed; a switched-off step is never dispatched (its execution status is skipped), and the wrap_attrs of skipped steps at the lane's end pass to the last step that runs", Schema: jsonSchema{"type": "boolean"}},
 	"rewind_only":      {Type: "bool (default false): the step runs only after a rewind covers it — the first round records it skipped without a dispatch, and it runs once any rewind that covers it (a gate FAIL's or an owner's) resets it to pending; a project skip of a `skippable` it declares wins over it, and the loader refuses the declaration when no gate's [on_fail target, gate) range covers the step (WFC-112)", Schema: jsonSchema{"type": "boolean"}},
 	"human_mergeable":  {Type: "bool (default false): a project may declare the step's work done by a person with `steps.<project>.<step>.by: human` in its workspace yaml, fixed when the work item is first claimed; the step then asks the owner to do its work instead of running it itself, and a claim of a lane that does not declare the step human_mergeable is refused naming it", Schema: jsonSchema{"type": "boolean"}},
+	"protected_stop":   {Type: "bool (default false): the step's `pf step ask` question is a human stop the daemon's automatic reply never answers (polyforge#239) — for an owner-only stop a gate flag cannot express (a hold only the owner's word clears, an owner-ruled revert). A gate is protected without the key; a step of a lane this build cannot verify is protected too", Schema: jsonSchema{"type": "boolean"}},
 	"budget":           {Type: "map {wall_minutes, tool_minutes}", Schema: object(budgetKeys)},
 	"model_candidates": {Type: "[]<harness>:<model>[:<effort>]; exclusive with model_tier", Schema: candidates()},
 	"model_tier":       {Type: "a tier of defaults.tiers; exclusive with model_candidates", Schema: pattern(`\S`)},
@@ -87,6 +88,7 @@ var stepKeys = map[string]keySpec{
 	"hub":              {Type: "map {verbs, attrs} (default none): what the step may call through `pf step hub`", Schema: object(hubKeys)},
 	"wrap_attrs":       {Type: "[]attr name (^[a-z][a-z0-9_]{0,63}$), each at most once (default none): the wrap attrs the step registers (`pf step hub wrap-attrs <name>`) before its round may hand off done; listing one lets the step call wrap-attrs. When the steps at the lane's end are skipped (a skippable step a project switched off), their wrap_attrs are the last running step's to register", Schema: jsonSchema{"type": "array", "items": pattern(wrapAttrName.String()), "uniqueItems": true}},
 	"fast_check_proof": {Type: "map {result, command} (default none): the fast-check proof this step's done needs for each task repo it changed — a `pf-step-result/1` file with verdict pass whose heads carry the repo at its current HEAD; a repo the step did not change and a fast-forward need none", Schema: object(fastCheckProofKeys)},
+	"facts_proof":      {Type: "map {result, command} (default none): the mechanical facts summary this step's done needs for each task repo it changed (polyforge#241) — a `pf-step-result/1` file `facts.py handoff` writes, verdict pass whose heads carry the repo at its current HEAD; a repo the step did not change and a fast-forward need none; its refusal names every hit beside the result file", Schema: object(fastCheckProofKeys)},
 }
 
 // fastCheckProofKeys is the closed key set of `fast_check_proof`: the
@@ -289,6 +291,7 @@ func keySets() []keySet {
 	return []keySet{
 		{"lane", laneKeys}, {"defaults", defaultsKeys}, {"step", stepKeys},
 		{"fast_check_proof", fastCheckProofKeys},
+		{"facts_proof", fastCheckProofKeys},
 		{"on_fail", onFailKeys}, {"resources", resourcesKeys}, {"hub", hubKeys},
 		{"budget", budgetKeys}, {"definition", defKeys}, {"skill", skillKeys},
 	}

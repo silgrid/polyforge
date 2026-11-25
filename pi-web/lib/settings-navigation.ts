@@ -173,3 +173,22 @@ export function setLastSettingsSelection(
     // Browser storage is best-effort.
   }
 }
+
+/**
+ * Whether Settings may leave the section it shows (polyforge#259 T4 AC1): a
+ * section with unsaved changes asks first, and moving away is refused when the
+ * user says so. `confirm` is the browser's dialog — passed in, so the decision
+ * is a pure fact the tests can read.
+ */
+export function mayLeaveSection(
+  unsaved: Readonly<Record<string, boolean>>,
+  current: string,
+  next: string | null,
+  confirm: (question: string) => boolean,
+  question: string,
+): boolean {
+  if (next === current) return true;
+  const dirty = Object.values(unsaved).some(Boolean);
+  if (!dirty) return true;
+  return confirm(question);
+}

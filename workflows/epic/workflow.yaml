@@ -63,12 +63,14 @@ steps:
     # the step's `image` parameter, the same as develop's
     params: { image: "" }
   - id: publish
+    protected_stop: true
     gate: true
     on_fail: { target: build }
     skill: publish
     model_tier: cheap
     budget: { wall_minutes: 15 }
   - id: merge
+    protected_stop: true
     gate: true
     skippable: true
     human_mergeable: true

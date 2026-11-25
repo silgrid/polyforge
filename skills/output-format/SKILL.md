@@ -158,13 +158,16 @@ already requires.
 - Header exactly `| 问题 | 推荐选项 | 理由 | 重点关注程度 |`, one row per focused
   question, numbered in the 问题 cell, no fifth column. 重点关注程度 is last and
   every row marks it (`每行必标`) on the `★~★★★★★` scale: ★ = 例行确认,
-  ★★★★★ = 方向性裁定 / 大影响 / 与既有裁定冲突, ★★–★★★★ scale with impact; owner
-  attention only, never consumed.
+  ★★★★★ = 方向性裁定 / 大影响 / 与既有裁定冲突, ★★–★★★★ scale with impact. The
+  stars are read mechanically: an all-★/★★ card may be auto-answered after the
+  Cell's timeout, so grade truthfully; cancelling or abandoning the work is ≥ ★★★.
 - After the table always add 预期效果 (what happens once answered) and then 注意事项
   (dependencies, prior rulings, rubber-stamp rows); one line each is enough.
 - Question first, options concrete, reason one sentence.
 - The five facts calibrate it: the question is the first line (fact 3), each option is a
   concrete doable choice (fact 2), the reason makes the trade visible (fact 5).
+- **中文可读性.** 第一行用一句短句说明本次要定的决定，接着逐条列出证据，再给四列表；没有证据时直接从表格开始。每句表达一件事，单句控制在 40 字以内，英文句控制在 20 词以内。需要补充说明时另起一句，括号里只放一句完整说明。标识符、路径和命令用反引号代码格式标注。证据一条一行，单条控制在 120 字以内。
+- **事实自己查.** 能从仓库、工具和记忆查到的事实先查清并写进证据；问题卡只承载需要 owner 决定的取舍。
 
 **Bad** (a prose conditional menu where the table belongs):
 

@@ -71,6 +71,11 @@ retry that verb ONCE. A non-zero exit carries the reason (no `[workspace]`
 mapping, missing release workflows, the daemon log tail) — relay it and
 run `pf doctor`. `pf ops shutdown` stops the daemon for good: its clean
 exit ends the restart loop as well; `pf daemon ensure` starts it again.
+One exception: when the shutdown's runtime drain runs out of its 30s
+deadline (an actor stuck in a hub call), the daemon exits 1 and the
+restart loop (`pf supervise` in the workstation container) starts it
+again after 5s, which reconciles; to stop it for good, run
+`pf ops shutdown` once more.
 
 The daemon's other production knobs are not ops verbs: they live in the
 `[daemon]` table of `cli.toml` (`step_timeout`, `stall_window`,
@@ -84,7 +89,8 @@ config set <key> <value>`; a hand edit needs `pf config reload`. The running dae
 keys (`step_timeout`, `stall_window`, `max_concurrent_jobs`,
 `max_concurrent_tasks`, `cell_max_concurrent_jobs`, `max_concurrent_bars`,
 `agent_language`, `transient_error_patterns`, `model_error_patterns`,
-`slow_model_median_latency`, `slow_model_p90_latency`) without a restart,
+`slow_model_median_latency`, `slow_model_p90_latency`,
+`ask_auto_reply_enabled`, `ask_auto_reply_timeout`) without a restart,
 takes the `[workspace]`
 mapping at the next claim, and reports the restart-only keys (`harness_root`, `operator_agent_dir`, and the flat
 `server`/`api_key`/`daemon_socket`) as pending until the next daemon

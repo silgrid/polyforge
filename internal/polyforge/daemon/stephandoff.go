@@ -202,15 +202,41 @@ func (sc *stepCall) laneRefusal(a stepcall.HandoffArgs, lines []stepcall.Line) (
 	return "", true
 }
 
-// fastCheckRefusal answers why a step declaring `fast_check_proof` may not
-// hand off done ("" when it may): every task repo whose round's HEAD moved
-// needs the lane's result file, a pf-step-result/1 whose verdict is pass and
-// whose heads carry the repo at its current HEAD. A repo whose round start
-// is its HEAD at hand-off is no change (polyforge#211, C3'). The text starts
-// with the step — the hand-off's refuse() adds its own prefix — and quotes
-// the lane's command, so the daemon holds no repository's command.
+// proofSpec is one proof key of a step's lane: the result file's path
+// template, the one command that writes it, and the two labels a refusal
+// uses (the key's name and what the result is called in prose).
+type proofSpec struct {
+	key, label      string
+	result, command string
+}
+
+// proofSpecs answers a step's declared proofs in the order a refusal names
+// them: the fast-check proof, then the mechanical facts summary
+// (polyforge#211, #241).
+func proofSpecs(spec driver.StepSpec) []proofSpec {
+	var out []proofSpec
+	if spec.FastCheckProof != nil {
+		out = append(out, proofSpec{key: "fast_check_proof", label: "fast-check result",
+			result: spec.FastCheckProof.Result, command: spec.FastCheckProof.Command})
+	}
+	if spec.FactsProof != nil {
+		out = append(out, proofSpec{key: "facts_proof", label: "mechanical facts result",
+			result: spec.FactsProof.Result, command: spec.FactsProof.Command})
+	}
+	return out
+}
+
+// fastCheckRefusal answers why a step declaring `fast_check_proof` or
+// `facts_proof` may not hand off done ("" when it may): every task repo
+// whose round's HEAD moved needs the lane's result file, a
+// pf-step-result/1 whose verdict is pass and whose heads carry the repo at
+// its current HEAD. A repo whose round start is its HEAD at hand-off is no
+// change (polyforge#211, C3'). The text starts with the step — the
+// hand-off's refuse() adds its own prefix — and quotes the lane's command,
+// so the daemon holds no repository's command.
 func (sc *stepCall) fastCheckRefusal(spec driver.StepSpec) string {
-	if spec.FastCheckProof == nil {
+	proofs := proofSpecs(spec)
+	if len(proofs) == 0 {
 		return ""
 	}
 	reposDir := filepath.Join(sc.j.capsuleDir, capsule.DirRepos)
@@ -221,34 +247,39 @@ func (sc *stepCall) fastCheckRefusal(spec driver.StepSpec) string {
 		}
 	}
 	var problems []string
-	for _, name := range taskrepo.Names(reposDir) {
-		dir := filepath.Join(reposDir, name)
-		head := repoHead(dir)
-		if head == "" {
-			continue // no HEAD, no commit of this step's: nothing to prove (Q11)
-		}
-		start, known := starts[name]
-		if known && start == head {
-			continue // the round did not move this repo
-		}
-		if known && !hasLocalOnlyCommit(dir) {
-			continue // a fast-forward: HEAD carries no commit of this work item's
-		}
-		if problem := sc.fastCheckProblem(spec, name, head); problem != "" {
-			problems = append(problems, problem)
+	var keys []string
+	for _, pr := range proofs {
+		keys = append(keys, pr.key)
+		for _, name := range taskrepo.Names(reposDir) {
+			dir := filepath.Join(reposDir, name)
+			head := repoHead(dir)
+			if head == "" {
+				continue // no HEAD, no commit of this step's: nothing to prove (Q11)
+			}
+			start, known := starts[name]
+			if known && start == head {
+				continue // the round did not move this repo
+			}
+			if known && !hasLocalOnlyCommit(dir) {
+				continue // a fast-forward: HEAD carries no commit of this work item's
+			}
+			if problem := sc.proofProblem(pr, name, head); problem != "" {
+				problems = append(problems, problem)
+			}
 		}
 	}
 	if len(problems) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("step %s hands off done only with a passing fast check of each repo it changed (the lane's fast_check_proof): %s — then hand off again", spec.ID, strings.Join(problems, "; "))
+	return fmt.Sprintf("step %s hands off done only with a passing check of each repo it changed (the lane's %s): %s — then hand off again",
+		spec.ID, strings.Join(keys, ", "), strings.Join(problems, "; "))
 }
 
-// fastCheckProblem answers the failing check of one changed repo ("" when
-// its result is a readable pf-step-result/1 file).
-func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) string {
-	cmd := strings.ReplaceAll(spec.FastCheckProof.Command, "{repo}", name)
-	rel := strings.ReplaceAll(spec.FastCheckProof.Result, "{repo}", name)
+// proofProblem answers the failing check of one changed repo ("" when its
+// result is a readable pf-step-result/1 file at HEAD).
+func (sc *stepCall) proofProblem(pr proofSpec, name, head string) string {
+	cmd := strings.ReplaceAll(pr.command, "{repo}", name)
+	rel := strings.ReplaceAll(pr.result, "{repo}", name)
 	abs := filepath.Join(sc.j.capsuleDir, filepath.FromSlash(rel))
 	if !insideCapsule(sc.j.capsuleDir, abs) {
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (the path leaves the capsule); run `%s` from the capsule root", name, rel, cmd)
@@ -256,7 +287,7 @@ func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) st
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Sprintf("repos/%s: no fast-check result at %s; run `%s` from the capsule root", name, rel, cmd)
+			return fmt.Sprintf("repos/%s: no %s at %s; run `%s` from the capsule root", name, pr.label, rel, cmd)
 		}
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (unreadable path: %v); run `%s` from the capsule root", name, rel, err, cmd)
 	}
@@ -272,6 +303,9 @@ func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) st
 		Verdict *string            `json:"verdict"`
 		Heads   *map[string]string `json:"heads"`
 		Summary string             `json:"summary"`
+		Details struct {
+			Hits []proofHit `json:"hits"`
+		} `json:"details"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (%v); run `%s` from the capsule root", name, rel, err, cmd)
@@ -291,9 +325,64 @@ func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) st
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (no verdict); run `%s` from the capsule root", name, rel, cmd)
 	}
 	if *r.Verdict != "pass" {
-		return fmt.Sprintf("repos/%s: %s has verdict %s, not pass (%s); fix it, then run `%s` from the capsule root", name, rel, *r.Verdict, resultSummary(r.Summary), cmd)
+		msg := fmt.Sprintf("repos/%s: %s has verdict %s, not pass (%s)", name, rel, *r.Verdict, resultSummary(r.Summary))
+		if hits := hitLines(r.Details.Hits); hits != "" {
+			msg += "; hits: " + hits
+		}
+		return msg + fmt.Sprintf("; fix it, then run `%s` from the capsule root", cmd)
 	}
 	return ""
+}
+
+// proofHit is one deterministic hit a facts.py handoff result carries in
+// `details.hits`.
+type proofHit struct {
+	Item   string `json:"item"`
+	Repo   string `json:"repo"`
+	Unit   string `json:"unit"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+// maxRefusalHits bounds the hits a refusal returns inline (the whole list
+// stays in the result file the refusal names).
+const maxRefusalHits = 6
+
+// hitLines answers a result's hits one line each, the tail named by count
+// ("" when none): the refusal returns what the build must fix, not a
+// summary of it.
+func hitLines(hits []proofHit) string {
+	if len(hits) == 0 {
+		return ""
+	}
+	var lines []string
+	for i, h := range hits {
+		if i == maxRefusalHits {
+			lines = append(lines, fmt.Sprintf("… and %d more", len(hits)-maxRefusalHits))
+			break
+		}
+		bits := []string{h.Item}
+		if h.Repo != "" {
+			bits = append(bits, "repos/"+h.Repo)
+		}
+		if h.Unit != "" {
+			bits = append(bits, "unit "+h.Unit)
+		}
+		if h.Path != "" {
+			bits = append(bits, h.Path)
+		}
+		lines = append(lines, clipRunes(strings.Join(bits, " ")+": "+h.Reason, 240))
+	}
+	return strings.Join(lines, "; ")
+}
+
+// clipRunes clips s to n runes, marking the cut.
+func clipRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
 
 // resultSummary is the one-line part of a result's summary a refusal

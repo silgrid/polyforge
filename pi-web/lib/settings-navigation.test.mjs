@@ -13,6 +13,7 @@ const {
   SETTINGS_SECTION_VALUES,
   setLastSettingsSection,
   setLastSettingsSelection,
+  mayLeaveSection,
 } = await jiti.import("./settings-navigation.ts");
 
 function createStorage(initial = {}) {
@@ -204,4 +205,25 @@ test("the skills section works without a project: no redirect, and its selection
   const projectOnly = createStorage();
   setLastSettingsSelection("skills", "/project/.pi/skills/x/SKILL.md", "/project", projectOnly);
   assert.equal(getLastSettingsSelection("skills", null, projectOnly), null);
+});
+
+// polyforge#259 T4 AC1 (review #2): the leave prompt is a decision, not a
+// source-text fact — a clean tab leaves, a dirty one asks, a refused answer
+// keeps it, and closing asks for any tab that holds a draft.
+test("the leave prompt asks only when a tab holds an unsaved draft", () => {
+  const asked = [];
+  const confirm = (question) => { asked.push(question); return reply; };
+  let reply = true;
+  assert.equal(mayLeaveSection({}, "general", "skills", confirm, "q"), true, "a clean tab asked");
+  assert.equal(asked.length, 0);
+  reply = false;
+  assert.equal(mayLeaveSection({ agents: true }, "agents", "skills", confirm, "q"), false, "a refused prompt still left");
+  assert.equal(asked.length, 1);
+  reply = true;
+  assert.equal(mayLeaveSection({ agents: true }, "agents", "skills", confirm, "q"), true, "an accepted prompt did not leave");
+  assert.equal(mayLeaveSection({ agents: true }, "models", "skills", confirm, "q"), true);
+  assert.equal(asked.length, 3, "another tab's draft still asked");
+  // Closing (next = null) asks for any tab's draft, whatever is shown.
+  assert.equal(mayLeaveSection({ models: true }, "general", null, confirm, "q"), true);
+  assert.equal(asked.length, 4, "closing with a draft elsewhere asked nothing");
 });

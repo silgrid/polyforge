@@ -45,7 +45,9 @@ test("a phone's Settings levels live in the history: Back goes up one, closing d
   assert.match(hook, /window\.history\.pushState\(window\.history\.state, ""\)/);
   assert.match(hook, /if \(pushedRef\.current > 0\) window\.history\.back\(\);/);
   assert.match(hook, /if \(pushed > 0\) window\.history\.go\(-pushed\);/);
-  assert.match(panelSource, /const onClose = useCallback\(\(\) => \{\s*dropHistory\(\);\s*closeSettings\(\);/);
+  // polyforge#259 T4 AC1: the unsaved-draft prompt's decision is
+  // lib/settings-navigation's mayLeaveSection, tested as behaviour in
+  // lib/settings-navigation.test.mjs (review #2: no source-text assertion).
   // A desktop is always on the section, so narrowing the window keeps it.
   assert.match(hook, /if \(!isPhone && level !== "section"\) setLevel\("section"\);/);
 });

@@ -1,6 +1,7 @@
 // carries: components/ChatWindow*, components/ChatInput*, components/MessageView*, hooks/useAgentSession*, lib/agent-*, lib/stream-client*, lib/session-*, app/api/agent/*, app/api/sessions/*
 // carries: app/page.tsx, app/layout.tsx, app/globals.css, components/AppShell*, components/SessionSidebar*, components/SplitPaneLayout*, components/PaneHeader*, components/TabBar*, components/MarkdownBody*, components/FileViewer*, components/FileExplorer*, components/ModelSelector*, components/ModelContextWindow*, components/FontSettings*
 // carries: lib/pane-state*, lib/pane-tab-state*, lib/tab-order*, lib/model-*, lib/font-preferences*, lib/markdown*, hooks/useChatAppearance*, hooks/useFontPreferences*, app/api/files/*, app/api/models/*
+// carries: components/ModelsConfig*, components/EnabledModelsSection*, components/HarnessModelSettings*
 // Adapted from @Nuctori's script-style CI/E2E fixtures in PR #617 (issue #599).
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

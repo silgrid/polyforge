@@ -273,3 +273,45 @@ test("a blocked migration keeps its reason visible, and the managed-shadowed not
     state.restore();
   }
 });
+
+// polyforge#271 AC1 (A4): Claude's custom-model section has three states — the
+// first read is a skeleton, a successful empty list is 「没有自定义模型」 with
+// the add action, and a failed read is an alert with a retry (never the empty
+// list). The state block takes `t`, so it renders without a hook context.
+test("editor read states preserve drafts", async () => {
+  const { ClaudeCustomReadStates } = await jiti.import("./ClaudeCustomModels.tsx");
+  const t = (key) => key;
+  const texts = (tree) => walk(tree).flatMap((node) => {
+    const children = node.props?.children;
+    return Array.isArray(children) ? children.filter((child) => typeof child === "string") : typeof children === "string" ? [children] : [];
+  });
+  const keys = (tree) => walk(tree).map((node) => node.props?.["data-config-skeleton-line"] !== undefined ? "data-config-skeleton-line" : node.props?.["data-claude-models-retry"] !== undefined ? "data-claude-models-retry" : node.props?.["data-claude-models-add"] !== undefined ? "data-claude-models-add" : null).filter(Boolean);
+  const pending = ClaudeCustomReadStates({ loading: true, readError: null, t, onRetry: () => {} });
+  assert.ok(keys(pending).includes("data-config-skeleton-line"), "the first custom-model read is a skeleton");
+  assert.ok(!texts(pending).some((text) => text.includes("models.claudeCustomEmpty")), "a pending read is not the empty state");
+
+  const failed = ClaudeCustomReadStates({ loading: false, readError: "models.claudeCustomReadFailed", t, onRetry: () => {} });
+  const failedNodes = walk(failed);
+  assert.ok(failedNodes.some((node) => node.props?.role === "alert"), "a failed read is an alert");
+  assert.ok(keys(failed).includes("data-claude-models-retry"), "a failed read offers the retry");
+  assert.ok(!texts(failed).some((text) => text.includes("models.claudeCustomEmpty")), "a failed read is not the empty list");
+
+  const empty = ClaudeCustomReadStates({ loading: false, readError: null, t, onRetry: () => {}, onAdd: () => {} });
+  assert.ok(texts(empty).some((text) => text.includes("models.claudeCustomEmpty")), "an empty list names what is missing");
+  assert.ok(keys(empty).includes("data-claude-models-add"), "the empty list offers the add action");
+});
+
+// polyforge#271 round 2 (review r2#8): the real component's first read is the
+// section's skeleton — the wiring the state block alone cannot prove.
+test("the real section's first read is its skeleton", async () => {
+  const state = setup();
+  try {
+    const attributes = byAttr(state.hook, "data-claude-models-loading");
+    assert.ok(attributes.length > 0, "the real component's first read is not its skeleton");
+    const text = textOf(state.hook).join("\n");
+    assert.ok(text.includes("models.claudeCustomLoading"), "the loading label is missing");
+    assert.ok(!text.includes("models.claudeCustomEmpty"), "a pending read is the empty state");
+  } finally {
+    state.restore();
+  }
+});

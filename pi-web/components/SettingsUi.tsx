@@ -731,8 +731,31 @@ export function ConfigTrustNotice({
   );
 }
 
-export function ConfigEmptyState({ children }: { children: ReactNode }) {
-  return <div className="config-empty-state">{children}</div>;
+export function ConfigEmptyState({ children, action }: { children: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="config-empty-state">
+      <div className="config-empty-state-text">{children}</div>
+      {action ? <div className="config-empty-state-action">{action}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * 一个仍在读取的区块（polyforge#271 AC1）：可见的本地化加载标签加上与真实内容
+ * 同形的骨架行。骨架行只是装饰（`aria-hidden`），读屏只读标签；主题变量与
+ * `prefers-reduced-motion` 由 `app/settings.css` 处理。
+ */
+export function ConfigSkeleton({ id, label, lines = 3 }: { id?: string; label: ReactNode; lines?: number }) {
+  return (
+    <div id={id} className="config-skeleton" data-config-skeleton="" role="status" aria-live="polite">
+      <span className="config-skeleton-label">{label}</span>
+      <span className="config-skeleton-lines" aria-hidden="true">
+        {Array.from({ length: Math.max(1, lines) }, (_, index) => (
+          <span key={index} className="config-skeleton-line" data-config-skeleton-line="" />
+        ))}
+      </span>
+    </div>
+  );
 }
 
 export function ConfigDetail({ children, style }: { children: ReactNode; style?: CSSProperties }) {
@@ -777,6 +800,60 @@ export function ConfigFooterStatus({
         ))}
       </ul>
     </details>
+  );
+}
+
+/**
+ * 一个详情页的保存 footer（polyforge#259 T4 AC1）：左边是未保存改动的条数，
+ * 右边是「保存（n）」与「丢弃」。没有改动时不渲染保存/丢弃按钮——n=0 时没有
+ * 要写的东西。词全由调用方给（`saveLabel` 收到 n）。
+ */
+export function ConfigSaveFooter({ status, dirty, saving, discardLabel, saveLabel, onDiscard, onSave }: {
+  status?: ReactNode;
+  /** 未保存改动的条数（`settings-dirty` 的 dirtyCount）。 */
+  dirty: number;
+  saving?: boolean;
+  discardLabel: string;
+  /** 「保存（n 项改动）」；n 是 dirty。 */
+  saveLabel: (count: number) => string;
+  onDiscard: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <ConfigFooter status={status}>
+      {dirty > 0 && (
+        <>
+          <ConfigButton size="small" disabled={saving} onClick={onDiscard}>{discardLabel}</ConfigButton>
+          <ConfigButton variant="primary" disabled={saving} onClick={onSave}>
+            {saveLabel(dirty)}
+          </ConfigButton>
+        </>
+      )}
+    </ConfigFooter>
+  );
+}
+
+/** 一条设置页的错误 notice（polyforge#259 T4 AC2）：中文主文案，服务端原文折叠进详情。 */
+export function ConfigErrorNotice({ id, summary, detailsLabel, details, action }: {
+  id?: string;
+  summary: ReactNode;
+  detailsLabel?: string;
+  /** The server's own words; rendered inside the details fold only. */
+  details?: ReactNode;
+  /** The retry (or other recovery) control, beside the error line. */
+  action?: ReactNode;
+}) {
+  return (
+    <div id={id} role="alert" className="config-error-notice">
+      <div className="config-error-notice-summary">{summary}</div>
+      {details ? (
+        <details className="config-error-notice-details">
+          <summary>{detailsLabel}</summary>
+          <div className="config-error-notice-original">{details}</div>
+        </details>
+      ) : null}
+      {action ? <div className="config-error-notice-action">{action}</div> : null}
+    </div>
   );
 }
 

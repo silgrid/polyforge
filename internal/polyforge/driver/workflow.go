@@ -56,6 +56,10 @@ type StepSpec struct {
 	// Waivable mirrors `waivable` (contract 2; default false): the gate
 	// takes a hand-off `waive --per-owner`.
 	Waivable bool
+	// ProtectedStop mirrors `protected_stop` (default false): the step's
+	// question is a human stop the daemon's automatic reply never answers
+	// (polyforge#239).
+	ProtectedStop bool
 	// Skippable mirrors `skippable` (default false): a
 	// project may switch the step off. Skipped is set by WithSkipped: the
 	// step is skippable and the work item's skipped-step set names it, so
@@ -90,6 +94,10 @@ type StepSpec struct {
 	// file and the command the daemon's done gate reads for every task
 	// repo the step changed.
 	FastCheckProof *workflow.FastCheckProof
+	// FactsProof mirrors `facts_proof` (nil = none): the mechanical facts
+	// summary (facts.py handoff) the done gate reads for every task repo
+	// the step changed (polyforge#241).
+	FactsProof *workflow.FastCheckProof
 }
 
 // HubAllowed answers the `pf step hub` verbs step id may call: its
@@ -130,6 +138,16 @@ func (w *Workflow) WrapAttrs(id string) []string {
 		return s.WrapAttrs
 	}
 	return nil
+}
+
+// ProtectedStop reports whether step id declares `protected_stop: true`
+// (polyforge#239): its question keeps waiting for the owner.
+func (w *Workflow) ProtectedStop(id string) bool {
+	if w == nil {
+		return false
+	}
+	s := w.step(id)
+	return s != nil && s.ProtectedStop
 }
 
 // Waivable reports whether the owner may waive a FAIL of step id
@@ -295,6 +313,119 @@ func (w *Workflow) WithSkipped(ids []string) *Workflow {
 	return out
 }
 
+// FutureDispatchable answers whether step id can be dispatched again from
+// the execution record's current position (polyforge#270, the owner's Q1 B):
+// a step later in the lane that still runs counts; a step that already ran
+// counts only when a gate that is itself still reachable can rewind to it
+// (directly or after a later rewind), the lane's rewind-only steps count
+// where a rewind covers them, and a step the effective skip set switches
+// off never counts. The rewind budget is not consulted: an exhausted budget
+// still leaves the owner's own authorization to run another round.
+func (w *Workflow) FutureDispatchable(step string, exec *capsule.Execution, skips []string) bool {
+	if w == nil || len(w.Steps) == 0 {
+		return false
+	}
+	target, ok := w.indexOf(step)
+	if !ok {
+		return false
+	}
+	listed := make(map[string]bool, len(skips))
+	for _, id := range skips {
+		listed[id] = true
+	}
+	skipped := make([]bool, len(w.Steps))
+	for i, s := range w.Steps {
+		skipped[i] = s.Skippable && listed[s.ID]
+	}
+	statusOf := func(id string) string {
+		if exec == nil {
+			return ""
+		}
+		if st := exec.Steps[id]; st != nil {
+			return st.Status
+		}
+		return ""
+	}
+	activated := func(i int) bool {
+		if exec == nil {
+			return false
+		}
+		st := exec.Steps[w.Steps[i].ID]
+		if st == nil {
+			return false
+		}
+		for _, a := range st.Attempts {
+			if rewindArchive(a.Cause) {
+				return true
+			}
+		}
+		return false
+	}
+	// current is the step the next plan pass selects: the first one neither
+	// done nor skipped. Every step after it can still run; the rewind-only
+	// steps among them wait for a rewind that covers them.
+	current := 0
+	for current < len(w.Steps) {
+		st := statusOf(w.Steps[current].ID)
+		if st != capsule.StepDone && st != capsule.StepSkipped {
+			break
+		}
+		current++
+	}
+	if current >= len(w.Steps) {
+		return false // every step done or skipped: nothing dispatches again
+	}
+	reachable := make([]bool, len(w.Steps))
+	// mark makes [from, to) reachable; rewound says a rewind covers the span
+	// (it activates the rewind-only steps in it).
+	mark := func(from, to int, rewound bool) {
+		for i := from; i < to; i++ {
+			if skipped[i] {
+				continue
+			}
+			if w.Steps[i].RewindOnly && !rewound && !activated(i) {
+				continue
+			}
+			reachable[i] = true
+		}
+	}
+	mark(current, len(w.Steps), false)
+	// A reachable gate can FAIL and rewind to its target; the rewind covers
+	// [target, gate) only (the driver archives that span), so its steps —
+	// the rewind-only ones included — become reachable, and with them any
+	// gate they contain. The steps from the gate on run in forward order as
+	// already marked: a rewind-only step there needs a gate of its own.
+	// Repeat until nothing new.
+	for {
+		before := 0
+		for _, r := range reachable {
+			if r {
+				before++
+			}
+		}
+		for i, s := range w.Steps {
+			if !reachable[i] || !s.Gate || s.OnFail == nil {
+				continue
+			}
+			t, ok := w.indexOf(s.OnFail.Target)
+			if !ok {
+				continue
+			}
+			mark(t, i, true)
+		}
+		after := 0
+		for _, r := range reachable {
+			if r {
+				after++
+			}
+		}
+		if after == before {
+			break
+		}
+	}
+	return reachable[target]
+}
+
 // LoadWorkflow reads the lane at bundleDir through the one lane loader
 // and answers its execution graph; a lane with any contract defect is
 // refused with every defect (*workflow.LoadError).
@@ -342,6 +473,7 @@ func workflowOf(lane *workflow.Lane) *Workflow {
 			WallMinutes:    s.WallMinutes,
 			ToolMinutes:    s.ToolMinutes,
 			Waivable:       s.Waivable,
+			ProtectedStop:  s.ProtectedStop,
 			Skippable:      s.Skippable,
 			RewindOnly:     s.RewindOnly,
 			Skill:          s.Skill,
@@ -352,6 +484,7 @@ func workflowOf(lane *workflow.Lane) *Workflow {
 			HubAttrs:       s.HubAttrs,
 			WrapAttrs:      s.WrapAttrs,
 			FastCheckProof: s.FastCheckProof,
+			FactsProof:     s.FactsProof,
 		}
 		if s.OnFailTarget != "" {
 			step.OnFail = &OnFail{Target: s.OnFailTarget}

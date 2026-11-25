@@ -87,13 +87,6 @@ export type StepTierRowView =
   | { kind: "all"; tier: string }
   | { kind: "specific"; per: { harness: string; tiers: string[] }[] };
 
-/** One planned key write of a tier change (the write route's POST face). */
-export interface StepTierWrite {
-  action: "set" | "unset";
-  tier: string;
-  candidates: string[];
-}
-
 /** The entries of one tier's list that name the identity (their exact
  *  strings, efforts included), in list order, deduped. */
 function identityEntries(candidates: readonly string[], identity: { harness: "pi" | "claude"; model: string }): string[] {
@@ -129,42 +122,6 @@ export function stepTierRowView(harnesses: readonly string[], perHarness: Readon
   const single = per.every((entry) => entry.tiers.length === 1) && new Set(per.map((entry) => entry.tiers[0])).size === 1;
   if (single) return { kind: "all", tier: per[0].tiers[0] };
   return { kind: "specific", per };
-}
-
-/** The key writes that move one harness's model identity to a target tier
- *  (or unset it): the add to the target comes first (a crash between the
- *  two keys leaves a duplicate, never a loss — the ticket's 先加后删), the
- *  identity's effort entries move exactly as they are, and a tier the
- *  removal would leave empty unsets (pf refuses an empty list). A no-op
- *  move plans nothing. */
-export function stepTierWritePlan(catalog: ReadonlyArray<StepTierItem>, identity: { harness: "pi" | "claude"; model: string }, target: string | null): StepTierWrite[] {
-  const entries: string[] = [];
-  for (const item of catalog) {
-    for (const entry of identityEntries(item.candidates, identity)) {
-      if (!entries.includes(entry)) entries.push(entry);
-    }
-  }
-  // A model no tier names yet still gains the target: its candidate is the
-  // identity itself, no effort suffix (the S85-30 finding — a plan that only
-  // moved existing entries left an unset model's set a silent no-op).
-  const moving = entries.length > 0 ? entries : [`${identity.harness}:${identity.model}`];
-  const plan: StepTierWrite[] = [];
-  if (target !== null) {
-    const current = catalog.find((item) => item.tier === target)?.candidates ?? [];
-    const next = [...current];
-    for (const entry of moving) if (!next.includes(entry)) next.push(entry);
-    if (next.length !== current.length) {
-      plan.push({ action: "set", tier: target, candidates: next });
-    }
-  }
-  for (const item of catalog) {
-    if (target !== null && item.tier === target) continue;
-    const remaining = item.candidates.filter((candidate) => !moving.includes(candidate));
-    if (remaining.length === item.candidates.length) continue;
-    if (remaining.length === 0) plan.push({ action: "unset", tier: item.tier, candidates: [] });
-    else plan.push({ action: "set", tier: item.tier, candidates: remaining });
-  }
-  return plan;
 }
 
 /** One picker group: a tier's candidates, or the null tier's defined models
@@ -223,4 +180,47 @@ export function stepTierPickerGroups(catalog: ReadonlyArray<StepTierItem>, defin
   }
   if (unset.length > 0) groups.push({ tier: null, candidates: unset });
   return groups;
+}
+
+/** One key write a tier move plans. */
+export interface StepTierWrite {
+  action: "set" | "unset";
+  tier: string;
+  candidates: string[];
+}
+
+/** The key writes that move one harness's model identity to a target tier
+ *  (or unset it): the add to the target comes first (a crash between the
+ *  two keys leaves a duplicate, never a loss — the ticket's 先加后删), the
+ *  identity's effort entries move exactly as they are, and a tier the
+ *  removal would leave empty unsets (pf refuses an empty list). A no-op
+ *  move plans nothing. */
+export function stepTierWritePlan(catalog: ReadonlyArray<StepTierItem>, identity: { harness: "pi" | "claude"; model: string }, target: string | null): StepTierWrite[] {
+  const entries: string[] = [];
+  for (const item of catalog) {
+    for (const entry of identityEntries(item.candidates, identity)) {
+      if (!entries.includes(entry)) entries.push(entry);
+    }
+  }
+  // A model no tier names yet still gains the target: its candidate is the
+  // identity itself, no effort suffix (a plan that only moved existing
+  // entries would leave an unset model's set a silent no-op).
+  const moving = entries.length > 0 ? entries : [`${identity.harness}:${identity.model}`];
+  const plan: StepTierWrite[] = [];
+  if (target !== null) {
+    const current = catalog.find((item) => item.tier === target)?.candidates ?? [];
+    const next = [...current];
+    for (const entry of moving) if (!next.includes(entry)) next.push(entry);
+    if (next.length !== current.length) {
+      plan.push({ action: "set", tier: target, candidates: next });
+    }
+  }
+  for (const item of catalog) {
+    if (target !== null && item.tier === target) continue;
+    const remaining = item.candidates.filter((candidate) => !moving.includes(candidate));
+    if (remaining.length === item.candidates.length) continue;
+    if (remaining.length === 0) plan.push({ action: "unset", tier: item.tier, candidates: [] });
+    else plan.push({ action: "set", tier: item.tier, candidates: remaining });
+  }
+  return plan;
 }

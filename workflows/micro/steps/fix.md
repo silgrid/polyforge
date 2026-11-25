@@ -53,13 +53,15 @@ engine lists them — exactly each command's `cmd` text, nothing added or droppe
 `evidence` step re-runs exactly this plan on the host, from each repository's root (the
 run script with `--isolation host`), and `review` judges it.
 
-## Bounds, before you complete
+## 完成判据 — done criteria
 
-Your skill is the procedure: run the pre-written `facts.py micro-bounds` on your plan as
-written and route on its exit code. In bounds, hand off `done`. Out of bounds, the change
-is not this lane's: ask the owner to re-file it on `develop` (`pf step ask`), end your
-turn, and act on the reply — `cancel`, citing it, when the owner agrees. You never hand
-off `done` out of bounds.
+`done` only when every item below holds; the skill's bounds procedure runs the pre-written `facts.py micro-bounds` on your plan as written, and an out-of-bounds change is not this lane's.
+
+1. **Every command** `verify-scope --micro --json` lists for a changed repo appears once in `artifacts/fix/evidence.json`, in the engine's order and exactly as written.
+2. **Every command of that list** exited 0 in this step's `verify-scope --micro --run`.
+3. **The bounds result** `artifacts/facts/micro-bounds.json` is pass — the paths, the declarations and the plan are the tool's to judge, and its red routes to the owner as the paragraph below says.
+
+Out of bounds is not this lane's: ask the owner to re-file it on `develop` (`pf step ask`), end your turn, and act on the reply — `cancel`, citing it, when the owner agrees. You never hand off `done` out of bounds.
 
 ## If you cannot finish
 

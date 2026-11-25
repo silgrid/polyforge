@@ -223,7 +223,10 @@ and YAML path, before a claim ever meets it. The keys:
   per-ticket overlay may carry a Host `[step_tiers]` capability tier
   (`pf override <id> --step <s> --tier <name>`, polyforge#81): the
   dispatch expands it to that tier's candidates above `--models` and
-  every level here; `default` means "unset".
+  every level here; `default` means "unset". A models/tier overlay is
+  accepted on a step that already ran or is running too and governs its
+  next dispatch (the finished round or live dispatch is unchanged); a step
+  the lane will not dispatch again refuses it (polyforge#270).
 - `steps:` — one entry per step, in order. Each entry:
   - `id` — the step id (the step definition file's name).
   - `gate: true` — the step can FAIL the run: it ends its dispatch with
@@ -262,6 +265,15 @@ and YAML path, before a claim ever meets it. The keys:
     file and quotes `command` in a refusal, so no repository's command is
     in the daemon; a `done` the gate would refuse is accepted when it cites
     the owner's release with `--per-owner`, the stamp recording it
+    ([reference](reference/workflow-contract.md#step-keys)).
+  - `facts_proof:` — `{result, command}`: the step's `done` needs the
+    mechanical facts summary `facts.py handoff` writes (a
+    `pf-step-result/1` result at `result`, verdict `pass`, `heads` carrying
+    the repo at HEAD) for every task repo the round changed; a
+    deterministic hit — a unit's commits or red-state replay, an undeclared
+    write, an existing test changed outside the plan's write set, an e2e
+    suite without `carries:`, a listed test that does not exist — refuses
+    the `done` and returns each hit one line beside the result file
     ([reference](reference/workflow-contract.md#step-keys)).
   - `skill:` — the skill the step follows: `<lane>/skills/<name>.md`, else
     `_shared/skills/<name>.md`, rendered after the step definition; a skill
@@ -326,7 +338,8 @@ error (`WFC-195`), never a dispatch failure:
   engineering principles every bundle shares, is one). No `vars` entry
   declares it; the loader renders the fragment's trimmed text, verbatim
   and never re-scanned. A declared var that shadows a fragment file is a
-  load error.
+  load error. A fragment may also carry advisory text — develop's build
+  renders `{{readability_checklist}}`, a checklist no gate reads (polyforge#236).
 - `{{<name>}}` — any other placeholder renders with the workflow.yaml
   step entry's `vars` (and `vars_files`) or `params`. Rendering fails
   closed both ways: a placeholder with neither a var, a param nor a

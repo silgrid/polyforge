@@ -20,7 +20,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { AccountClaudeCard, AccountHarnessPane, ClaudeCredentialForm, CredentialWriteResults } = await jiti.import("./AccountSettings.tsx");
+const { AccountClaudeCard, AccountHarnessPane, AccountReadStatus, ClaudeCredentialForm, CredentialWriteResults } = await jiti.import("./AccountSettings.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 const h = React.createElement;
@@ -221,4 +221,219 @@ test("an unavailable claude status degrades with its reason, and the doctor erro
     read: { claude: null, cells: [], doctorError: null },
   })));
   assert.match(empty, /No Cell is configured on this machine/);
+});
+
+// polyforge#256 (T1, B3): the account read's state machine — an explicit
+// pending state on the first read and on refresh, the last good data kept
+// across a refresh, a visible error the refresh retries, and a late answer
+// that never overwrites a newer one. The fetches are controlled promises
+// (resolved by the test), never a real 40 s wait; the hook is driven through
+// the same hook shim the other component behaviour tests use.
+test("account pending, success, empty, failure and refresh are distinct", async () => {
+  const shim = createJiti(import.meta.url, {
+    jsx: { runtime: "automatic" },
+    moduleCache: false,
+    // polyforge#259 T4 AC2: the panel imports the display-name mapping through
+    // the package's own `@/` alias, which the shim resolves like tsconfig does.
+    tsconfigPaths: true,
+    alias: {
+      react: new URL("../hooks/__fixtures__/react-hook-shim.mjs", import.meta.url).pathname,
+      "react/jsx-runtime": new URL("../hooks/__fixtures__/react-jsx-runtime.mjs", import.meta.url).pathname,
+      "@/hooks/useI18n": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+      "./SettingsUi": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+      "./TerminalPanel": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+      "./PiAccountLogin": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+    },
+  });
+  const { renderHook } = await import(new URL("../hooks/__fixtures__/react-hook-shim.mjs", import.meta.url).href);
+  const { useAccountRead } = await shim.import("./AccountSettings.tsx");
+
+  const pending = [];
+  globalThis.fetch = (url) => new Promise((resolve) => pending.push({ url, resolve }));
+  const take = (url) => {
+    const at = pending.findIndex((entry) => entry.url === url);
+    assert.ok(at >= 0, `no pending ${url} (pending: ${pending.map((entry) => entry.url).join(", ")})`);
+    const [entry] = pending.splice(at, 1);
+    return entry;
+  };
+  const ok = (body) => ({ ok: true, status: 200, json: async () => body });
+  const settle = async (hook) => {
+    for (let round = 0; round < 16; round++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      hook.flush();
+    }
+  };
+  const answer = async (hook, body, harnesses = []) => {
+    take("/api/settings/account").resolve(ok(body));
+    await settle(hook);
+    take("/api/harness").resolve(ok({ harnesses }));
+    await settle(hook);
+  };
+
+  const hook = renderHook(useAccountRead, {});
+  assert.equal(hook.result.loading, true, "the first read starts pending");
+  assert.equal(hook.result.read, null);
+
+  // success: the data replaces the pending state
+  await answer(hook, READ);
+  assert.equal(hook.result.loading, false);
+  assert.equal(hook.result.readError, null);
+  assert.equal(hook.result.read.cells.length, 3, "the read's Cell rows are shown");
+
+  // refresh: pending again, the last good read kept
+  hook.result.load();
+  await settle(hook);
+  assert.equal(hook.result.loading, true, "a refresh shows its own pending state");
+  assert.equal(hook.result.read.cells.length, 3, "the last good read stays while refreshing");
+  await answer(hook, { ...READ, cells: [], doctorError: null });
+  assert.equal(hook.result.loading, false);
+  assert.deepEqual(hook.result.read.cells, [], "the refreshed (empty) read replaces the old data");
+
+  // failure: the pending state ends, an error is visible, the data is kept
+  hook.result.load();
+  await settle(hook);
+  take("/api/settings/account").resolve({ ok: false, status: 500, json: async () => ({}) });
+  await settle(hook);
+  assert.equal(hook.result.loading, false, "a failed read never stays pending");
+  assert.equal(hook.result.readError, "settings.accountReadFailed");
+  assert.deepEqual(hook.result.read.cells, [], "the last good read is kept through a failure");
+
+  // a late older answer never overwrites a newer one
+  hook.result.load(); // request A
+  await settle(hook);
+  hook.result.load(); // request B, newer
+  await settle(hook);
+  const [first, second] = pending.filter((entry) => entry.url === "/api/settings/account");
+  second.resolve(ok({ ...READ, cells: [] }));
+  await settle(hook);
+  take("/api/harness").resolve(ok({ harnesses: [] }));
+  await settle(hook);
+  first.resolve(ok(READ));
+  await settle(hook);
+  assert.deepEqual(hook.result.read.cells, [], "the newer read wins; the late older answer is dropped");
+  hook.unmount();
+});
+
+test("B3: the shell renders the pending status and the retry line, and a finished read without claude is its own explanation", () => {
+  const t = (key) => key;
+  const loading = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, { loading: true, readError: null, t })));
+  assert.match(loading, /role="status"/, "the first read is a live pending status");
+  assert.match(loading, /data-account-loading/);
+  assert.ok(loading.includes("settings.accountLoading"), "the pending text is the localized key");
+
+  const failed = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, { loading: false, readError: "settings.accountReadFailed", t })));
+  assert.match(failed, /role="alert"/, "a failed read is announced");
+  assert.match(failed, /data-account-read-error/);
+  assert.ok(failed.includes("settings.accountReadFailed"));
+  assert.ok(!failed.includes("data-account-loading"), "a failed read is never still pending");
+
+  const idle = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, { loading: false, readError: null, t })));
+  assert.equal(idle, "", "a settled, successful read has no status line");
+
+  // the claude pane's own state: loading while in flight, absent once the read finished without claude
+  const pendingPane = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
+    harness: "claude", read: null, capabilities: null, onOpenLoginTerminal: noop, loading: true,
+  })));
+  assert.match(pendingPane, /data-claude-status="loading"/, "a read still in flight says it is loading");
+  assert.match(pendingPane, /Reading the account facts/, "the loading text is localized");
+  const failedPane = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
+    harness: "claude", read: null, capabilities: null, onOpenLoginTerminal: noop, loading: false,
+  })));
+  assert.match(failedPane, /data-claude-status="absent"/, "a finished read without claude is not still loading");
+  assert.ok(!failedPane.includes("Reading the account facts"), "the failed read never claims to be reading");
+  assert.match(failedPane, /read finished/, "the finished-but-unavailable explanation is shown");
+
+  // a read that answered claude keeps the data, regardless of the loading flag
+  const withClaude = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, {
+    claude: { available: true, loggedIn: true, authMethod: "oauth_token", configDirectory: "/home/op/.claude", consoleProfile: "absent", envCredentials: {} },
+    loaded: true,
+  })));
+  assert.match(withClaude, /data-claude-status="logged-in"/);
+});
+
+// polyforge#259 T4 AC2 (review r3#1, owner 2A: 前端按 code i18n): a refused
+// target's row on a Chinese page reads 「拒写」 plus the line its route code
+// names; the server's English reason sits only in the 详情 fold. Expected
+// texts hand-copied from lib/i18n/messages/zh-CN.ts (settings.accountWriteNo,
+// serverError.forbidden, i18n.detailsLabel). Caught change: `entry.reason`
+// back outside the fold, or the line not taken from the code.
+test("the refusal's own words stay folded, the row reads in Chinese by its code (T4 AC2, review r3#1)", async () => {
+  const { zhCNLocale } = await jiti.import("@/lib/i18n/messages/zh-CN.ts");
+  const { translateMessage } = await jiti.import("@/lib/i18n/format.ts");
+  const t = (key, params) => translateMessage("zh-CN", key, { "zh-CN": zhCNLocale.messages }, params);
+  const html = renderToStaticMarkup(h(I18nProvider, null, h(CredentialWriteResults, {
+    t,
+    results: [{ target: "auth.json", status: "refused", reason: "target file is not writable", code: "account-write-refused" }],
+  })));
+  const outside = html.replace(/<details[\s\S]*?<\/details>/g, "");
+  const folds = (html.match(/<details[\s\S]*?<\/details>/g) ?? []).join("");
+  assert.ok(!outside.includes("target file is not writable"), "the refusal's English reason shows outside the fold");
+  assert.ok(folds.includes("target file is not writable"), "the refusal's English reason is not in the fold");
+  assert.ok(folds.includes("详情"), "the fold is not labelled 详情");
+  assert.ok(outside.includes("拒写"), "the refused status line is missing");
+  assert.ok(outside.includes("服务端拒绝了这次改动，原文在「详情」里。"), "the row does not read by its code");
+});
+
+// polyforge#271 AC1 (A1, Q5 A): a first read with no value shows the shared
+// skeleton with a readable loading label; a failed read is a styled alert
+// notice with a retry action (never the empty state), and a refresh failure
+// keeps the last good read and says it is stale; a successful empty Cell list
+// offers its refresh action.
+test("account states: skeleton, empty action, alert notice and stale data", () => {
+  const t = (key, params) => params ? `${key} ${JSON.stringify(params)}` : key;
+
+  const pending = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, {
+    loading: true, readError: null, hasData: false, t, onRetry: noop,
+  })));
+  assert.match(pending, /data-account-loading/);
+  assert.match(pending, /data-config-skeleton/, "the first read is a shared skeleton");
+  assert.match(pending, /role="status"/);
+  assert.ok(pending.includes("settings.accountLoading"), "the loading label stays readable");
+  assert.ok(!pending.includes("settings.accountNoCells"), "a pending read is never the empty state");
+
+  const failed = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, {
+    loading: false, readError: "settings.accountReadFailed", hasData: false, t, onRetry: noop,
+  })));
+  assert.match(failed, /role="alert"/, "a failed read is announced");
+  assert.match(failed, /data-account-read-error/);
+  assert.ok(failed.includes("settings.accountReadFailed"));
+  assert.ok(failed.includes(">i18n.retry<"), "the error carries the retry action");
+  assert.ok(!failed.includes("settings.accountNoCells"), "a failed read is never the empty state");
+
+  const stale = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, {
+    loading: false, readError: "settings.accountReadFailed", hasData: true, t, onRetry: noop,
+  })));
+  assert.ok(stale.includes("settings.accountStale"), "a refresh failure says the data is the last good read");
+  assert.match(stale, /role="alert"/);
+
+  const emptyCells = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
+    harness: "pi", capabilities: null, onOpenLoginTerminal: noop, onRefresh: noop,
+    read: { claude: null, cells: [], doctorError: null },
+  })));
+  assert.match(emptyCells, /No Cell is configured on this machine/);
+  assert.match(emptyCells, /data-account-action="refresh-cells"/, "the empty Cell list offers its refresh action");
+
+  const claudePending = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, { claude: null, loaded: false })));
+  assert.match(claudePending, /data-claude-status="loading"/);
+  assert.match(claudePending, /data-config-skeleton/, "the claude card's first read is a skeleton too");
+});
+
+// polyforge#271 round 2 (review r2#5): the retry control is wired to the
+// page's read again — clicking it calls the retry the page passed in.
+test("account retry control issues the read again", () => {
+  const t = (key) => key;
+  let retries = 0;
+  const tree = AccountReadStatus({ loading: false, readError: "settings.accountReadFailed", hasData: false, t, onRetry: () => { retries += 1; } });
+  const walk = (node, out = []) => {
+    if (Array.isArray(node)) { for (const child of node) walk(child, out); return out; }
+    if (!node || typeof node !== "object" || !("props" in node)) return out;
+    if (typeof node.type === "function") return walk(node.type(node.props), out);
+    out.push(node);
+    walk(node.props.children, out);
+    return out;
+  };
+  const retry = walk(tree).find((node) => node.props?.["data-account-retry"] !== undefined);
+  assert.ok(retry, "the retry control is rendered");
+  retry.props.onClick();
+  assert.equal(retries, 1, "the retry control did not call the read again");
 });
