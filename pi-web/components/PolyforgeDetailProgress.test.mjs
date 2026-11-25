@@ -41,6 +41,8 @@ const jiti = createJiti(import.meta.url, {
     "./PolyforgeProjects": stubsPath,
     "./PolyforgeJobComposer": stubsPath,
     "@/lib/polyforge-cards-pure": modulePath("lib/polyforge-cards-pure.ts"),
+    // polyforge#249: the panel reads the selected job's landing-lock projection.
+    "@/lib/polyforge-landing-lock": modulePath("lib/polyforge-landing-lock.ts"),
     // polyforge#151: the panel threads the watch snapshot's step-tier catalog
     // into the step controls' shared picker.
     "@/lib/step-tiers": modulePath("lib/step-tiers.ts"),

@@ -26,6 +26,7 @@ import {
   type PolyforgeProgressTone,
 } from "@/lib/polyforge-cards-pure";
 import type { PolyforgeContextUsage, PolyforgeWatchStatus } from "@/lib/polyforge-status";
+import type { PolyforgeLandingLock } from "@/lib/polyforge-landing-lock";
 import { POLYFORGE_BLOCK_STYLE } from "@/lib/panel-layout";
 import { usePolyforgePanelPreferences } from "@/hooks/usePolyforgePanelPreferences";
 import type { PolyforgeContact, PolyforgeConversation, PolyforgeMessage, PolyforgeProjectGroup } from "@/lib/polyforge-messages-pure";
@@ -36,7 +37,7 @@ import { PolyforgeMessages, type PolyforgeMessagesProps } from "./PolyforgeMessa
 import { PolyforgeMemory } from "./PolyforgeMemory";
 import { PolyforgeIntegrate } from "./PolyforgeIntegrate";
 import { PolyforgeTasks } from "./PolyforgeTasks";
-import { PolyforgeWorkItems } from "./PolyforgeWorkItems";
+import { PolyforgeLandingLockBadge, PolyforgeWorkItems } from "./PolyforgeWorkItems";
 import { PolyforgeProjects } from "./PolyforgeProjects";
 import { MAX_MARKDOWN_CHARS, SafeMarkdownBody } from "./SafeMarkdownBody";
 import { ThinkingFold, useThinkingExpansion } from "./ThinkingFold";
@@ -1168,6 +1169,7 @@ function PolyforgeEntriesDismiss({ reason, openIds, onDismiss }: { reason?: stri
 const PolyforgeJobCard = memo(function PolyforgeJobCard({
   card,
   verifyQueue,
+  landingLock,
   pending,
   selected,
   titleLength,
@@ -1179,6 +1181,9 @@ const PolyforgeJobCard = memo(function PolyforgeJobCard({
   /** the job's queued verification, from the status
    *  snapshot the queue counter reads (absent when not queued). */
   verifyQueue?: PolyforgeVerifyQueue;
+  /** the selected job's landing-lock projection from its watch snapshot
+   *  (absent when it does not wait, or when another job is selected). */
+  landingLock?: PolyforgeLandingLock;
   /** A status-only stand-in before the first card read: no card identity yet. */
   pending: boolean;
   selected: boolean;
@@ -1294,6 +1299,7 @@ const PolyforgeJobCard = memo(function PolyforgeJobCard({
           <span style={{ color: "var(--text-dim)", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{verifyQueue.reason}</span>
         </div>
       )}
+      {landingLock && <PolyforgeLandingLockBadge lock={landingLock} t={t} dim={false} />}
       {/* the item's counted entries — the newest one's reason and 忽略. */}
       {!pending && entries.length > 0 && <PolyforgeEntriesDismiss reason={entries[0].phrase ?? attentionCardLabel(entries[0], t)} openIds={entries.map((e) => e.id)} onDismiss={onDismiss} />}
     </div>
@@ -1881,6 +1887,7 @@ export function PolyforgePanel({
                             key={polyforgeCardKey(card)}
                             card={card}
                             verifyQueue={verifyQueues.get(polyforgeJobRef(card.job))}
+                            landingLock={isSelected(card.job) ? watchStatus?.landingLock : undefined}
                             pending={cards === null}
                             selected={isSelected(card.job)}
                             titleLength={titleLength}

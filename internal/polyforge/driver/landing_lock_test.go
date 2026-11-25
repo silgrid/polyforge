@@ -12,6 +12,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -34,18 +35,45 @@ type fakeLander struct {
 	queued   bool
 	// held records whether the group is currently held.
 	held bool
+	// keys is the group's held-key list the events read (polyforge#249);
+	// nil keeps the pre-#249 shape for the older tests.
+	keys []LeaseKey
+	// cycleN makes every hold's non-secret cycle id distinct, as the
+	// production manager's is.
+	cycleN int
+	cycle  string
 }
 
-func (f *fakeLander) Hold(_ context.Context, _, _ string, _ []string, queued func(int, time.Time)) (IntervalLease, error) {
+func (f *fakeLander) Hold(_ context.Context, _, _ string, _ []string, queued func(LeaseQueue)) (IntervalLease, error) {
 	f.mu.Lock()
 	f.holds++
+	f.cycleN++
+	f.cycle = "lc_test_" + strconv.Itoa(f.cycleN)
 	f.held = true
 	announce := f.queued
+	keys := append([]LeaseKey(nil), f.keys...)
 	f.mu.Unlock()
 	if announce && queued != nil {
-		queued(3, time.Now())
+		q := LeaseQueue{Position: 3, Since: time.Now(), Cycle: f.cycle}
+		if len(keys) > 0 {
+			q.Repo, q.Branch, q.Position = keys[0].Repo, keys[0].Branch, keys[0].Position
+		}
+		queued(q)
 	}
 	return f, nil
+}
+
+// Cycle and Keys are the non-secret event face (polyforge#249).
+func (f *fakeLander) Cycle() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cycle
+}
+
+func (f *fakeLander) Keys() []LeaseKey {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]LeaseKey(nil), f.keys...)
 }
 
 // Err answers a lost lease once (the next hold is healthy again).

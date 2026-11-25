@@ -15,8 +15,32 @@ import {
   type PolyforgeWorkItemRow,
 } from "@/lib/polyforge-work-items-pure";
 import { MarkdownBody } from "./MarkdownBody";
+import { landingLockKeysText, landingLockText, type PolyforgeLandingLock } from "@/lib/polyforge-landing-lock";
 import { PolyforgeWorkItemParams } from "./PolyforgeWorkItemParams";
 import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearchBar } from "./PolyforgeSearchBar";
+
+/** One landing-lock badge (polyforge#249): the shared presentational piece
+ *  the 工单列表 row and the selected job card render, so the two faces show
+ *  the same words and title. */
+export function PolyforgeLandingLockBadge({ lock, t, dim = true }: {
+  lock: PolyforgeLandingLock;
+  t: (key: string, values?: Record<string, string>) => string;
+  dim?: boolean;
+}): ReactNode {
+  const text = landingLockText(lock, t);
+  if (!text) return null;
+  return (
+    <span
+      data-pf-landing-lock=""
+      title={landingLockKeysText(lock)}
+      style={dim
+        ? { color: "var(--text-dim)", flexShrink: 0 }
+        : { color: "var(--text)", fontWeight: 600, fontSize: 11, lineHeight: "14px", overflowWrap: "anywhere" }}
+    >
+      {text}
+    </span>
+  );
+}
 
 /**
  * The Work panel's read-only 工单列表 surface: every mapped
@@ -301,6 +325,7 @@ export function PolyforgeWorkItems({
               <span style={{ fontFamily: "var(--font-mono)", color: "var(--text)", flexShrink: 0 }}>{row.slug}</span>
               <span style={{ color: row.status === "running" ? "var(--accent)" : "var(--text-muted)", flexShrink: 0 }}>{statusLabel(row.status)}</span>
               {row.acceptance_missing && <span style={{ color: "var(--text-dim)", flexShrink: 0 }}>{t("polyforge.workItems.acceptanceMissing")}</span>}
+              {row.landing_lock && <PolyforgeLandingLockBadge lock={row.landing_lock} t={t} />}
               <span style={{ flexShrink: 0 }}>{row.priority ?? "—"}</span>
               <span style={{ flexShrink: 0 }}>{row.bundle_name || "—"}</span>
               <span style={{ marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{row.project ?? "—"}</span>

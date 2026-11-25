@@ -52,7 +52,19 @@ document (`items`, `total`). Human mode: `N work item(s)` + a table
 (SLUG, PROJECT, STATUS, SESSION, PRIORITY, BUNDLE, GOAL). When a queued row waits for an
 unfinished blocker, a WAITING-FOR column (before GOAL) names it (`polyforge#164
 (running)`; a failed or canceled blocker keeps it waiting until the edge
-is removed — `verbs/file.md`, Dependencies). A bundle-bound parent waits
+is removed — `verbs/file.md`, Dependencies).
+
+A ticket waiting for the server landing lock (polyforge#245 epic 3/3)
+shows a LANDING column (before WAITING-FOR and GOAL): `等待合入锁 #N` with
+its 1-based `position` among the live waiters of each lock key, `#1,#3` for
+several keys in the projection's order. The column appears only when some
+row waits. A cached snapshot older than the 15 s window is `stale` and
+keeps its last position marked `（陈旧）`; no readable snapshot is
+`unavailable` and shows no position. The raw field is `landing_lock`
+({state, observed_at, as_of, age_ms, keys:[{repo, branch, position,
+since}]}); it carries only this ticket's queue entries — never the holder,
+a token, a machine id or another ticket. An old reader that has no such
+field keeps its old shape. A bundle-bound parent waits
 for its children the same way: an entry with `via: "child"` renders as
 `polyforge#165 (child, running)` — the shape is `<slug> (child, <status>)`
 — and is released by the child's wrap, or by detaching it (`pf file edit

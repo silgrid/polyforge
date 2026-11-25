@@ -290,6 +290,9 @@ type Driver struct {
 	// no lock guards them.
 	leaseHold    IntervalLease
 	leaseReentry bool
+	// leaseHolds counts the interval's hold cycles this driver made; the
+	// events' requeue_count is one less (memory-only across a restart).
+	leaseHolds int
 }
 
 // New builds a Driver: it resolves paths, loads the workflow graph from
@@ -660,6 +663,7 @@ func (d *Driver) Run(ctx context.Context) error {
 		if heldLease != nil && heldLease.Err() != nil {
 			// Q7: the lease was lost while this dispatch ran. Drop its
 			// result, release and re-queue at the declared enter step.
+			d.emitLeaseLoss(stepID)
 			d.markLeaseReentry()
 			d.releaseLease("lost")
 			d.leaseReentry = true
