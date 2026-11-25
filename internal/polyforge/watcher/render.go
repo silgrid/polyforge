@@ -58,6 +58,9 @@ func FormatOnce(s *protocol.WatchSnapshot, now time.Time, maxEvents int) string 
 		fmt.Fprintf(&b, "holder:     %s\n", safeID(s.HolderMachine))
 	}
 	if line := LeaseProjectionLine(s.LeaseProjection); line != "" {
+		if keys := LeaseKeysText(s.LeaseProjection); keys != "" {
+			line += " — " + keys
+		}
 		fmt.Fprintf(&b, "landing:    %s\n", line)
 	}
 	if s.ProgressError != "" {
@@ -236,8 +239,14 @@ func LeaseProjectionLine(l *api.LeaseProjection) string {
 	case api.LeaseUnavailable:
 		return "锁状态不可用（读取不到锁快照）"
 	case api.LeaseStale:
+		if len(l.Keys) == 0 {
+			return ""
+		}
 		return "等待合入锁 " + landingPositions(l) + "（陈旧）"
 	case api.LeaseWaiting:
+		if len(l.Keys) == 0 {
+			return ""
+		}
 		return "等待合入锁 " + landingPositions(l)
 	}
 	return ""
