@@ -54,6 +54,8 @@ Settings › 权限 is the unified permission page (`components/HarnessPermissio
 - **Display names lead.** `lib/settings-display-names.ts` maps each raw id to its message key — claude's six approval modes, `denyInsteadOfPrompting`, the account write targets (「交互会话」 / 「Cell default」) and a plugin's package name. A page renders the display name first and the raw id as the second line in mono grey (`settings-name-stack` / `settings-secondary-id`); an unknown id keeps the id itself rather than an empty name.
 - **Server errors.** `lib/server-error.ts` splits a `{code, params}` payload (or a bare English string) into a Chinese message key plus the original text, and `SettingsUi`'s `ConfigErrorNotice` renders it as `role="alert"` with that original inside a 「详情」 fold. The settings routes this ticket touched (skills PATCH, MCP, `POST /api/polyforge/config`, the account write) add `code`/`params` beside their unchanged `error` and status (owner 2A); a client throws `responseError(body, status)` (a `ServerError` that keeps them, falling back to `http-<status>`) and shows `serverErrorText(error)`, so `config-cas-409` reads as the conflict line. `codeFromError()` matches `CAS` only as a word. Covered: the Polyforge page, the skills save/switch results, the account write results and MCP's apply/load failures (whose `reason` picks `mcp.reason.<code>`); the other settings components still show the server's words as their main line and are left to a follow-up sweep (owner ruling 2026-11-24).
 
+- **Sub-agents' settings are a sidebar destination (polyforge#271 AC2, Q7 A).** `components/AgentsConfig.tsx` shows 设置 as the list's first item (`data-agents-nav="settings"`, a key separate from a profile's `scope:name`); its detail holds the built-in sub-agent switch, the concurrency field, the description and the reload notice/action that used to be a banner above the list. No profile, or no valid remembered profile, lands on 设置; a valid remembered profile stays selected, and navigating never writes.
+
 ## Polyforge section (pi#122, configuration panel)
 
 Settings › Polyforge is always visible — not `requiresProject`-gated, openable
@@ -349,18 +351,18 @@ claim.
   Claude Code items (skill symlink present/absent, SessionStart hook
   present/absent — no control either way), and the daemon row
   (可达/不可达 + pf's own stderr/不适用 without pf).
-- **The one switch.** The pi package switch renders only when the skill is
-  installed (未安装 shows no toggle — only the state and the install command).
-  It is the section's only switch, and it writes through the existing global
-  path exactly as PluginsConfig's package switch does: `POST /api/plugins`
-  `{action: "enable"|"disable", source, scope: "global", cwd}`. The source is
-  resolved from that listing's join (`scope === "global" &&
-  packageName === "polyforge"`), never from the detect response (which
-  carries no paths). With no project selected the switch renders disabled
-  with visible reason text (the write path needs a `cwd`); it is never a
-  tooltip-only title. Write failures surface as a visible footer status.
-  Nothing in the section edits `cli.toml` or writes Claude Code config; the
-  one install it runs is the install entry below, through its route.
+- **The package card is read-only (polyforge#271 AC2/B2, Q4 A).** It shows
+  pf's package fact as text — 已安装 · 已启用 / 已安装 · 已停用 / 未安装, or
+  状态不可用 when the detection failed — and one 「去插件页管理」 button that
+  calls the section navigation `SettingsPanel` injects (`activateSection
+  ("plugins")`); the Plugins page remains the only enable/disable writer, and
+  Polyforge issues no `/api/plugins` POST. The source is still resolved from
+  the listing's join (`scope === "global" && packageName === "polyforge"`),
+  never from the detect response. With no project selected the button is
+  disabled with the visible reason 「先选择项目目录才能管理插件。」 — it never
+  opens an empty Plugins page. Nothing in the section edits `cli.toml` or
+  writes Claude Code config; the one install it runs is the install entry
+  below, through its route.
 - **Install / update entry** (`components/PolyforgeInstallCard.tsx`,
   `lib/polyforge-install*.ts`, `app/api/polyforge/install/**`). A Host-pane
   card shows the installed pf (`pf --version`), the release channel's latest

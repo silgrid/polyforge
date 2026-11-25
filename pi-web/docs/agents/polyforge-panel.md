@@ -2722,7 +2722,7 @@ are `@container` queries on `.settings-polyforge`, so a narrow detail pane
 on a desktop window gets them too.
 
 - **Host pane** — the one home of the Host-level settings: the machine
-  status, the Host region (below), the package switch, the Jobs card
+  status, the Host region (below), the read-only package card (its only control links to the Plugins page, polyforge#271), the Jobs card
   preferences, the config history and the install command.
 - **A Cell's pane** — its head (`data-pf-cell`: name and state, normalized
   server, running / pending / effective ceiling, the optional Cell ceiling,

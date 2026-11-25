@@ -374,7 +374,7 @@ export function SettingsPanel({
           {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} />)}
           {/* No project needed: the global mcp.json is listed alone, and a project adds its group. */}
           {sectionHost("mcp", <McpConfig embedded key={cwd ?? ""} cwd={cwd} trust={projectTrust} onTrustProject={onOpenTrustDialog} onProjectTrustChanged={onProjectTrustChanged} onClose={onClose} />)}
-          {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} active={section === "polyforge"} />)}
+          {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} active={section === "polyforge"} onOpenPlugins={() => activateSection("plugins")} />)}
           </ConfigDetailNavigationContext.Provider>
         </main>
       </div>

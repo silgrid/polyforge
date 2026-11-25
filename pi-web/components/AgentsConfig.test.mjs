@@ -101,7 +101,8 @@ test("agents settings is a sidebar destination", async () => {
     cwd: "/tmp/project", onClose: () => {}, embedded: true,
   })));
   assert.match(page, /data-agents-nav="settings"/, "the sidebar carries its own settings item");
-  assert.ok(!page.includes("agents-feature-setting"), "the top banner is gone");
+  assert.ok(page.indexOf("agents-feature-setting") > page.indexOf("config-split-view"), "the settings block lives inside the sidebar detail, not above the split view");
+  assert.match(page, /data-agents-settings-pane=""/, "the selected settings detail renders the block");
   assert.match(page, /data-agents-nav="settings"[^>]*aria-current="page"|aria-current="page"[^>]*data-agents-nav="settings"/, "the settings item is the default selection when no profile is valid");
 
   const settings = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(AgentFeatureSettings, {
@@ -109,7 +110,7 @@ test("agents settings is a sidebar destination", async () => {
     reloadNeeded: true, reloading: false, sessionId: "s1",
     onToggle: () => {}, onMaxConcurrent: () => {}, onReload: () => {},
   })));
-  assert.match(settings, /type="checkbox"/, "the built-in sub-agent switch lives in the settings pane");
+  assert.match(settings, /role="switch"/, "the built-in sub-agent switch lives in the settings pane");
   assert.match(settings, /type="number"/, "the concurrency field lives in the settings pane");
   assert.match(settings, /data-agents-reload/, "the reload notice and action move with the settings");
 });

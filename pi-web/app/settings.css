@@ -3139,6 +3139,7 @@ select.mcp-add-input {
 .polyforge-config-row.is-readonly .polyforge-config-empty { color: var(--text-muted); }
 .polyforge-config-daemon { color: var(--text-muted); overflow-wrap: break-word; }
 .polyforge-config-empty { color: var(--text-dim); }
+.polyforge-config-package-status { color: var(--text-muted); font-size: 12px; font-weight: 500; }
 .polyforge-config-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .polyforge-config-chip {
   display: inline-flex;

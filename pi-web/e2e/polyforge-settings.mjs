@@ -391,32 +391,23 @@ try {
     }
     assert.equal((await get("/api/polyforge/detect")).json?.pfPresent, true, "non-force detect must answer too");
   });
-  // S10 — the pi package switch: exactly one switch (the Claude rows are
-  // read-only), one POST through the existing /api/plugins global write path,
-  // an automatic re-detect, and no other write anywhere.
-  await checkPage(T.S10, "the pi package switch", {}, async (page) => {
+  // S10 — the package card is read-only (polyforge#271 AC2/B2): it shows the
+  // package facts, its one control goes to the Plugins page, and Polyforge
+  // issues no package write.
+  await checkPage(T.S10, "the pi package card is read-only and links to Plugins", {}, async (page) => {
     resetFixtures();
     detectHits.length = 0;
     const cliBefore = readFileSync(cliToml, "utf8");
     const claudeBefore = readFileSync(claudeSettings, "utf8");
     const dialog = await openSettings(page);
     await pfTab(dialog).click();
-    await page.waitForRequest((request) => new URL(request.url()).pathname === "/api/polyforge/detect", { timeout: 15_000 }).catch(() => {});
-    // polyforge#240 adds a second switch (the browser-notification card), so
-    // the scenario names the package switch instead of counting the section.
-    const switches = dialog.locator("main").getByRole("switch", { name: "Polyforge package (global)" });
-    assert.equal(await switches.count(), 1, "the section offers the pi package switch (the Claude rows are read-only)");
-    assert.equal(await dialog.locator("main").getByRole("switch", { name: "Notify me about owner decisions" }).count(), 1,
-      "polyforge#240: the browser-notification switch is the section's own second switch");
-    // The switch renders as soon as detection reports the package, but it stays
-    // disabled until the section's package read (/api/plugins) answers. That
-    // first read is a cold route compile, which a loaded host can push past the
-    // 30 s action default; the one click then times out (full-1
-    // S10). Wait for the enabled switch under the suite's warm-open ceiling,
-    // before the write audit starts, so background session-lease writes during
-    // the wait are not counted against the toggle.
-    for (const deadline = Date.now() + NAV_MS; Date.now() < deadline && !(await switches.first().isEnabled().catch(() => false));) await delay(100);
-    const before = detectHits.length;
+    const card = dialog.locator("main [data-package-status]").first();
+    await card.waitFor({ state: "visible", timeout: COLD_MS });
+    for (const deadline = Date.now() + NAV_MS; Date.now() < deadline && (await card.getAttribute("data-package-status")) === "pending";) await delay(100);
+    assert.notEqual(await card.getAttribute("data-package-status"), "pending", "the package status settles");
+    assert.equal(await dialog.locator("main").getByRole("switch", { name: "Polyforge package (global)" }).count(), 0,
+      "the package switch is gone (the Plugins page is the write path)");
+    assert.match(await card.innerText(), /installed/, "the card shows the package fact as text");
     const posts = [];
     const otherWrites = [];
     page.on("request", (request) => {
@@ -425,19 +416,15 @@ try {
       const entry = { path: url.pathname, body: request.postData() ?? "" };
       (url.pathname === "/api/plugins" ? posts : otherWrites).push(entry);
     });
-    await switches.first().click();
-    await delay(4000);
-    assert.equal(posts.length, 1, `the switch issued ${posts.length} POSTs (want exactly one /api/plugins write)`);
-    assert.equal(posts[0]?.path, "/api/plugins");
-    const body = JSON.parse(posts[0]?.body ?? "{}");
-    assert.equal(body.action, "disable");
-    assert.equal(body.scope, "global");
-    assert.equal(body.source, clone);
-    assert.equal(body.cwd, project);
+    await dialog.locator("main").getByRole("button", { name: "Manage on the Plugins page" }).click();
+    await dialog.getByRole("button", { name: "Plugins", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await delay(1200);
+    assert.equal(posts.length, 0, `browsing the package card issued ${posts.length} /api/plugins writes`);
     assert.deepEqual(otherWrites, [], "a write path other than /api/plugins was used");
-    assert.ok(detectHits.length > before, "detection did not re-run automatically after the toggle");
     assert.equal(readFileSync(cliToml, "utf8"), cliBefore, "cli.toml was written");
     assert.equal(readFileSync(claudeSettings, "utf8"), claudeBefore, "Claude Code config was written");
+    await pfTab(dialog).click();
+    await dialog.locator("main [data-package-status]").first().waitFor({ state: "visible", timeout: ACTION_MS });
   });
   // S11 — cadence: one detect per open, no polling, and the manual re-detect
   // control bypasses the 60 s presence cache (the stub version flips within the

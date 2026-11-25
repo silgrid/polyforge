@@ -21,6 +21,7 @@ import {
   ConfigDetailHeader,
   ConfigDetailHeaderInfo,
   ConfigDetailStack,
+  ConfigDetailTitle,
   ConfigEmptyState,
   ConfigField,
   ConfigFooter,
@@ -43,6 +44,8 @@ import { ModelSelector } from "./ModelSelector";
 import { projectTrustReloadKey } from "./settings-ui-helpers";
 
 const TOOL_OPTIONS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+/** 侧栏的「设置」项：与 profile 的 `scope:name` 键分开命名（polyforge#271 Q7 A）。 */
+const AGENT_SETTINGS_SELECTION = "__subagent-settings__";
 const THINKING_OPTIONS = ["", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 type EditableProfile = Omit<SubagentProfile, "scope" | "filePath">;
@@ -207,6 +210,65 @@ export function AgentDetailActions({
   );
 }
 
+/** 内置子代理设置（polyforge#271 AC2）：原先顶部 banner 的开关、并发与
+ *  reload 提示搬进侧栏「设置」选中后的详情；纯展示，写入仍由页面回调做。 */
+export function AgentFeatureSettings({ builtInEnabled, maxConcurrent, settingsLoading, settingsSaving, reloadNeeded, reloading, sessionId, onToggle, onMaxConcurrent, onReload }: {
+  builtInEnabled: boolean;
+  maxConcurrent: number;
+  settingsLoading: boolean;
+  settingsSaving: boolean;
+  reloadNeeded: boolean;
+  reloading: boolean;
+  sessionId?: string | null;
+  onToggle: (enabled: boolean) => void;
+  onMaxConcurrent: (value: number) => void;
+  onReload: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <ConfigDetailStack data-agents-settings-pane="">
+      <ConfigDetailHeader>
+        <ConfigDetailHeaderInfo>
+          <ConfigDetailTitle>{t("agents.settingsNav")}</ConfigDetailTitle>
+        </ConfigDetailHeaderInfo>
+      </ConfigDetailHeader>
+      <div className="agents-feature-setting">
+        <div className="agents-feature-copy">
+          <strong>{t("agents.builtInTitle")}</strong>
+          <span>{t("agents.builtInDescription")}</span>
+          {reloadNeeded && <span role="status" className="agents-feature-reload-notice">{t("agents.reloadRequired")}</span>}
+        </div>
+        <div className="agents-feature-actions">
+          {reloadNeeded && sessionId && (
+            <ConfigButton size="small" data-agents-reload="" onClick={onReload} disabled={reloading || settingsSaving}>
+              {reloading ? t("agents.reloading") : t("agents.reloadSession")}
+            </ConfigButton>
+          )}
+          <label className="agents-concurrency-control" title={t("agents.maxConcurrentDescription")}>
+            <span>{t("agents.maxConcurrent")}</span>
+            <input
+              aria-label={t("agents.maxConcurrent")}
+              type="number"
+              min={1}
+              max={32}
+              defaultValue={maxConcurrent}
+              disabled={settingsLoading || settingsSaving}
+              onBlur={(event) => onMaxConcurrent(Number(event.target.value))}
+            />
+          </label>
+          <ConfigSwitch
+            checked={builtInEnabled}
+            disabled={settingsLoading || reloading}
+            loading={settingsSaving}
+            label={t("agents.builtInTitle")}
+            onChange={onToggle}
+          />
+        </div>
+      </div>
+    </ConfigDetailStack>
+  );
+}
+
 export function AgentsConfig({
   cwd,
   sessionId = null,
@@ -232,7 +294,7 @@ export function AgentsConfig({
   const [modelOptions, setModelOptions] = useState<ModelsData["modelList"]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelsError, setModelsError] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(() => getLastSettingsSelection("agents", cwd));
+  const [selectedKey, setSelectedKey] = useState<string | null>(() => getLastSettingsSelection("agents", cwd) ?? AGENT_SETTINGS_SELECTION);
   const [draft, setDraft] = useState<EditableProfile>(EMPTY_PROFILE);
   // The profile as last read or saved: the footer's dirty count is the draft
   // against it (polyforge#259 T4 AC1).
@@ -272,12 +334,8 @@ export function AgentsConfig({
       const next = data.profiles ?? [];
       setProfiles(next);
       const rememberedKey = preferredKey ?? getLastSettingsSelection("agents", cwd);
-      const chosen = next.find((profile) => profileKey(profile) === rememberedKey)
-        ?? next.find((profile) => profile.scope === "project")
-        ?? next.find((profile) => profile.scope === "global")
-        ?? next[0]
-        ?? null;
-      setSelectedKey(chosen ? profileKey(chosen) : null);
+      const chosen = rememberedKey ? next.find((profile) => profileKey(profile) === rememberedKey) ?? null : null;
+      setSelectedKey(chosen ? profileKey(chosen) : AGENT_SETTINGS_SELECTION);
       if (chosen) {
         setDraft(editableProfile(chosen));
         setBaseDraft(editableProfile(chosen));
@@ -358,6 +416,12 @@ export function AgentsConfig({
     setBaseDraft(editableProfile(profile));
     setMode(isWritableScope(profile.scope) ? "edit" : "view");
     if (isWritableScope(profile.scope)) setTargetScope(profile.scope);
+    setError(null);
+  };
+
+  const selectSettings = () => {
+    setSelectedKey(AGENT_SETTINGS_SELECTION);
+    setMode("view");
     setError(null);
   };
 
@@ -552,43 +616,16 @@ export function AgentsConfig({
 
   return (
     <ConfigPanelShell embedded={embedded} title={t("common.agents")} subtitle={shortenPath(cwd)} closeLabel={t("agents.close")} onClose={onClose}>
-      <div className="agents-feature-setting">
-        <div className="agents-feature-copy">
-          <strong>{t("agents.builtInTitle")}</strong>
-          <span>{t("agents.builtInDescription")}</span>
-          {reloadNeeded && <span role="status" className="agents-feature-reload-notice">{t("agents.reloadRequired")}</span>}
-        </div>
-        <div className="agents-feature-actions">
-          {reloadNeeded && sessionId && (
-            <ConfigButton size="small" onClick={() => void reloadSession()} disabled={reloading || settingsSaving}>
-              {reloading ? t("agents.reloading") : t("agents.reloadSession")}
-            </ConfigButton>
-          )}
-          <label className="agents-concurrency-control" title={t("agents.maxConcurrentDescription")}>
-            <span>{t("agents.maxConcurrent")}</span>
-            <input
-              aria-label={t("agents.maxConcurrent")}
-              type="number"
-              min={1}
-              max={32}
-              value={maxConcurrent}
-              disabled={settingsLoading || settingsSaving}
-              onChange={(event) => setMaxConcurrent(Number(event.target.value))}
-              onBlur={() => void updateMaxConcurrent(maxConcurrent)}
-            />
-          </label>
-          <ConfigSwitch
-            checked={builtInEnabled}
-            disabled={settingsLoading || reloading}
-            loading={settingsSaving}
-            label={t("agents.builtInTitle")}
-            onChange={(enabled) => void toggleBuiltInSubagents(enabled)}
-          />
-        </div>
-      </div>
       <ConfigSplitView>
         <ConfigSidebar>
           <ConfigSidebarList>
+              <ConfigSidebarItem
+                data-agents-nav="settings"
+                active={selectedKey === AGENT_SETTINGS_SELECTION}
+                onClick={selectSettings}
+              >
+                <ConfigSidebarText className="is-grow">{t("agents.settingsNav")}</ConfigSidebarText>
+              </ConfigSidebarItem>
               {loading ? (
                 <div style={{ padding: 10, color: "var(--text-dim)", fontSize: 12 }}>{t("agents.loading")}</div>
               ) : (["project", "global", "workspace", "builtin"] as const).map((scope) => {
@@ -625,7 +662,20 @@ export function AgentsConfig({
 
         <ConfigDetail>
           <ConfigDetailStack className="is-fill">
-              {!selected && !creating ? (
+              {selectedKey === AGENT_SETTINGS_SELECTION ? (
+                <AgentFeatureSettings
+                  builtInEnabled={builtInEnabled}
+                  maxConcurrent={maxConcurrent}
+                  settingsLoading={settingsLoading}
+                  settingsSaving={settingsSaving}
+                  reloadNeeded={reloadNeeded}
+                  reloading={reloading}
+                  sessionId={sessionId}
+                  onToggle={(enabled) => void toggleBuiltInSubagents(enabled)}
+                  onMaxConcurrent={(value) => void updateMaxConcurrent(value)}
+                  onReload={() => void reloadSession()}
+                />
+              ) : !selected && !creating ? (
                 <ConfigEmptyState>{t("agents.empty")}</ConfigEmptyState>
               ) : (
                 <ConfigDetailStack>
