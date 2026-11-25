@@ -687,32 +687,35 @@ export function AddProviderPicker({
  *  to sign in, sign out and enter API keys. `rows` is the connected list; the
  *  add picker is the only way to reach an unconnected provider (polyforge#271
  *  B3/Q2 A). Presentational, so its three states render without effects. */
-export function ProviderAccountView({ rows, loading, readError, onRetry, onAdd, onSelect, onOpenModels }: {
+export function ProviderAccountView({ rows, loading, readError, hasData = false, onRetry, onAdd, onSelect, onOpenModels }: {
   rows: AccountProviderRows;
   loading: boolean;
   readError: string | null;
+  /** A previous good read exists; a refresh keeps its rows (polyforge#271 r2 #4). */
+  hasData?: boolean;
   onRetry: () => void;
   onAdd: () => void;
   onSelect: (row: { id: string; kind: "oauth" | "apikey" }) => void;
   onOpenModels?: () => void;
 }) {
   const { t } = useI18n();
+  const showRows = hasData || (!loading && !readError);
   return (
     <div className="pi-account-rows" data-account-providers="">
-      {loading && (
+      {loading && !hasData && (
         <div data-account-providers-loading="">
           <ConfigSkeleton label={t("i18n.loading")} lines={3} />
         </div>
       )}
-      {!loading && readError && (
+      {readError && (
         <div data-account-providers-retry="">
           <ConfigErrorNotice
-            summary={t(readError)}
+            summary={hasData ? t("settings.accountStale") : t(readError)}
             action={<ConfigButton size="small" onClick={onRetry}>{t("i18n.retry")}</ConfigButton>}
           />
         </div>
       )}
-      {!loading && !readError && (
+      {showRows && (
         <>
           {rows.connected.map((row) => (
             <button
@@ -769,6 +772,7 @@ export function PiAccountLogin({ onOpenModels }: { onOpenModels?: () => void }) 
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   const [loading, setLoading] = useState(true);
   const [readError, setReadError] = useState<string | null>(null);
+  const [hasData, setHasData] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selection, setSelection] = useState<{ kind: "oauth" | "apikey"; id: string } | null>(null);
 
@@ -783,6 +787,7 @@ export function PiAccountLogin({ onOpenModels }: { onOpenModels?: () => void }) 
         }
         setOauthProviders(d.oauthProviders);
         setApiKeyProviders(d.apiKeyProviders);
+        setHasData(true);
       })
       .catch(() => { setReadError("settings.accountReadFailed"); })
       .finally(() => setLoading(false));
@@ -810,6 +815,7 @@ export function PiAccountLogin({ onOpenModels }: { onOpenModels?: () => void }) 
           rows={rows}
           loading={loading}
           readError={readError}
+          hasData={hasData}
           onRetry={refresh}
           onAdd={() => setPickerOpen(true)}
           onSelect={(row) => setSelection({ kind: row.kind, id: row.id })}

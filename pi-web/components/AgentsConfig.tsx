@@ -46,6 +46,13 @@ import { projectTrustReloadKey } from "./settings-ui-helpers";
 const TOOL_OPTIONS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 /** 侧栏的「设置」项：与 profile 的 `scope:name` 键分开命名（polyforge#271 Q7 A）。 */
 const AGENT_SETTINGS_SELECTION = "__subagent-settings__";
+
+/** 并发输入框失焦时是否要写：只有合法且真的改变的值才提交，读回值未变不写（polyforge#271 r2 #2）。 */
+export function concurrencyCommit(raw: string, current: number): number | null {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 32 || value === current) return null;
+  return value;
+}
 const THINKING_OPTIONS = ["", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 type EditableProfile = Omit<SubagentProfile, "scope" | "filePath">;
@@ -251,9 +258,13 @@ export function AgentFeatureSettings({ builtInEnabled, maxConcurrent, settingsLo
               type="number"
               min={1}
               max={32}
+              key={maxConcurrent}
               defaultValue={maxConcurrent}
               disabled={settingsLoading || settingsSaving}
-              onBlur={(event) => onMaxConcurrent(Number(event.target.value))}
+              onBlur={(event) => {
+                const next = concurrencyCommit(event.target.value, maxConcurrent);
+                if (next !== null) onMaxConcurrent(next);
+              }}
             />
           </label>
           <ConfigSwitch

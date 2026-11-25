@@ -256,7 +256,7 @@ test("model page failure renders an alert with a working retry", async () => {
   const { readView } = await jiti.import("@/lib/settings-read-states.ts");
   assert.equal(readView({ loading: true, error: false, count: 1 }).kind, "ready", "a refresh with rows keeps them on screen");
   let retries = 0;
-  const tree = ModelPageError({ summary: "The read failed.", onRetry: () => { retries += 1; } });
+  const tree = ModelPageError({ summary: "The read failed.", onRetry: () => { retries += 1; }, t: (key) => key });
   const walk = (node, out = []) => {
     if (Array.isArray(node)) { for (const child of node) walk(child, out); return out; }
     if (!node || typeof node !== "object" || !("props" in node)) return out;

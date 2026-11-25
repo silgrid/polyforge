@@ -154,7 +154,7 @@ test("provider refresh keeps the last good rows", async () => {
   assert.match(stale, /data-connected-provider="alpha"/, "a failed refresh hid the last good rows");
   assert.match(stale, /data-connected-provider="gamma"/);
   assert.match(stale, /role="alert"/, "the failure is announced beside the rows");
-  assert.ok(stale.includes("settings.accountStale"), "the rows are named as the last good read");
+  assert.ok(stale.includes("The read failed; the values below are the last good read."), "the rows are named as the last good read");
   assert.ok(!stale.includes("data-config-skeleton"), "a failed refresh with data is not a skeleton");
 
   const refreshing = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, { ...args, loading: true, readError: null, hasData: true })));

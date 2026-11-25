@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { buildModelRows, type ModelViewInput, type ModelViewRow } from "@/lib/harness/model-view";
 import type { ModelPayload } from "@/lib/harness/concepts";
@@ -222,6 +222,16 @@ export function ModelEnabledBulk({ enabled }: { enabled: EnabledModelsController
     <ConfigButton size="small" disabled={!editable || !provider || busy}
       onClick={() => { if (provider) enabled.setProvider(provider, false); }}>{t("models.disableAll")}</ConfigButton>
   </div>;
+}
+
+/** 模型页读取失败时的页顶状态（polyforge#271 AC1/A3）：alert + 重试，纯展示。 */
+export function ModelPageError({ summary, onRetry, t }: { summary: ReactNode; onRetry: () => void; t: (key: string) => string }) {
+  return (
+    <ConfigErrorNotice
+      summary={summary}
+      action={<ConfigButton size="small" data-model-retry="" onClick={onRetry}>{t("i18n.retry")}</ConfigButton>}
+    />
+  );
 }
 
 /** 模型集合成功读回但为空时的空状态（polyforge#271 AC1/A3）：点明缺什么，
@@ -461,10 +471,15 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   return (
     <div className="settings-section settings-models" data-model-page="unified">
       {(error || saveError || enabled.failure) && (
-        <ConfigErrorNotice
-          summary={saveError ?? error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}
-          action={error ? <ConfigButton size="small" data-model-retry="" onClick={() => setRevision((previous) => previous + 1)}>{t("i18n.retry")}</ConfigButton> : undefined}
-        />
+        error ? (
+          <ModelPageError
+            summary={saveError ?? error}
+            onRetry={() => setRevision((previous) => previous + 1)}
+            t={t}
+          />
+        ) : (
+          <ConfigErrorNotice summary={saveError ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")} />
+        )
       )}
       <ConfigSplitView>
         <ModelPageNav page={page} onSelect={changePage} />

@@ -177,8 +177,8 @@ removed or conditionally hidden; parts are folded:
   rollback renders its result under its own row/entry (keyed by `item.key` /
   `entry.id`; a connection row's notice rollback under that row), an error
   with `role="alert"`; copy feedback renders in the
-  install block. The footer keeps page-level status only: detection, the
-  package switch and Reload. The write request shapes are unchanged.
+  install block. The footer keeps page-level status only: detection and
+  Reload. The write request shapes are unchanged.
 - **Locks.** A region holding an unsaved draft, a pending connection-key
   confirmation or a row error (a cli.toml zone's advanced keys are writable;
   the history block by a failed rollback) renders open
@@ -243,7 +243,7 @@ table membership, so the `[daemon]` zone uses a copy of pf's nine `[daemon]` key
 names (a key pf adds later shows in the top-level zone until the list is
 extended — cosmetic), a `section` item is a workspace mapping, a `summarize.`
 key is summarize, and any other key stays in the top-level zone, never dropped.
-The detection block and the package switch are cards too, and the detection
+The detection block and the read-only package card are cards too, and the detection
 rows use the same key-column width as the configuration cards.
 
 Every card and zone declares only its effective columns:

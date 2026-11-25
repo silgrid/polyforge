@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useId, useRef } from "react";
+import { useState, useEffect, useCallback, useId, useRef, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { ModelCatalogPreset, ModelCatalogRecommendation } from "@/lib/model-catalog";
 import type { DiscoveredModel } from "@/lib/model-discovery";
@@ -1390,6 +1390,41 @@ export function ModelDetail({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+/** The Providers subpage's read states (polyforge#271 AC1/A4): skeleton with
+ *  no value, 「没有 Provider」 with Add on a successful empty file, and an alert
+ *  with a retry on a failed read. Hook-free so each state renders alone. */
+export function ProvidersReadStates({ loading, loadError, providerCount, t, onRetry, onAdd, children }: {
+  loading: boolean;
+  loadError: string | null;
+  providerCount: number;
+  t: (key: string) => string;
+  onRetry: () => void;
+  onAdd: () => void;
+  children?: ReactNode;
+}) {
+  if (loading) {
+    return <div data-models-config-loading=""><ConfigSkeleton label={t("i18n.loading")} lines={4} /></div>;
+  }
+  if (loadError) {
+    return (
+      <ConfigErrorNotice
+        summary={t("models.configReadFailed")}
+        detailsLabel={t("i18n.detailsLabel")}
+        details={loadError}
+        action={<ConfigButton size="small" data-models-config-retry="" onClick={onRetry}>{t("i18n.retry")}</ConfigButton>}
+      />
+    );
+  }
+  if (providerCount === 0) {
+    return (
+      <ConfigEmptyState action={<ConfigButton data-models-config-add="" onClick={onAdd}>{t("models.configAddFirstProvider")}</ConfigButton>}>
+        {t("models.configNoProviders")} {t("models.configNoProvidersHint")}
+      </ConfigEmptyState>
+    );
+  }
+  return <>{children}</>;
+}
+
 export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount, enabledModels }: {
   onClose: () => void; embedded?: boolean; cwd?: string | null; onOpenAccount?: () => void;
   /** The page's one shared controller — the table and this editor must never
@@ -1728,21 +1763,17 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
       ? (selection.type === "provider" ? selection.name : selection.providerName) : null;
     const customEntry = customProvider ? config.providers?.[customProvider] : undefined;
     const retry = () => setReload((previous) => previous + 1);
-    const body = loading ? (
-      <div data-models-config-loading=""><ConfigSkeleton label={t("i18n.loading")} lines={4} /></div>
-    ) : loadError ? (
-      <ConfigErrorNotice
-        summary={t("models.configReadFailed")}
-        detailsLabel={t("i18n.detailsLabel")}
-        details={loadError}
-        action={<ConfigButton size="small" data-models-config-retry="" onClick={retry}>{t("i18n.retry")}</ConfigButton>}
-      />
-    ) : options.length === 0 ? (
-      <ConfigEmptyState action={<ConfigButton data-models-config-add="" onClick={addProvider}>{t("models.configAddFirstProvider")}</ConfigButton>}>
-        {t("models.configNoProviders")} {t("models.configNoProvidersHint")}
-      </ConfigEmptyState>
-    ) : detailContent ?? (
-      <ConfigEmptyState>{t("i18n.selectProviderModel")}</ConfigEmptyState>
+    const body = (
+      <ProvidersReadStates
+        loading={loading}
+        loadError={loadError}
+        providerCount={options.length}
+        t={t}
+        onRetry={retry}
+        onAdd={addProvider}
+      >
+        {detailContent ?? <ConfigEmptyState>{t("i18n.selectProviderModel")}</ConfigEmptyState>}
+      </ProvidersReadStates>
     );
     return (
       <div className="config-panel-root is-embedded" data-models-page="providers" data-provider-page="flat">

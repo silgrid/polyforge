@@ -12,7 +12,8 @@ export interface ReadView {
 }
 
 export function readView({ loading, error, count }: { loading: boolean; error: boolean; count: number }): ReadView {
-  if (loading) return { kind: "loading", staleError: false };
+  // A refresh keeps the rows it already has: a skeleton is for a read with no value yet.
+  if (loading && count === 0) return { kind: "loading", staleError: false };
   if (error && count === 0) return { kind: "error", staleError: false };
   if (error) return { kind: "ready", staleError: true };
   if (count === 0) return { kind: "empty", staleError: false };
