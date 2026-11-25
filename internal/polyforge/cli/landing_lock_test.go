@@ -52,6 +52,15 @@ func TestQueueLandingLock(t *testing.T) {
 		t.Fatalf("stale row:\n%s", b.String())
 	}
 
+	// A stale snapshot with no key is no position at all: it must not show
+	// a fabricated #? wait (Q1 fresh-none evidence).
+	b.Reset()
+	renderWITable(&b, []WIView{{WorkItem: api.WorkItem{Slug: "alpha#6", Status: "running",
+		LeaseProjection: &api.LeaseProjection{State: api.LeaseStale, AgeMS: 20000}}}})
+	if strings.Contains(b.String(), "等待合入锁") || strings.Contains(b.String(), "LANDING") {
+		t.Fatalf("a keyless stale row shows a fabricated wait:\n%s", b.String())
+	}
+
 	// No projection keeps the pre-#249 table exactly: no LANDING header.
 	b.Reset()
 	renderWITable(&b, []WIView{{WorkItem: api.WorkItem{Slug: "alpha#5", Status: "queued"}}})

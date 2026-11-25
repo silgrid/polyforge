@@ -25,6 +25,9 @@ func TestLandingLockRender(t *testing.T) {
 	if keys := LeaseKeysText(snap.LeaseProjection); keys != "github.com/o/app (epic/245)" {
 		t.Fatalf("keys = %q", keys)
 	}
+	if !strings.Contains(out, "github.com/o/app (epic/245)") {
+		t.Fatalf("the watch line must carry the lock key (Q11):\n%s", out)
+	}
 
 	snap.LeaseProjection.State = api.LeaseStale
 	snap.LeaseProjection.AgeMS = 20000
