@@ -1243,3 +1243,32 @@ test("a row's refused write with no body reads as the forbidden line in Chinese"
   assert.equal(outside, "服务端拒绝了这次改动，原文在「详情」里。");
   assert.ok(fold !== null && fold.includes("HTTP 403"), "the status line is not kept for the fold");
 });
+
+// polyforge#271 AC2 (B2, Q4 A): the package card is read-only and links to the
+// Plugins page; it never issues an /api/plugins write. Without a cwd the link
+// is disabled with a readable reason, and a failed detection is its own status,
+// never a fake "not installed".
+test("package status never writes and management navigates", async () => {
+  const { PackageStatusCard } = await jiti.import("./PolyforgeConfig.tsx");
+  const { renderToStaticMarkup } = await jiti.import("react-dom/server");
+  const { I18nProvider } = await jiti.import("@/hooks/useI18n");
+  const h = React.createElement;
+  const render = (props) => renderToStaticMarkup(h(I18nProvider, null, h(PackageStatusCard, {
+    onManage: () => {}, cwd: "/tmp/project", ...props,
+  })));
+  for (const [status, text] of [["enabled", "installed · enabled"], ["disabled", "installed · disabled"], ["missing", "not installed"]]) {
+    const html = render({ status });
+    assert.ok(html.includes(text), `${status} is shown as its own fact`);
+    assert.ok(!html.includes('role="switch"'), "the card offers no package switch");
+    assert.match(html, /data-package-manage=""/, "the card links to the Plugins page");
+    assert.ok(html.includes("Manage on the Plugins page"));
+  }
+  const noCwd = render({ status: "enabled", cwd: null });
+  assert.match(noCwd, /data-package-manage=""[^>]*disabled/);
+  assert.ok(noCwd.includes("Choose a project folder before you manage plugins."));
+
+  const failed = render({ status: "unknown" });
+  assert.ok(failed.includes("Status unavailable"), "a failed detection is not 'not installed'");
+  assert.ok(!failed.includes("not installed"));
+  assert.ok(render({ status: "unknown" }).includes("settings.packageUnknownHint") === false, "the hint is localized text, not a key");
+});

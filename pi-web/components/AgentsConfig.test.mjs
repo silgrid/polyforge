@@ -90,3 +90,26 @@ test("a subagent profile's deletion is behind the detail header's ⋯, with no b
   assert.doesNotMatch(html, /<button[^>]*>\s*Delete\s*<\/button>/);
   assert.doesNotMatch(html, /config-button-danger/);
 });
+
+// polyforge#271 AC2 (B1, Q7 A): the built-in sub-agent settings are a sidebar
+// destination, not a banner above the list; the profile editor is unchanged and
+// a missing profile still opens the settings pane. Navigating there sends no
+// write — the pane's switch and concurrency field are the only writers.
+test("agents settings is a sidebar destination", async () => {
+  const { AgentFeatureSettings } = await jiti.import("./AgentsConfig.tsx");
+  const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement((await jiti.import("./AgentsConfig.tsx")).AgentsConfig, {
+    cwd: "/tmp/project", onClose: () => {}, embedded: true,
+  })));
+  assert.match(page, /data-agents-nav="settings"/, "the sidebar carries its own settings item");
+  assert.ok(!page.includes("agents-feature-setting"), "the top banner is gone");
+  assert.match(page, /data-agents-nav="settings"[^>]*aria-current="page"|aria-current="page"[^>]*data-agents-nav="settings"/, "the settings item is the default selection when no profile is valid");
+
+  const settings = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(AgentFeatureSettings, {
+    builtInEnabled: true, maxConcurrent: 4, settingsLoading: false, settingsSaving: false,
+    reloadNeeded: true, reloading: false, sessionId: "s1",
+    onToggle: () => {}, onMaxConcurrent: () => {}, onReload: () => {},
+  })));
+  assert.match(settings, /type="checkbox"/, "the built-in sub-agent switch lives in the settings pane");
+  assert.match(settings, /type="number"/, "the concurrency field lives in the settings pane");
+  assert.match(settings, /data-agents-reload/, "the reload notice and action move with the settings");
+});
