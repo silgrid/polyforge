@@ -267,8 +267,7 @@ func (l *leaseManager) acquire(ctx context.Context, c *leaseCycle, branch, repo 
 	}); err != nil {
 		return fmt.Errorf("the landing lock of %s could not be journaled (no lease is requested): %w", c.wi, err)
 	}
-	position, since := 0, l.now()
-	announced := false
+	position := 0
 	for {
 		g, err := l.hub.AcquireLease(leaseKind, api.LeaseAcquire{
 			Repo: repo, Branch: branch, RequestID: rid, WorkItem: c.wi,
@@ -279,13 +278,17 @@ func (l *leaseManager) acquire(ctx context.Context, c *leaseCycle, branch, repo 
 		}
 		switch g.Status {
 		case coreStatusGranted:
-			h := &leaseHeld{repo: repo, requestID: rid, key: g.Key, token: g.Token,
-				position: position, since: since}
-			if announced {
-				h.queuedMS = l.now().Sub(since).Milliseconds()
-			} else {
-				h.since = time.Time{}
+			// Q15: the grant's server stamps are the event facts. The server
+			// since is HeldSince - QueuedMS; a zero QueuedMS is an immediate
+			// grant at HeldSince. The daemon's wall clock is never used.
+			since := time.Time{}
+			if g.HeldSince != "" {
+				if held, perr := time.Parse(time.RFC3339Nano, g.HeldSince); perr == nil {
+					since = held.Add(-time.Duration(g.QueuedMS) * time.Millisecond)
+				}
 			}
+			h := &leaseHeld{repo: repo, requestID: rid, key: g.Key, token: g.Token,
+				position: position, since: since, queuedMS: g.QueuedMS}
 			c.muSet(h)
 			return nil
 		case coreStatusHeld:
@@ -295,12 +298,11 @@ func (l *leaseManager) acquire(ctx context.Context, c *leaseCycle, branch, repo 
 			_ = l.withdraw(rid, c.wi, g.Key)
 			return fmt.Errorf("the landing lock of %s/%s was granted without its token (a lost answer): the cycle is void and re-queues", repo, branch)
 		case coreStatusQueued:
-			if !announced {
-				announced = true
-				position, since = g.Position, l.now()
-			}
+			position = g.Position
 			if queued != nil {
-				queued(driver.LeaseQueue{Repo: repo, Branch: branch, Position: g.Position, Since: since, Cycle: c.cycle})
+				// The queued answer carries no server time; the granted
+				// answer supplies it. Omit a local stamp (Q15).
+				queued(driver.LeaseQueue{Repo: repo, Branch: branch, Position: g.Position, Cycle: c.cycle})
 			}
 			select {
 			case <-ctx.Done():

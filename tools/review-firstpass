@@ -1285,6 +1285,10 @@ def landing_lock_stats(events):
             elif kind == 'merge_lock_granted':
                 if not cur['queued']:
                     invalid = True
+                # The grant's per-key `since` is the server's stamp; it wins
+                # over a daemon-local queued receipt (Q15).
+                if isinstance(row.get('since'), str) and row.get('since'):
+                    cur['start'] = iso_ts(row['since'])
                 if cur['start'] is None:
                     cur['start'] = iso_ts(body.get('since')) or e.get('at')
                 ms = row.get('queued_ms')
