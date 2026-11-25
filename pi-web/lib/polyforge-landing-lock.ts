@@ -93,6 +93,7 @@ export function landingLockKeysText(lock: PolyforgeLandingLock): string {
 /** The one-line human label; `t` is the panel's i18n translator. */
 export function landingLockText(lock: PolyforgeLandingLock, t: (key: string, values?: Record<string, string>) => string): string {
   const positions = landingLockPositions(lock);
+  if ((lock.state === "waiting" || lock.state === "stale") && positions === "") return "";
   switch (lock.state) {
     case "waiting":
       return t("polyforge.landingLock.waiting", { positions });

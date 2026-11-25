@@ -14,9 +14,7 @@ test("waiting lock visible in the selected job card, from the same watch snapsho
     "only the selected job reads the watch projection");
   const card = source.slice(source.indexOf("const PolyforgeJobCard = memo("), source.indexOf("export function PolyforgePanel("));
   assert.match(card, /landingLock\?: PolyforgeLandingLock;/);
-  assert.match(card, /data-pf-landing-lock=""/);
-  assert.match(card, /landingLockText\(landingLock, t\)/);
-  assert.match(card, /title=\{landingLockKeysText\(landingLock\)\}/);
+  assert.match(card, /<PolyforgeLandingLockBadge lock=\{landingLock\} t=\{t\} dim=\{false\} \/>/);
   for (const [id, text] of Object.entries(locales)) {
     assert.match(text, /"polyforge\.landingLock\.waiting":/, `${id} waiting`);
     assert.match(text, /"polyforge\.landingLock\.stale":/, `${id} stale`);

@@ -26,7 +26,7 @@ import {
   type PolyforgeProgressTone,
 } from "@/lib/polyforge-cards-pure";
 import type { PolyforgeContextUsage, PolyforgeWatchStatus } from "@/lib/polyforge-status";
-import { landingLockKeysText, landingLockText, type PolyforgeLandingLock } from "@/lib/polyforge-landing-lock";
+import type { PolyforgeLandingLock } from "@/lib/polyforge-landing-lock";
 import { POLYFORGE_BLOCK_STYLE } from "@/lib/panel-layout";
 import { usePolyforgePanelPreferences } from "@/hooks/usePolyforgePanelPreferences";
 import type { PolyforgeContact, PolyforgeConversation, PolyforgeMessage, PolyforgeProjectGroup } from "@/lib/polyforge-messages-pure";
@@ -37,7 +37,7 @@ import { PolyforgeMessages, type PolyforgeMessagesProps } from "./PolyforgeMessa
 import { PolyforgeMemory } from "./PolyforgeMemory";
 import { PolyforgeIntegrate } from "./PolyforgeIntegrate";
 import { PolyforgeTasks } from "./PolyforgeTasks";
-import { PolyforgeWorkItems } from "./PolyforgeWorkItems";
+import { PolyforgeLandingLockBadge, PolyforgeWorkItems } from "./PolyforgeWorkItems";
 import { PolyforgeProjects } from "./PolyforgeProjects";
 import { MAX_MARKDOWN_CHARS, SafeMarkdownBody } from "./SafeMarkdownBody";
 import { ThinkingFold, useThinkingExpansion } from "./ThinkingFold";
@@ -1299,11 +1299,7 @@ const PolyforgeJobCard = memo(function PolyforgeJobCard({
           <span style={{ color: "var(--text-dim)", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{verifyQueue.reason}</span>
         </div>
       )}
-      {landingLock && landingLockText(landingLock, t) !== "" && (
-        <div data-pf-landing-lock="" title={landingLockKeysText(landingLock)} style={{ fontSize: 11, lineHeight: "14px", color: "var(--text)", fontWeight: 600, overflowWrap: "anywhere" }}>
-          {landingLockText(landingLock, t)}
-        </div>
-      )}
+      {landingLock && <PolyforgeLandingLockBadge lock={landingLock} t={t} dim={false} />}
       {/* the item's counted entries — the newest one's reason and 忽略. */}
       {!pending && entries.length > 0 && <PolyforgeEntriesDismiss reason={entries[0].phrase ?? attentionCardLabel(entries[0], t)} openIds={entries.map((e) => e.id)} onDismiss={onDismiss} />}
     </div>
