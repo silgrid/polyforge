@@ -141,6 +141,7 @@ test("the concurrency field follows the read-back value through a re-render", as
   const { join } = await import("node:path");
   const { tmpdir } = await import("node:os");
   const fixture = (name) => new URL(`../hooks/__fixtures__/${name}`, import.meta.url).pathname;
+  const lib = (name) => new URL(`../lib/${name}`, import.meta.url).pathname;
   const stubs = join(mkdtempSync(join(tmpdir(), "pf271-agents-stub-")), "stubs.mjs");
   writeFileSync(stubs, `const t = (key) => key;
 const i18n = { t, locale: "en" };
@@ -159,12 +160,16 @@ export const ConfigDetail = inert, ConfigDetailActions = inert, ConfigDetailHead
   const shim = createJiti(import.meta.url, {
     jsx: { runtime: "automatic" },
     moduleCache: false,
-    tsconfigPaths: true,
     alias: {
       react: fixture("react-hook-shim.mjs"),
       "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
       "@/hooks/useI18n": stubs,
       "@/hooks/useIsMobile": stubs,
+      "@/lib/settings-dirty": lib("settings-dirty.ts"),
+      "@/lib/agent-client": lib("agent-client.ts"),
+      "@/lib/display-path": lib("display-path.ts"),
+      "@/lib/subagent-profile-precedence": lib("subagent-profile-precedence.ts"),
+      "@/lib/settings-navigation": lib("settings-navigation.ts"),
       "./SettingsUi": stubs,
       "./ConfigDangerMenu": stubs,
       "./ModelSelector": stubs,
