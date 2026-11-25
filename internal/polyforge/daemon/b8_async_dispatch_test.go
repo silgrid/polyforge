@@ -175,7 +175,9 @@ func TestB8DispatchSlotLimitAndShutdownDuringClone(t *testing.T) {
 // review nit of B-8: a claim dispatched while a long close of another
 // work item (here a wrap whose SessionEnd hangs) holds that work item's
 // lock must not delay the shutdown — it waits for no claim, so the
-// sequence (and its WIP step) proceeds at once.
+// sequence (and its WIP step) proceeds at once. The accepted close
+// itself is drained (polyforge#278): the hub answers once the runtime
+// drain has started, and the whole shutdown still ends nil within 10s.
 func TestB8ShutdownNotDelayedByClaimQueuedOnLock(t *testing.T) {
 	td := newTestDaemon(t, nil)
 	td.submitClaim(t, "wi_b8_live")
@@ -206,6 +208,19 @@ func TestB8ShutdownNotDelayedByClaimQueuedOnLock(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond) // the dispatcher's Start runs meanwhile
+	drainEntered := make(chan struct{})
+	drain := td.drainRuntime
+	td.drainRuntime = func(ctx context.Context) error {
+		close(drainEntered)
+		return drain(ctx)
+	}
+	go func() {
+		select {
+		case <-drainEntered:
+			unblock() // the hub answers the parked close only once the drain waits on it
+		case <-time.After(10 * time.Second):
+		}
+	}()
 	t0 := time.Now()
 	if err := td.Shutdown(context.Background(), DirectShutdownCause()); err != nil {
 		t.Fatalf("shutdown: %v", err)
@@ -213,6 +228,14 @@ func TestB8ShutdownNotDelayedByClaimQueuedOnLock(t *testing.T) {
 	if d := time.Since(t0); d > 10*time.Second {
 		t.Fatalf("shutdown took %s behind a claim queued on the lock", d)
 	}
-	unblock()
-	<-wrapDone
+	select {
+	case <-drainEntered:
+	default:
+		t.Fatal("the shutdown returned without draining the runtime")
+	}
+	select {
+	case <-wrapDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the wrap's Stop call never returned")
+	}
 }

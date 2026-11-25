@@ -840,14 +840,15 @@ func newTestDaemon(t *testing.T, mutate func(*Config)) *testDaemon {
 }
 
 // settleAfterShutdown waits, after d's Shutdown returned, for the writers
-// the shutdown deliberately does not wait for (a hung hub call must not
-// delay it, TestB8ShutdownNotDelayedByClaimQueuedOnLock): a claim still
-// under way (its durable tail, its queue settle) and every work item's
-// last actor operation (a close's state persist, its event). Each of them
-// writes the daemon's data dir and capsules; a test that removes its temp
-// dirs, or starts the next daemon on them, calls this first. (A claim the
-// shutdown deferred keeps its queue entry in flight on disk by design:
-// the claim goroutine, not the entry, is what is waited for.)
+// the shutdown does not wait for: a claim goroutine still under way (its
+// durable tail, its queue settle; the actor work it started is drained by
+// the shutdown, polyforge#278), and every work item's last actor
+// operation after a shutdown whose drain ran out of its deadline (a
+// close's state persist, its event). Each of them writes the daemon's
+// data dir and capsules; a test that removes its temp dirs, or starts the
+// next daemon on them, calls this first. (A claim the shutdown deferred
+// keeps its queue entry in flight on disk by design: the claim goroutine,
+// not the entry, is what is waited for.)
 func settleAfterShutdown(t testing.TB, d *Daemon) {
 	t.Helper()
 	settled := func() bool { return d.claiming.Load() == 0 && d.rt.Idle() }
