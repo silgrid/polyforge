@@ -103,7 +103,7 @@ test("connected providers and add choices stay disjoint", async () => {
   assert.ok(!html.includes("data-connected-provider=\"delta\""), "an unconfigured API key is not in the list");
   assert.match(html, /data-unknown-provider="mystery"/, "an entry without a usable boolean folds as unknown");
   assert.match(html, /Connection status unknown/);
-  assert.ok(html.includes("settings.accountCredentialsNote"), "the page says connected means a credential is stored");
+  assert.ok(html.includes("Connected means a credential is stored here"), "the page says connected means a credential is stored");
   assert.match(html, /data-account-action="open-models"/, "the custom-source scope note navigates to Models");
 
   const picker = renderToStaticMarkup(h(I18nProvider, null, h(AddProviderPicker, {
@@ -116,25 +116,25 @@ test("connected providers and add choices stay disjoint", async () => {
   const empty = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, {
     rows: accountProviderRows([], []), loading: false, readError: null, onRetry: noop, onAdd: noop, onSelect: noop, onOpenModels: noop,
   })));
-  assert.ok(empty.includes("settings.accountProviderNone"), "an empty list names what is missing");
+  assert.ok(empty.includes("No provider is connected"), "an empty list names what is missing");
   assert.match(empty, /data-account-action="add-provider"/, "the empty list offers the add action");
-  assert.ok(!empty.includes("settings.accountProviderSearchNone"), "an empty list is not a search miss");
+  assert.ok(!empty.includes("No provider matches this search"), "an empty list is not a search miss");
 
   const pending = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, {
     rows: accountProviderRows([], []), loading: true, readError: null, onRetry: noop, onAdd: noop, onSelect: noop, onOpenModels: noop,
   })));
   assert.match(pending, /data-config-skeleton/, "the first provider read is a skeleton");
-  assert.ok(!pending.includes("settings.accountProviderNone"), "a pending read is never the empty list");
+  assert.ok(!pending.includes("No provider is connected"), "a pending read is never the empty list");
 
   const failed = renderToStaticMarkup(h(I18nProvider, null, h(ProviderAccountView, {
     rows: accountProviderRows([], []), loading: false, readError: "settings.accountReadFailed", onRetry: noop, onAdd: noop, onSelect: noop, onOpenModels: noop,
   })));
   assert.match(failed, /role="alert"/, "a failed provider read is an alert");
   assert.match(failed, /data-account-providers-retry/);
-  assert.ok(!failed.includes("settings.accountProviderNone"), "a failed read is never the empty list");
+  assert.ok(!failed.includes("No provider is connected"), "a failed read is never the empty list");
 
   const emptyPicker = renderToStaticMarkup(h(I18nProvider, null, h(AddProviderPicker, {
     oauthProviders: [], apiKeyProviders: [], onSelectOAuth: noop, onSelectApiKey: noop, onClose: noop,
   })));
-  assert.ok(emptyPicker.includes("settings.accountProviderAvailableNone"), "an empty picker says so");
+  assert.ok(emptyPicker.includes("No provider can be added"), "an empty picker says so");
 });

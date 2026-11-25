@@ -141,3 +141,58 @@ export function buildOAuthProviderList(
   }
   return result;
 }
+
+/** One account-page row: a provider identity plus its auth kind (Q3 A). */
+export interface AccountProviderRow {
+  id: string;
+  label: string;
+  kind: "oauth" | "apikey";
+  state: "connected" | "available" | "unknown";
+  /** API-key rows carry their model count; OAuth rows leave it out. */
+  modelCount?: number;
+}
+
+export interface AccountProviderRows {
+  connected: AccountProviderRow[];
+  available: AccountProviderRow[];
+  unknown: AccountProviderRow[];
+}
+
+/** The two managed lists the account page shows, projected once (polyforge#271
+ *  Q2 A/Q3 A): `loggedIn`/`configured` strictly `true` means a stored
+ *  credential (connected), strictly `false` means the picker may offer it, and
+ *  anything else — an older route, a malformed entry — folds as unknown rather
+ *  than reading as not connected. The identity is provider + auth kind, so a
+ *  dual-auth provider's OAuth and API-key rows stay two rows. Custom
+ *  models.json sources are out of these lists by the route's own filtering. */
+export function accountProviderRows(
+  oauthProviders: readonly { id: string; name: string; loggedIn?: boolean }[],
+  apiKeyProviders: readonly { id: string; displayName: string; configured?: boolean; modelCount?: number }[],
+): AccountProviderRows {
+  const rows: AccountProviderRows = { connected: [], available: [], unknown: [] };
+  const seen = new Set<string>();
+  const push = (row: AccountProviderRow) => {
+    const key = `${row.kind}:${row.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows[row.state].push(row);
+  };
+  for (const provider of oauthProviders) {
+    push({
+      id: provider.id,
+      label: provider.name,
+      kind: "oauth",
+      state: provider.loggedIn === true ? "connected" : provider.loggedIn === false ? "available" : "unknown",
+    });
+  }
+  for (const provider of apiKeyProviders) {
+    push({
+      id: provider.id,
+      label: provider.displayName,
+      kind: "apikey",
+      state: provider.configured === true ? "connected" : provider.configured === false ? "available" : "unknown",
+      modelCount: provider.modelCount,
+    });
+  }
+  return rows;
+}

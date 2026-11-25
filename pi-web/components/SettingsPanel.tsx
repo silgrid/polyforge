@@ -362,7 +362,7 @@ export function SettingsPanel({
               placeholder is 85a3's; the permission page is 85a4's, mounted
               above (its Claude part is where a stored old `claude` navigation
               value lands). */}
-          {sectionHost("account", <AccountSettings />)}
+          {sectionHost("account", <AccountSettings onOpenModels={() => activateSection("models")} />)}
           {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} onOpenAccount={() => activateSection("account")} onUnsavedChange={(dirty) => reportUnsaved("models", dirty)} />)}
           {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's

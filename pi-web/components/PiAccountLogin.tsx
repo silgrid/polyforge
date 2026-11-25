@@ -12,7 +12,7 @@
 // logout alone.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
-import { SUBSCRIPTION_LOGIN_HIDDEN_PROVIDER } from "@/lib/provider-listing";
+import { SUBSCRIPTION_LOGIN_HIDDEN_PROVIDER, accountProviderRows, type AccountProviderRows } from "@/lib/provider-listing";
 import { providerMatchesSearch } from "./models-config-helpers";
 import { OAuthPastePanel } from "./OAuthPastePanel";
 import { ProviderIcon } from "./ProviderIcon";
@@ -22,6 +22,9 @@ import {
   ConfigDetailActions,
   ConfigDetailHeader,
   ConfigDetailHeaderInfo,
+  ConfigEmptyState,
+  ConfigErrorNotice,
+  ConfigSkeleton,
 } from "./SettingsUi";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -569,9 +572,13 @@ export function AddProviderPicker({
 
   const q = search.trim().toLowerCase();
 
-  const availableOAuth = oauthProviders.filter((p) => !p.loggedIn && providerMatchesSearch(q, p.id, p.name));
-  const availableApiKey = apiKeyProviders.filter((p) => !p.configured && providerMatchesSearch(q, p.id, p.displayName));
-  const totalCount = availableOAuth.length + availableApiKey.length;
+  // polyforge#271 B3: the picker offers only entries the route reports as
+  // definitely not connected; an unknown state folds, it is not offered.
+  const { available } = accountProviderRows(oauthProviders, apiKeyProviders);
+  const matched = available.filter((row) => providerMatchesSearch(q, row.id, row.label));
+  const availableOAuth = matched.filter((row) => row.kind === "oauth");
+  const availableApiKey = matched.filter((row) => row.kind === "apikey");
+  const totalCount = matched.length;
 
   const cardStyle: React.CSSProperties = {
     display: "flex", flexDirection: "row", alignItems: "center", gap: 8,
@@ -618,41 +625,49 @@ export function AddProviderPicker({
         {/* Card grid */}
         <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
           {totalCount === 0 ? (
-            <div style={{ padding: "20px 0", fontSize: 12, color: "var(--text-dim)", textAlign: "center" }}>{t("i18n.noProviders")}</div>
+            available.length === 0 ? (
+              <ConfigEmptyState action={<ConfigButton onClick={onClose}>{t("i18n.close")}</ConfigButton>}>
+                {t("settings.accountProviderAvailableNone")}
+              </ConfigEmptyState>
+            ) : (
+              <ConfigEmptyState action={<ConfigButton data-provider-clear-search="" onClick={() => setSearch("")}>{t("settings.accountProviderClearSearch")}</ConfigButton>}>
+                {t("settings.accountProviderSearchNone")}
+              </ConfigEmptyState>
+            )
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(240px, 100%), 1fr))", gap: 8 }}>
 
               {availableOAuth.length > 0 && (
                  <div style={{ gridColumn: "1 / -1", paddingTop: 6, fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{t("i18n.subscriptions")}</div>
               )}
-              {availableOAuth.map((p) => (
-                <button key={p.id} onClick={() => { onSelectOAuth(p.id); onClose(); }}
+              {availableOAuth.map((row) => (
+                <button key={row.id} data-provider-available={row.id} data-provider-kind="oauth" onClick={() => { onSelectOAuth(row.id); onClose(); }}
                   style={cardStyle}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg-panel)"; }}
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</div>
                     <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>OAuth</div>
                   </div>
-                  <ProviderIcon id={p.id} size={28} />
+                  <ProviderIcon id={row.id} size={28} />
                 </button>
               ))}
 
               {availableApiKey.length > 0 && (
                 <div style={{ gridColumn: "1 / -1", paddingTop: availableOAuth.length > 0 ? 6 : 0, fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em" }}>API Key</div>
               )}
-              {availableApiKey.map((p) => (
-                <button key={p.id} onClick={() => { onSelectApiKey(p.id); onClose(); }}
+              {availableApiKey.map((row) => (
+                <button key={row.id} data-provider-available={row.id} data-provider-kind="apikey" onClick={() => { onSelectApiKey(row.id); onClose(); }}
                   style={cardStyle}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg-panel)"; }}
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.displayName}</div>
-                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>{p.modelCount === 1 ? t("models.modelCountOne") : t("models.modelCount", { count: p.modelCount })}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</div>
+                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>{row.modelCount === 1 ? t("models.modelCountOne") : t("models.modelCount", { count: row.modelCount ?? 0 })}</div>
                   </div>
-                  <ProviderIcon id={p.id} size={28} />
+                  <ProviderIcon id={row.id} size={28} />
                 </button>
               ))}
 
@@ -668,25 +683,113 @@ export function AddProviderPicker({
 
 // ── The account page's pi pane ─────────────────────────────────────────────────
 
+/** The account page's pi pane: the managed providers' status and the one place
+ *  to sign in, sign out and enter API keys. `rows` is the connected list; the
+ *  add picker is the only way to reach an unconnected provider (polyforge#271
+ *  B3/Q2 A). Presentational, so its three states render without effects. */
+export function ProviderAccountView({ rows, loading, readError, onRetry, onAdd, onSelect, onOpenModels }: {
+  rows: AccountProviderRows;
+  loading: boolean;
+  readError: string | null;
+  onRetry: () => void;
+  onAdd: () => void;
+  onSelect: (row: { id: string; kind: "oauth" | "apikey" }) => void;
+  onOpenModels?: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="pi-account-rows" data-account-providers="">
+      {loading && (
+        <div data-account-providers-loading="">
+          <ConfigSkeleton label={t("i18n.loading")} lines={3} />
+        </div>
+      )}
+      {!loading && readError && (
+        <div data-account-providers-retry="">
+          <ConfigErrorNotice
+            summary={t(readError)}
+            action={<ConfigButton size="small" onClick={onRetry}>{t("i18n.retry")}</ConfigButton>}
+          />
+        </div>
+      )}
+      {!loading && !readError && (
+        <>
+          {rows.connected.map((row) => (
+            <button
+              key={`${row.kind}:${row.id}`}
+              type="button"
+              className="pi-account-row"
+              data-connected-provider={row.id}
+              data-provider-kind={row.kind}
+              onClick={() => onSelect(row)}
+            >
+              <ProviderIcon id={row.id} size={16} />
+              <span>{row.label}</span>
+              <span className="pi-account-state">{row.kind === "oauth" ? "OAuth" : "API key"} · {t("i18n.connected")}</span>
+            </button>
+          ))}
+          {rows.connected.length === 0 && (
+            <ConfigEmptyState>
+              {t("settings.accountProviderNone")} {t("settings.accountProviderNoneHint")}
+            </ConfigEmptyState>
+          )}
+          {rows.unknown.length > 0 && (
+            <details className="pi-account-unknown" data-unknown-providers="">
+              <summary>{t("settings.accountProviderUnknown")}</summary>
+              <p className="settings-general-description">{t("settings.accountProviderUnknownHint")}</p>
+              {rows.unknown.map((row) => (
+                <div key={`${row.kind}:${row.id}`} className="pi-account-row" data-unknown-provider={row.id} data-provider-kind={row.kind}>
+                  <ProviderIcon id={row.id} size={16} />
+                  <span>{row.label}</span>
+                  <span className="pi-account-state">{row.kind === "oauth" ? "OAuth" : "API key"}</span>
+                </div>
+              ))}
+            </details>
+          )}
+          <p className="pi-account-note">{t("settings.accountCredentialsNote")}</p>
+          <p className="pi-account-note">
+            {t("settings.accountCustomSourcesNote")}
+            {onOpenModels && (
+              <ConfigButton size="small" data-account-action="open-models" onClick={onOpenModels}>{t("settings.accountGoModels")}</ConfigButton>
+            )}
+          </p>
+        </>
+      )}
+      <ConfigDetailActions>
+        <ConfigButton data-account-action="add-provider" onClick={onAdd}>{t("i18n.addProvider")}</ConfigButton>
+      </ConfigDetailActions>
+    </div>
+  );
+}
+
 /** The pi pane of Account › pi: the managed providers' status and the one
  * place to sign in, sign out and enter API keys. */
-export function PiAccountLogin() {
-  const { t } = useI18n();
+export function PiAccountLogin({ onOpenModels }: { onOpenModels?: () => void }) {
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [readError, setReadError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selection, setSelection] = useState<{ kind: "oauth" | "apikey"; id: string } | null>(null);
 
   const refresh = useCallback(() => {
+    setLoading(true);
+    setReadError(null);
     void fetch("/api/auth/providers")
-      .then((response) => response.json())
-      .then((d: { oauthProviders?: OAuthProvider[]; apiKeyProviders?: ApiKeyProvider[] }) => {
-        if (Array.isArray(d.oauthProviders)) setOauthProviders(d.oauthProviders);
-        if (Array.isArray(d.apiKeyProviders)) setApiKeyProviders(d.apiKeyProviders);
+      .then(async (response) => {
+        const d = await response.json() as { oauthProviders?: OAuthProvider[]; apiKeyProviders?: ApiKeyProvider[] };
+        if (!response.ok || !Array.isArray(d.oauthProviders) || !Array.isArray(d.apiKeyProviders)) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        setOauthProviders(d.oauthProviders);
+        setApiKeyProviders(d.apiKeyProviders);
       })
-      .catch(() => { /* the rows show the last good read */ });
+      .catch(() => { setReadError("settings.accountReadFailed"); })
+      .finally(() => setLoading(false));
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
+
+  const rows = accountProviderRows(oauthProviders, apiKeyProviders);
 
   const detail = (() => {
     if (selection?.kind === "oauth") {
@@ -703,27 +806,15 @@ export function PiAccountLogin() {
   return (
     <div className="pi-account-login" data-pi-account-login="true">
       {detail ?? (
-        <>
-          <div className="pi-account-rows">
-            {oauthProviders.map((p) => (
-              <button key={p.id} type="button" className="pi-account-row" data-pi-provider={p.id} data-pi-kind="oauth" onClick={() => setSelection({ kind: "oauth", id: p.id })}>
-                <ProviderIcon id={p.id} size={16} />
-                <span>{p.name}</span>
-                <span className="pi-account-state">{p.loggedIn ? t("i18n.connected") : t("i18n.notConnected")}</span>
-              </button>
-            ))}
-            {apiKeyProviders.map((p) => (
-              <button key={p.id} type="button" className="pi-account-row" data-pi-provider={p.id} data-pi-kind="apikey" onClick={() => setSelection({ kind: "apikey", id: p.id })}>
-                <ProviderIcon id={p.id} size={16} />
-                <span>{p.displayName}</span>
-                <span className="pi-account-state">{p.configured ? t("i18n.connected") : t("i18n.notConnected")}</span>
-              </button>
-            ))}
-          </div>
-          <ConfigDetailActions>
-            <ConfigButton onClick={() => setPickerOpen(true)}>{t("i18n.addProvider")}</ConfigButton>
-          </ConfigDetailActions>
-        </>
+        <ProviderAccountView
+          rows={rows}
+          loading={loading}
+          readError={readError}
+          onRetry={refresh}
+          onAdd={() => setPickerOpen(true)}
+          onSelect={(row) => setSelection({ kind: row.kind, id: row.id })}
+          onOpenModels={onOpenModels}
+        />
       )}
       {pickerOpen && (
         <AddProviderPicker
