@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isPolyforgeWorkItemId, withContextWindow } from "./polyforge-cards-pure";
 import { isPolyforgeProfileName, sanitizePolyforgeCapabilities } from "./polyforge-cells-pure";
+import { sanitizeLandingLock, type PolyforgeLandingLock } from "./polyforge-landing-lock";
 import { execFileAsync } from "./exec-file";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 // type-only: the override view rides the watch response (polyforge#42
@@ -402,6 +403,14 @@ export interface PolyforgeWatchStatus extends PolyforgeSummary {
    *  on — the current dispatch's open `pf step ask` (its id the ask's own stamp)
    *  — the question verbatim. Absent while nothing is asked. */
   pendingQuestion?: PolyforgePendingQuestion;
+  /** The ticket's read-only landing-lock projection (polyforge#245 epic
+   *  3/3); absent when the daemon has no evidence or an older one answers. */
+  landingLock?: PolyforgeLandingLock;
+  /** Q3's partial snapshot: the progress is unavailable but the hub record
+   *  and its landing lock are readable. Never a fabricated execution. */
+  lockOnly?: true;
+  /** The controlled reason a lock-only snapshot carries. */
+  progressError?: string;
 }
 
 /** The watch snapshot's `execution.pending_question`, the fields the job
@@ -1076,7 +1085,24 @@ export function sanitizeWatch(machine: unknown): PolyforgeWatchStatus | null {
     summary_age_sec?: unknown;
     summary_error?: unknown;
     summary_capped?: unknown;
+    landing_lock?: unknown;
+    lock_only?: unknown;
+    progress_error?: unknown;
   };
+  const landingLock = sanitizeLandingLock(m.landing_lock);
+  const progressError = toOptionalTrimmedString(m.progress_error)?.slice(0, 80);
+  if (m.lock_only === true) {
+    // Q3: a lock-only partial snapshot is not an execution snapshot and
+    // never pretends to be known; the client keeps its last execution and
+    // shows the readable lock plus the controlled failure.
+    const wi = toTrimmedString(m.work_item);
+    const slug = toTrimmedString(m.slug);
+    if (!wi || !slug || !landingLock) return null;
+    return {
+      wi, slug, workflowStatus: "", steps: [], declared_steps: null, events: [],
+      landingLock, lockOnly: true, ...(progressError ? { progressError } : {}),
+    };
+  }
   if (m.known !== true) return null;
   const execution = m.execution;
   if (!execution || typeof execution !== "object") return null;
@@ -1112,6 +1138,8 @@ export function sanitizeWatch(machine: unknown): PolyforgeWatchStatus | null {
     ...(sanitizeBlocked(ex.blocked) ? { blocked: sanitizeBlocked(ex.blocked) } : {}),
     ...sanitizeSummaryFields(m),
     ...sanitizePendingQuestion(execution),
+    ...(landingLock ? { landingLock } : {}),
+    ...(progressError ? { progressError } : {}),
   };
 }
 

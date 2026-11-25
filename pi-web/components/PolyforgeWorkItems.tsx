@@ -15,6 +15,7 @@ import {
   type PolyforgeWorkItemRow,
 } from "@/lib/polyforge-work-items-pure";
 import { MarkdownBody } from "./MarkdownBody";
+import { landingLockKeysText, landingLockText } from "@/lib/polyforge-landing-lock";
 import { PolyforgeWorkItemParams } from "./PolyforgeWorkItemParams";
 import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearchBar } from "./PolyforgeSearchBar";
 
@@ -301,6 +302,11 @@ export function PolyforgeWorkItems({
               <span style={{ fontFamily: "var(--font-mono)", color: "var(--text)", flexShrink: 0 }}>{row.slug}</span>
               <span style={{ color: row.status === "running" ? "var(--accent)" : "var(--text-muted)", flexShrink: 0 }}>{statusLabel(row.status)}</span>
               {row.acceptance_missing && <span style={{ color: "var(--text-dim)", flexShrink: 0 }}>{t("polyforge.workItems.acceptanceMissing")}</span>}
+              {row.landing_lock && landingLockText(row.landing_lock, t) !== "" && (
+                <span data-pf-landing-lock="" title={landingLockKeysText(row.landing_lock)} style={{ color: "var(--text-dim)", flexShrink: 0 }}>
+                  {landingLockText(row.landing_lock, t)}
+                </span>
+              )}
               <span style={{ flexShrink: 0 }}>{row.priority ?? "—"}</span>
               <span style={{ flexShrink: 0 }}>{row.bundle_name || "—"}</span>
               <span style={{ marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{row.project ?? "—"}</span>
