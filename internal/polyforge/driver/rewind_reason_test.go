@@ -23,7 +23,7 @@ func TestRewindReasonIsMasked(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	var reason string
-	for _, e := range eventsOfKind(d.log, "rewind") {
+	for _, e := range eventsOfKind(d.log.(*eventLog), "rewind") {
 		if s, _ := e["reason"].(string); s != "" {
 			reason = s
 		}
