@@ -197,6 +197,25 @@ detaching the child, `pf file edit <child> --parent ""` (a running child is
 refused `CHILD_RUNNING`); a refused `pf submit` of such a parent names the
 same command beside `pf file dep rm` for an edge.
 
+### The landing-lock projection (`pf queue` / `pf watch`)
+
+A ticket that waits for the server landing lock (polyforge#245 epic 3/3)
+carries the read-only `landing_lock` field on its aihub record:
+`{state, observed_at, as_of, age_ms?, keys:[{repo, branch, position,
+since}]}`. `state` is `waiting` (a live queue entry), `none` (a fresh
+snapshot with no entry), `stale` (a cached snapshot older than the 15 s
+window) or `unavailable` (no readable evidence). `position` is the 1-based
+rank among the live waiters of that key; the holder is not a position, and
+each key this ticket actually queued on is listed. `pf queue` renders the
+LANDING column with `等待合入锁 #N` (several keys: `#1,#3`), a stale row
+keeps its last position marked `（陈旧）`, and an unavailable snapshot shows
+`锁状态不可用` with no position. `pf watch --once` renders the same words
+on its `landing:` line with the keys. Only this ticket's queue state is
+projected: the holding 持有者 (holder), a token, a machine id, a request id
+and other tickets never appear. `landing_lock` is optional on the wire, so
+an old reader ignores it and keeps its old shape; a terminal hub status
+outranks a leftover waiting projection.
+
 ## `pf file create` / `pf queue` — one `--attr` shape
 
 `pf file create --attr <path>=json-value` writes a dotted path nested

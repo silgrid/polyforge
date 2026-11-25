@@ -40,6 +40,17 @@ latest events. `--json` is the daemon's raw watch snapshot. The state comes
 from the capsule's `execution.json` (the authority), so it also answers for a
 work item that finished while nobody was watching.
 
+A ticket waiting for the server landing lock (polyforge#245 epic 3/3) adds
+one line after the status: `landing:    等待合入锁 #N` with its 1-based
+`position`, plus the lock keys (`repo (branch)`). A snapshot whose source
+is older than 15 s says `（陈旧）` and keeps its last position; no readable
+snapshot says `锁状态不可用` and invents no position. The raw snapshot field
+is `landing_lock` (state waiting|none|stale|unavailable, observed_at,
+as_of, keys:[{repo, branch, position, since}]); a remote progress failure
+may answer `lock_only: true` with a controlled `progress_error`, and only
+this ticket's queue entries are shown — never the holder, a token or
+another ticket id.
+
 `--demand` marks the snapshot request as human-side demand for the
 summarize lane (polyforge#224): the daemon may then keep the work item's
 transcript summarized in the watch JSON (`summary` — one plain-text line,

@@ -119,6 +119,23 @@ whose `detail` spells the nested path it names: every reader (`GET /work-items`'
 query reaches (polyforge#174; deploy/sql/v0.2.4 moves the old flat `split.origin`/
 `split.unit` rows of the pre-fix creates).
 
+### 2.4 landing_lock: the read-only queue projection <!-- §2.4 -->
+
+A work item's read (`GET /work-items`, `GET /work-items/{id}` and the ready
+queue) may carry one optional `landing_lock` object (polyforge#245 epic
+3/3, Q11): `{state, observed_at, as_of, age_ms?, keys:[{repo, branch,
+position, since}]}`. `state` is `waiting`, `none`, `stale` or
+`unavailable`; `position` is the 1-based rank of this ticket among the live
+waiters of that key (the holder is not a position; an expired waiter is
+not counted); `since` is the server's first-seen stamp. It is derived from
+the lease tables on every read, never a second authority, and the read
+never cleans, grants or writes. It carries only the caller's own ticket:
+the holder, its token, a machine id, a request id or another ticket never
+appear. A cached projection older than the 15 s window is `stale`; no
+readable evidence is `unavailable`; an old reader that predates the field
+ignores it. `pf queue`, `pf watch` and the Pi Web panel consume the same
+shape (`等待合入锁` with the `position`).
+
 ## 3. Sessions and fencing <!-- §3 -->
 
 ### 3.1 Secret, hash, fingerprint <!-- §3.1 -->
