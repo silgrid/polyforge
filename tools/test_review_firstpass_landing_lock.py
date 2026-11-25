@@ -31,6 +31,9 @@ _spec = importlib.util.spec_from_loader(_loader.name, _loader)
 rf = importlib.util.module_from_spec(_spec)
 _loader.exec_module(rf)
 
+# The scaffold stubs return unknown; every expectation below is hand-derived
+# from the ticket fixture, never from the tool.
+
 
 def ev(seq, kind, at, body):
     return {'seq': seq, 'at': rf.iso_ts(at), 'kind': kind, 'body': body}
