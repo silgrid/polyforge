@@ -76,10 +76,11 @@ test("the package card never writes; the Plugins page is the one write path", ()
   // this page; the card reads the package facts and links to the Plugins page.
   assert.doesNotMatch(source, /fetch\("\/api\/plugins", \{\s*\n\s*method: "POST"/, "no package enable/disable POST remains");
   assert.doesNotMatch(source, /togglePackage/, "the old toggle write path is gone");
-  // The source is still resolved from the listing join, never from detect.
-  assert.match(source, /pkg\.scope === "global" && pkg\.packageName === "polyforge"/, "the source joins the listing on scope + packageName");
-  assert.match(source, /\/api\/plugins\?cwd=\$\{encodeURIComponent\(cwd\)\}/, "the status listing is the existing GET /api/plugins");
+  // The card reads detection alone: no package listing read, no source join.
+  assert.doesNotMatch(source, /\/api\/plugins\?cwd=/, "the card must not wait on a package listing read");
+  assert.doesNotMatch(source, /packageName === "polyforge"/, "the removed source join is gone");
   assert.match(source, /<PackageStatusCard status=\{packageStatus\} cwd=\{cwd\} onManage=\{onOpenPlugins\} \/>/, "the read-only card takes the injected navigation");
+  assert.match(source, /const packageStatus: PackageStatus = !detect/, "the status comes from detection");
 });
 
 test("no other write exists: no cli.toml, no Claude config, no install execution of its own", () => {

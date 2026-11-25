@@ -356,9 +356,8 @@ claim.
   状态不可用 when the detection failed — and one 「去插件页管理」 button that
   calls the section navigation `SettingsPanel` injects (`activateSection
   ("plugins")`); the Plugins page remains the only enable/disable writer, and
-  Polyforge issues no `/api/plugins` POST. The source is still resolved from
-  the listing's join (`scope === "global" && packageName === "polyforge"`),
-  never from the detect response. With no project selected the button is
+  Polyforge issues no `/api/plugins` POST and reads no package source: the
+  card's fact is detection's own. With no project selected the button is
   disabled with the visible reason 「先选择项目目录才能管理插件。」 — it never
   opens an empty Plugins page. Nothing in the section edits `cli.toml` or
   writes Claude Code config; the one install it runs is the install entry

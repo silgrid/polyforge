@@ -198,8 +198,6 @@ export type RowFeedback = { message: string; details?: string; tone: "default" |
 /** A failure as the page shows it: the Chinese line, the server's words for the fold. */
 type Failure = { text: string; details?: string };
 
-type SourceState = { status: "pending" | "found" | "missing"; source: string | null };
-
 /** Every key the panel writes: the cli.toml keys and the
  *  cli.toml [summarize] keys — the write route's own
  *  allowlist constants. */
@@ -479,7 +477,6 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
   const { t } = useI18n();
   const [detect, setDetect] = useState<PolyforgeDetectStatus | null>(null);
   const [detectError, setDetectError] = useState<Failure | null>(null);
-  const [sourceState, setSourceState] = useState<SourceState>({ status: "pending", source: null });
   const [actionError, setActionError] = useState<Failure | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   // a history rollback's result is keyed by entry.id and
@@ -648,30 +645,6 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
     void runHistory();
   }, [active, cwd, runHistory]);
 
-  useEffect(() => {
-    if (!active) return;
-    if (!cwd || !detect?.piSkillInstalled) {
-      setSourceState({ status: "missing", source: null });
-      return;
-    }
-    let cancelled = false;
-    setSourceState({ status: "pending", source: null });
-    void fetch(`/api/plugins?cwd=${encodeURIComponent(cwd)}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return (await response.json()) as { packages?: PluginPackageInfo[] };
-      })
-      .then((data) => {
-        if (cancelled) return;
-        const row = data?.packages?.find((pkg) => pkg.scope === "global" && pkg.packageName === "polyforge") ?? null;
-        setSourceState({ status: row ? "found" : "missing", source: row?.source ?? null });
-      })
-      .catch(() => {
-        if (!cancelled) setSourceState({ status: "missing", source: null });
-      });
-    return () => { cancelled = true; };
-  }, [active, cwd, detect?.piSkillInstalled]);
-
   // A rollback from the history: the same CAS write into the entry's own
   // file, its result under its entry; then every mounted Cell pane re-reads.
   const rollback = useCallback(async (entry: PolyforgeConfigHistoryEntry, feedbackId: string = entry.id) => {
@@ -726,15 +699,13 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
     : detect?.line === "public"
       ? t("polyforge.settings.line.public")
       : t("polyforge.settings.line.unknown");
+  // The card reads detection alone (polyforge#271 r2 #6): the package status
+  // does not wait on a second /api/plugins read, so it settles with detection.
   const packageStatus: PackageStatus = !detect
     ? (detectError ? "unknown" : "pending")
     : !detect.piSkillInstalled
       ? "missing"
-      : sourceState.status === "pending"
-        ? "pending"
-        : sourceState.status === "missing"
-          ? "missing"
-          : detect.piSkillEnabled ? "enabled" : "disabled";
+      : detect.piSkillEnabled ? "enabled" : "disabled";
   const daemonState = !detect || detect.daemon === null
     ? t("polyforge.settings.daemonNotApplicable")
     : detect.daemon.reachable
