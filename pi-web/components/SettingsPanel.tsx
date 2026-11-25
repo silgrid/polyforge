@@ -362,7 +362,7 @@ export function SettingsPanel({
               placeholder is 85a3's; the permission page is 85a4's, mounted
               above (its Claude part is where a stored old `claude` navigation
               value lands). */}
-          {sectionHost("account", <AccountSettings />)}
+          {sectionHost("account", <AccountSettings onOpenModels={() => activateSection("models")} />)}
           {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} onOpenAccount={() => activateSection("account")} onUnsavedChange={(dirty) => reportUnsaved("models", dirty)} />)}
           {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
@@ -374,7 +374,7 @@ export function SettingsPanel({
           {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} />)}
           {/* No project needed: the global mcp.json is listed alone, and a project adds its group. */}
           {sectionHost("mcp", <McpConfig embedded key={cwd ?? ""} cwd={cwd} trust={projectTrust} onTrustProject={onOpenTrustDialog} onProjectTrustChanged={onProjectTrustChanged} onClose={onClose} />)}
-          {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} active={section === "polyforge"} />)}
+          {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} active={section === "polyforge"} onOpenPlugins={() => activateSection("plugins")} />)}
           </ConfigDetailNavigationContext.Provider>
         </main>
       </div>

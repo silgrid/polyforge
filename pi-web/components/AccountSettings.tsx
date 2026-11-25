@@ -26,7 +26,9 @@ import {
   ConfigDetailHeader,
   ConfigDetailHeaderInfo,
   ConfigDetailTitle,
+  ConfigEmptyState,
   ConfigPanelShell,
+  ConfigSkeleton,
   ConfigSidebar,
   ConfigSidebarItem,
   ConfigSidebarList,
@@ -82,12 +84,16 @@ function credentialText(t: (key: string) => string, row: AccountHarnessRow): str
 }
 
 /** One harness's interactive card + the per-Cell rows. */
-export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTerminal, onSaveCredentials, loading = false }: {
+export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTerminal, onSaveCredentials, onRefresh, onOpenModels, loading = false }: {
   harness: "pi" | "claude";
   read: AccountRead | null;
   capabilities: AccountHarnessCap | null;
   onOpenLoginTerminal: (id: string) => void;
   onSaveCredentials?: (body: Record<string, unknown>) => void;
+  /** The empty Cell list's refresh action (polyforge#271 AC1). */
+  onRefresh?: () => void;
+  /** The account page's way to the Models page for custom models.json sources (Q2 A). */
+  onOpenModels?: () => void;
   /** The read is still in flight (polyforge#256 r1#1): a failed read is
    *  finished, never still "reading". */
   loading?: boolean;
@@ -102,7 +108,7 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
     <div data-account-pane={harness} className="settings-general-pane-host">
       <section className="settings-general-section" data-account-card="interactive">
         <h3 className="settings-general-heading">{t("settings.accountInteractiveSession")}</h3>
-        {harness === "claude" ? <AccountClaudeCard claude={read?.claude ?? null} loaded={!loading} /> : <PiAccountLogin />}
+        {harness === "claude" ? <AccountClaudeCard claude={read?.claude ?? null} loaded={!loading} /> : <PiAccountLogin onOpenModels={onOpenModels} />}
         {commands.length > 0 && (
           <ConfigDetailActions>
             {commands.map((command) => (
@@ -115,9 +121,15 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
       </section>
       <section className="settings-general-section" data-account-card="cells">
         <h3 className="settings-general-heading">{t("settings.accountCellRows")}</h3>
-        {read?.doctorError && <p className="settings-general-description">{t("settings.accountDoctorError", { error: read.doctorError })}</p>}
+        {read?.doctorError && (
+          <ConfigErrorNotice summary={t("settings.accountDoctorError", { error: read.doctorError })} />
+        )}
         {read && read.cells.length === 0 && !read.doctorError && (
-          <p className="settings-general-description">{t("settings.accountNoCells")}</p>
+          <ConfigEmptyState action={onRefresh ? (
+            <ConfigButton data-account-action="refresh-cells" onClick={onRefresh}>{t("settings.accountRefresh")}</ConfigButton>
+          ) : undefined}>
+            {t("settings.accountNoCells")}
+          </ConfigEmptyState>
         )}
         {rows.map(({ cell, row }) => (
           row === null ? null : (
@@ -179,9 +191,14 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
 export function AccountClaudeCard({ claude, loaded = true }: { claude: AccountRead["claude"]; loaded?: boolean }) {
   const { t } = useI18n();
   if (claude === null) {
-    return <p className="settings-general-description" data-claude-status={loaded ? "absent" : "loading"}>
-      {loaded ? t("settings.accountClaudeAbsent") : t("settings.accountLoading")}
-    </p>;
+    if (!loaded) {
+      return (
+        <div data-claude-status="loading">
+          <ConfigSkeleton label={t("settings.accountLoading")} lines={2} />
+        </div>
+      );
+    }
+    return <p className="settings-general-description" data-claude-status="absent">{t("settings.accountClaudeAbsent")}</p>;
   }
   if (!claude.available) {
     return <p className="settings-general-description" data-claude-status="unavailable">{t("settings.accountClaudeUnavailable", { reason: claude.reason ?? "" })}</p>;
@@ -322,13 +339,32 @@ export function CredentialWriteResults({ results, t: tOverride }: { results: Cre
  *  status while a read is in flight, the retry line once it failed. A
  *  presentational component, so the shell's two visible states are pinned by
  *  rendering rather than by reading the source. */
-export function AccountReadStatus({ loading, readError, t }: {
+export function AccountReadStatus({ loading, readError, hasData = false, t, onRetry }: {
   loading: boolean;
   readError: string | null;
+  /** A previous good read is on screen; a refresh keeps it and says it is stale. */
+  hasData?: boolean;
   t: (key: string, params?: Record<string, string | number>) => string;
+  onRetry?: () => void;
 }) {
+  if (loading && !hasData) {
+    return (
+      <div data-account-loading="" className="settings-general-description">
+        <ConfigSkeleton label={t("settings.accountLoading")} lines={3} />
+      </div>
+    );
+  }
+  if (readError) {
+    return (
+      <div data-account-read-error="">
+        <ConfigErrorNotice
+          summary={hasData ? t("settings.accountStale") : t(readError)}
+          action={onRetry ? <ConfigButton size="small" data-account-retry="" onClick={onRetry}>{t("i18n.retry")}</ConfigButton> : undefined}
+        />
+      </div>
+    );
+  }
   if (loading) return <p role="status" data-account-loading="" className="settings-general-description">{t("settings.accountLoading")}</p>;
-  if (readError) return <p role="alert" data-account-read-error="" className="config-add-source-error">{t(readError)}</p>;
   return null;
 }
 
@@ -394,7 +430,7 @@ export function useAccountRead(): AccountReadState {
 
 /** The shell: the two panes over the route's read, plus the one-shot login
  * terminal (Q5) a declared login command opens. */
-export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
+export function AccountSettings({ embedded = true, onOpenModels }: { embedded?: boolean; onOpenModels?: () => void }) {
   const { t } = useI18n();
   const { read, loading, readError, capabilities, load } = useAccountRead();
   const [pane, setPane] = useState<"pi" | "claude">("pi");
@@ -471,13 +507,15 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
               <ConfigButton data-account-action="refresh" onClick={load}>{t("settings.accountRefresh")}</ConfigButton>
             </ConfigDetailActions>
           </ConfigDetailHeader>
-          <AccountReadStatus loading={loading} readError={readError} t={t} />
+          <AccountReadStatus loading={loading} readError={readError} hasData={read !== null} t={t} onRetry={load} />
           <AccountHarnessPane
             harness={pane}
             read={read}
             loading={loading}
             capabilities={capabilities[pane] ?? null}
             onOpenLoginTerminal={openLoginTerminal}
+            onRefresh={load}
+            onOpenModels={onOpenModels}
             onSaveCredentials={pane === "claude" ? saveCredentials : undefined}
           />
           {writeResults && <CredentialWriteResults results={writeResults} />}

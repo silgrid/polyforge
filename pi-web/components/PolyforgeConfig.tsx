@@ -87,7 +87,6 @@ import {
   ConfigSidebarText,
   ConfigSplitView,
   ConfigStatusDot,
-  ConfigSwitch,
   ConfigErrorNotice,
 } from "./SettingsUi";
 import {
@@ -161,6 +160,36 @@ interface Props {
   cwd: string | null;
   /** True while the section is the settings dialog's active section. */
   active: boolean;
+  /** SettingsPanel's section navigation: the package's one write path is there (polyforge#271 AC2). */
+  onOpenPlugins?: () => void;
+}
+
+/** 软件包卡的只读状态（polyforge#271 AC2/B2、Q4 A）：卡上只显示事实与去插件页
+ *  的入口，Polyforge 页不再发 enable/disable 请求。 */
+export type PackageStatus = "pending" | "enabled" | "disabled" | "missing" | "unknown";
+
+export function PackageStatusCard({ status, cwd, onManage }: { status: PackageStatus; cwd: string | null; onManage?: () => void }) {
+  const { t } = useI18n();
+  const label = status === "enabled" ? t("polyforge.settings.packageStatusEnabled")
+    : status === "disabled" ? t("polyforge.settings.packageStatusDisabled")
+      : status === "missing" ? t("polyforge.settings.packageStatusMissing")
+        : status === "unknown" ? t("polyforge.settings.packageStatusUnknown")
+          : t("polyforge.loading");
+  const manageDisabled = !cwd || !onManage;
+  return (
+    <section className="polyforge-config-card polyforge-config-package" data-package-status={status} aria-label={t("polyforge.settings.packageSwitch")}>
+      <p className="polyforge-config-card-title">{t("polyforge.settings.packageSwitch")}</p>
+      <p className="polyforge-config-card-hint">{t("polyforge.settings.packageReadOnly")}</p>
+      <div className="polyforge-config-switch-row">
+        <span className="polyforge-config-package-status" data-package-fact={status}>{label}</span>
+        <ConfigButton size="small" data-package-manage="" disabled={manageDisabled} onClick={onManage}>
+          {t("polyforge.settings.packageManage")}
+        </ConfigButton>
+        {!cwd && <span className="config-scope-switch-reason">{t("polyforge.settings.packageNoCwd")}</span>}
+        {status === "unknown" && cwd && <span className="config-scope-switch-reason">{t("polyforge.settings.packageStatusUnknownHint")}</span>}
+      </div>
+    </section>
+  );
 }
 
 /** One row's inline result; a refusal keeps the server's own words for the fold. */
@@ -168,8 +197,6 @@ export type RowFeedback = { message: string; details?: string; tone: "default" |
 
 /** A failure as the page shows it: the Chinese line, the server's words for the fold. */
 type Failure = { text: string; details?: string };
-
-type SourceState = { status: "pending" | "found" | "missing"; source: string | null };
 
 /** Every key the panel writes: the cli.toml keys and the
  *  cli.toml [summarize] keys — the write route's own
@@ -446,12 +473,10 @@ function DisclosureToggle({ open, controls, onToggle, marker, children }: {
   );
 }
 
-export function PolyforgeConfig({ cwd, active }: Props) {
+export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
   const { t } = useI18n();
   const [detect, setDetect] = useState<PolyforgeDetectStatus | null>(null);
   const [detectError, setDetectError] = useState<Failure | null>(null);
-  const [sourceState, setSourceState] = useState<SourceState>({ status: "pending", source: null });
-  const [toggleBusy, setToggleBusy] = useState(false);
   const [actionError, setActionError] = useState<Failure | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   // a history rollback's result is keyed by entry.id and
@@ -620,52 +645,6 @@ export function PolyforgeConfig({ cwd, active }: Props) {
     void runHistory();
   }, [active, cwd, runHistory]);
 
-  useEffect(() => {
-    if (!active) return;
-    if (!cwd || !detect?.piSkillInstalled) {
-      setSourceState({ status: "missing", source: null });
-      return;
-    }
-    let cancelled = false;
-    setSourceState({ status: "pending", source: null });
-    void fetch(`/api/plugins?cwd=${encodeURIComponent(cwd)}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return (await response.json()) as { packages?: PluginPackageInfo[] };
-      })
-      .then((data) => {
-        if (cancelled) return;
-        const row = data?.packages?.find((pkg) => pkg.scope === "global" && pkg.packageName === "polyforge") ?? null;
-        setSourceState({ status: row ? "found" : "missing", source: row?.source ?? null });
-      })
-      .catch(() => {
-        if (!cancelled) setSourceState({ status: "missing", source: null });
-      });
-    return () => { cancelled = true; };
-  }, [active, cwd, detect?.piSkillInstalled]);
-
-  const togglePackage = useCallback(async (enabled: boolean) => {
-    if (!cwd || !sourceState.source) return;
-    setToggleBusy(true);
-    setActionError(null);
-    setActionMessage(null);
-    try {
-      const response = await fetch("/api/plugins", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: enabled ? "enable" : "disable", source: sourceState.source, scope: "global", cwd }),
-      });
-      const data = await response.json().catch(() => null) as { error?: string } | null;
-      if (!response.ok || !data || data.error) throw responseError(data, response.status);
-      setActionMessage(t("polyforge.settings.packageToggled"));
-      await runDetect(false);
-    } catch (error) {
-      setActionError(failureLine(t, error));
-    } finally {
-      setToggleBusy(false);
-    }
-  }, [cwd, sourceState.source, runDetect, t]);
-
   // A rollback from the history: the same CAS write into the entry's own
   // file, its result under its entry; then every mounted Cell pane re-reads.
   const rollback = useCallback(async (entry: PolyforgeConfigHistoryEntry, feedbackId: string = entry.id) => {
@@ -720,14 +699,13 @@ export function PolyforgeConfig({ cwd, active }: Props) {
     : detect?.line === "public"
       ? t("polyforge.settings.line.public")
       : t("polyforge.settings.line.unknown");
-  const switchReason = !cwd
-    ? t("polyforge.settings.switchNeedsProject")
-    : sourceState.status === "pending"
-      ? t("polyforge.settings.switchResolving")
-      : !sourceState.source
-        ? t("polyforge.settings.switchNoPackage")
-        : null;
-  const switchReasonId = useId();
+  // The card reads detection alone (polyforge#271 r2 #6): the package status
+  // does not wait on a second /api/plugins read, so it settles with detection.
+  const packageStatus: PackageStatus = !detect
+    ? (detectError ? "unknown" : "pending")
+    : !detect.piSkillInstalled
+      ? "missing"
+      : detect.piSkillEnabled ? "enabled" : "disabled";
   const daemonState = !detect || detect.daemon === null
     ? t("polyforge.settings.daemonNotApplicable")
     : detect.daemon.reachable
@@ -911,25 +889,7 @@ export function PolyforgeConfig({ cwd, active }: Props) {
         </div>
       )}
 
-      <section className="polyforge-config-card polyforge-config-package" aria-label={t("polyforge.settings.packageSwitch")}>
-        <p className="polyforge-config-card-title">{t("polyforge.settings.packageSwitch")}</p>
-        <p className="polyforge-config-card-hint">{t("polyforge.settings.configPackageHint")}</p>
-        <div className="polyforge-config-switch-row">
-          {detect?.piSkillInstalled && (
-            <ConfigSwitch
-              checked={detect.piSkillEnabled}
-              disabled={!cwd || !sourceState.source}
-              loading={toggleBusy}
-              label={t("polyforge.settings.packageSwitch")}
-              describedBy={switchReason ? switchReasonId : undefined}
-              onChange={(enabled) => void togglePackage(enabled)}
-            />
-          )}
-          {switchReason && detect?.piSkillInstalled && (
-            <span id={switchReasonId} className="config-scope-switch-reason">{switchReason}</span>
-          )}
-        </div>
-      </section>
+      <PackageStatusCard status={packageStatus} cwd={cwd} onManage={onOpenPlugins} />
 
       {/* the Jobs-tab card preferences — browser-only, so
           shown whether or not pf is detected. Exactly these two controls. */}

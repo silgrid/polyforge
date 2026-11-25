@@ -712,6 +712,67 @@
   text-align: center;
 }
 
+.config-empty-state-text {
+  max-width: 46ch;
+}
+
+.config-empty-state-action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.config-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 0;
+}
+
+.config-skeleton-label {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.config-skeleton-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.config-skeleton-line {
+  display: block;
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bg-panel) 25%, var(--bg-hover) 50%, var(--bg-panel) 75%);
+  background-size: 200% 100%;
+  animation: config-skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+.config-skeleton-line:nth-child(2n) {
+  width: 86%;
+}
+
+.config-skeleton-line:nth-child(3n) {
+  width: 64%;
+}
+
+@keyframes config-skeleton-pulse {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .config-skeleton-line {
+    animation: none;
+  }
+}
+
 .config-detail-path {
   flex: 1;
   min-width: 0;
@@ -3078,6 +3139,7 @@ select.mcp-add-input {
 .polyforge-config-row.is-readonly .polyforge-config-empty { color: var(--text-muted); }
 .polyforge-config-daemon { color: var(--text-muted); overflow-wrap: break-word; }
 .polyforge-config-empty { color: var(--text-dim); }
+.polyforge-config-package-status { color: var(--text-muted); font-size: 12px; font-weight: 500; }
 .polyforge-config-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .polyforge-config-chip {
   display: inline-flex;
@@ -3599,6 +3661,9 @@ select.mcp-add-input {
 .pi-account-row:not(:disabled):focus-visible { background: var(--bg-hover); }
 .pi-account-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .pi-account-state { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+.pi-account-unknown { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); font-size: 12px; }
+.pi-account-unknown > summary { cursor: pointer; color: var(--text-dim); }
+.pi-account-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; color: var(--text-dim); font-size: 11px; line-height: 1.45; }
 
 /* 详情 header 的「⋯」菜单与它的二次确认（polyforge#259 T4 AC1）。 */
 .config-danger-menu-trigger { width: 26px; height: 26px; padding: 0; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1; }
@@ -3630,6 +3695,7 @@ select.mcp-add-input {
 .config-error-notice-details { min-width: 0; color: var(--text-dim); font-size: 11px; }
 .config-error-notice-details > summary { cursor: pointer; }
 .config-error-notice-original { margin-top: 3px; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.config-error-notice-action { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 
 /* 显示名为主、原始 id 作次行等宽灰字（polyforge#259 T4 AC2）：开关、单选与
    凭据目标共用这一个两行名字块，第二行永远是 id 本身。 */

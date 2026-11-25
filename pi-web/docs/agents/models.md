@@ -25,6 +25,10 @@ options 非数组、行缺字符串 model）拒写且文件字节不变，未知
 携带 `shadowed`，分区显示「已保存、未生效」，绝不写上层。迁移后台与路由在
 [claude-sessions.md](claude-sessions.md)，写入闸门在 [harness-adapters.md](harness-adapters.md)。
 
+## Model page read states (polyforge#271)
+- `lib/settings-read-states.ts`'s `readView()` is the one projection of a page read: a first read with no value is a skeleton (`ConfigSkeleton`, `data-model-skeleton`), a successful empty set is `ModelEmptyState` (「没有模型」 plus 去账号连接/去 Providers 配置), a failed read with no rows is `ConfigErrorNotice` with a retry, and a failed read that still has rows is a partial success — rows kept, the failure beside them. A failed read is never shown as empty; a refresh keeps the last good rows.
+- The Providers subpage (`ModelsConfig`) shows its skeleton while `models.json` is pending, 「没有 Provider」 with Add provider on a successful empty file, and an alert with a retry on a failed read (saving stays disabled then, because a save would replace the whole file). Claude's custom-model section shows the same three states through `ClaudeCustomReadStates`; a failed read leaves its list unknown rather than empty.
+
 ## 统一模型设置（85a3-2）
 
 设置中的「模型」页是四个子页：默认模型、模型清单、pi Providers、Claude 自定义模型。只有相同 provider 的精确 id 合并。聊天可用只在模型清单一处：pi 沿用 enabledModels 最小编辑，Claude 行显示「始终可用」并用 tooltip 说明 claude 会话不支持按模型停用（不再显示「不支持」）。pi 的推理下拉首项是「跟随全局（<全局值>）」并去掉旁边重复的值 span，Claude 行的推理是只读 pill。默认模型与推理的改动进入草稿，由「保存（N）」显式提交（polyforge#258 T3，owner 计划审补充 1 A），组合默认模型沿用 /api/models/default。
@@ -77,6 +81,11 @@ New runtimes pick up the saved budget; a loaded session picks it up when its mod
 
 ## Applying saved model edits to open sessions
 A session binds a model object; saving models.json does not touch it (#1273). As pi's `/model`, which refreshes the runtime before listing, `set_model` refreshes the chosen provider (`allowNetwork: false`, `providers: [provider]`, 15 s) before looking the id up, even for an id it already has, and the live composer's `ModelSelector` sends `set_model` for its already-selected row (`onReselect`; draft selectors keep that click a no-op). That reselect is desktop-only: on a phone (`useIsMobile()`, ≤640 px) an open session's selector (`confirmSwitch`, pi and claude; not a fresh composer) does nothing for the current row and asks `window.confirm` 「从 <当前模型> 切换到 <新模型>？」 (`chat.confirmModelSwitch`) before it sends `set_model` for another one, sending nothing on a cancel (`gateModelSwitch()`, which wraps the handlers `choose` and `saveDefault` call). The row's default star counts as a switch there too, since saving another model as the default also switches the open session (`handleSetDefaultModel`): a star on another row asks the same confirmation and a cancel neither saves the default nor sends `set_model`; a star on the current row saves at once. A failed or timed-out refresh keeps the cached definitions, as the TUI does. An unchanged definition is not bound again (no `model_change` entry, no `model_select`); a same-id edit keeps the session's thinking level, which the SDK clamps to the new capabilities. `/reload` does not rebind the model, matching pi.
+
+## Account providers: connected list and add picker (polyforge#271)
+- Account › pi lists only providers whose managed credential is stored: `loggedIn === true` for an OAuth entry and `configured === true` for an API-key entry. `accountProviderRows()` in `lib/provider-listing.ts` makes that projection once; the picker offers only the entries the route reports as definitely `false` (not connected). An entry with no usable boolean folds under 「连接状态未知」 with an explanation, never as not connected.
+- The identity is provider + auth kind, so a dual-auth provider's OAuth and API-key rows stay two rows (Q3 A); the two lists stay the ones `GET /api/auth/providers` answers, and nothing in the page writes a credential until a login or save succeeds. 「已连接」 means a credential is stored here, not that the provider is reachable now; custom `models.json` sources stay on the Models page and the pane links there (no new endpoint).
+- Three states are distinct: the first read shows the shared `ConfigSkeleton`; a successful empty list shows 「没有已连接的 Provider」 with the add action; a failed or malformed read shows `ConfigErrorNotice` (`role="alert"`) with a retry that issues the GET again. An empty picker says 「没有可添加的 Provider」, a search with no match offers clearing the search, and neither is shown as a failed read.
 
 ## Auth and model config
 - `ModelsConfig` combines `~/.pi/agent/models.json` with provider auth status from pi's `ModelRuntime` (`/api/auth/providers`).

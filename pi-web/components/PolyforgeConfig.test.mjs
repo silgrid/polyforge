@@ -71,25 +71,16 @@ test("the re-detect control bypasses the 60s presence cache with ?force=1", () =
   assert.match(source, /disabled=\{!detect\}/, "re-detect waits for a first detection");
 });
 
-test("the toggle writes only through the existing /api/plugins global path", () => {
-  assert.match(
-    source,
-    /fetch\("\/api\/plugins", \{\s*\n\s*method: "POST",\s*\n\s*headers: \{ "Content-Type": "application\/json" \},\s*\n\s*body: JSON\.stringify\(\{ action: enabled \? "enable" : "disable", source: sourceState\.source, scope: "global", cwd \}\),/,
-    "the exact PluginsConfig package-switch call shape",
-  );
-  // The package switch is one POST; the configuration panel adds its own
-  // write/reload/rollback POSTs.
-  assert.ok((source.match(/method: "POST"/g) ?? []).length >= 1, "the package switch POST exists");
-  // Auto re-detect after the write settles (non-force).
-  assert.match(source, /await runDetect\(false\)/, "detection re-runs automatically after the toggle");
-  // The source is resolved from the listing join, never from the detect
-  // response (which carries no paths).
-  assert.match(
-    source,
-    /pkg\.scope === "global" && pkg\.packageName === "polyforge"/,
-    "the source joins the listing on scope + packageName",
-  );
-  assert.match(source, /\/api\/plugins\?cwd=\$\{encodeURIComponent\(cwd\)\}/, "the listing is the existing GET /api/plugins");
+test("the package card never writes; the Plugins page is the one write path", () => {
+  // polyforge#271 AC2/B2: the enable/disable POST and its toggle are gone from
+  // this page; the card reads the package facts and links to the Plugins page.
+  assert.doesNotMatch(source, /fetch\("\/api\/plugins", \{\s*\n\s*method: "POST"/, "no package enable/disable POST remains");
+  assert.doesNotMatch(source, /togglePackage/, "the old toggle write path is gone");
+  // The card reads detection alone: no package listing read, no source join.
+  assert.doesNotMatch(source, /\/api\/plugins\?cwd=/, "the card must not wait on a package listing read");
+  assert.doesNotMatch(source, /packageName === "polyforge"/, "the removed source join is gone");
+  assert.match(source, /<PackageStatusCard status=\{packageStatus\} cwd=\{cwd\} onManage=\{onOpenPlugins\} \/>/, "the read-only card takes the injected navigation");
+  assert.match(source, /const packageStatus: PackageStatus = !detect/, "the status comes from detection");
 });
 
 test("no other write exists: no cli.toml, no Claude config, no install execution of its own", () => {
@@ -107,26 +98,8 @@ test("no other write exists: no cli.toml, no Claude config, no install execution
   assert.match(source, /navigator\.clipboard\.writeText\(installCommand\)/);
 });
 
-test("the pi package switch renders only when the skill is installed; disabled reasons are visible text", () => {
-  // The switch block is gated on piSkillInstalled (未安装 shows no toggle).
-  assert.match(source, /\{detect\?\.piSkillInstalled && \(\s*\n\s*<ConfigSwitch/);
-  // Disabled = no project or no resolved source, with the reason as visible
-  // text under the switch's line (describedBy), never only a tooltip.
-  assert.match(source, /disabled=\{!cwd \|\| !sourceState\.source\}/);
-  assert.match(source, /describedBy=\{switchReason \? switchReasonId : undefined\}/);
-  assert.match(source, /<span id=\{switchReasonId\} className="config-scope-switch-reason">/, "the reason renders as visible text");
-  const reasons = [
-    "polyforge.settings.switchNeedsProject",
-    "polyforge.settings.switchResolving",
-    "polyforge.settings.switchNoPackage",
-  ];
-  for (const key of reasons) {
-    assert.match(source, new RegExp(`t\\("${key.replace(/\./g, "\\.")}"\\)`), `the section carries ${key}`);
-  }
-});
-
 test("the section reuses the shared SettingsUi blocks and every word is a prop", () => {
-  for (const block of ["ConfigButton", "ConfigDetailGrid", "ConfigDetailGridRow", "ConfigDetailStack", "ConfigFooter", "ConfigFooterStatus", "ConfigSectionTitle", "ConfigSwitch"]) {
+  for (const block of ["ConfigButton", "ConfigDetailGrid", "ConfigDetailGridRow", "ConfigDetailStack", "ConfigFooter", "ConfigFooterStatus", "ConfigSectionTitle"]) {
     assert.match(source, new RegExp(`<${block}[\\s>]`), `the section renders through ${block}`);
   }
   // The section label reuses the existing polyforge.title key (no new label).
@@ -141,7 +114,7 @@ test("the panel hosts the section without a project and re-detects on every open
   const { settingsSectionRequiresProject, SETTINGS_TABS } = await import("../lib/settings-navigation.ts");
   assert.equal(SETTINGS_TABS.find((entry) => entry.id === "polyforge")?.labelKey, "polyforge.title");
   assert.equal(settingsSectionRequiresProject("polyforge"), false);
-  assert.match(panelSource, /<PolyforgeConfig cwd=\{cwd\} active=\{section === "polyforge"\} \/>/);
+  assert.match(panelSource, /<PolyforgeConfig cwd=\{cwd\} active=\{section === "polyforge"\} onOpenPlugins=\{\(\) => activateSection\("plugins"\)\} \/>/);
   // Not cwd-gated: the section host renders without a selected project.
   const hostLine = panelSource.slice(panelSource.indexOf('sectionHost("polyforge"'));
   assert.doesNotMatch(hostLine.split("\n")[0], /cwd &&/, "the polyforge section host is not project-gated");
@@ -558,7 +531,7 @@ test("the confirmed page order and the default-collapsed read-outs", async () =>
     [hostPane, [
       "polyforge-config-card polyforge-config-status",
       "data-pf-host-region",
-      "polyforge-config-card polyforge-config-package",
+      "<PackageStatusCard",
       "polyforge-config-card polyforge-config-cards",
       "aria-label={t(\"polyforge.settings.configHistory\")}",
       "polyforge-config-card polyforge-config-install",
@@ -626,7 +599,7 @@ test("per-key results render under their own row; the footer keeps page-level st
   // The footer's summary is the page-level status.
   assert.match(source, /summary=\{actionError\?\.text \?\? actionMessage \?\? \(detect \? t\("polyforge\.settings\.detected"\) : t\("polyforge\.loading"\)\)\}/);
   // Element budget: still exactly one switch; numeric inputs only via the two preference rows plus pf's own int keys.
-  assert.equal((source.match(/<ConfigSwitch\b/g) ?? []).length, 1, "exactly one role=switch");
+  assert.equal((source.match(/<ConfigSwitch\b/g) ?? []).length, 0, "the package switch is gone; the page has no role=switch");
   const css = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
   assert.match(css, /\.polyforge-config-row-feedback \{[^}]*grid-column: 1 \/ -1;/, "the result spans the row");
 });
@@ -783,7 +756,7 @@ test("the machine-scope hint has its own class and title; .config-scope-switch-r
   // the workflow submit note leaves for its own class, so 7 remain.
   // adds two: a Cell's no-workspace reason (the default Cell's head, a named Cell's workspace card).
   // those two become one (every Cell's 工作区 card) and the file card's api_key set state joins.
-  assert.ok((source.match(/className="config-scope-switch-reason"/g) ?? []).length === 9, "the shared class keeps its other call sites (owner-intended)");
+  assert.ok((source.match(/className="config-scope-switch-reason"/g) ?? []).length === 10, "the shared class keeps its other call sites plus the package card's no-cwd reason (owner-intended)");
   const css = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
   assert.match(css, /\n\.config-scope-switch-reason \{\n  max-width: 320px;\n  color: var\(--text-dim\);\n  font-size: 11px;\n  line-height: 1\.4;\n\}/, "the shared rule is untouched");
   assert.match(css, /\n\.config-machine-scope-hint \{\n  min-width: 0;\n  color: var\(--text-dim\);\n  font-size: 11px;\n  line-height: 1\.4;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n\}/, "desktop: one ellipsised line");
@@ -1015,7 +988,7 @@ test("the page is master-detail — a Host entry, every Cell with its state, Add
   const cellPanes = source.slice(source.indexOf("const renderCellHead = (profile: string) =>"), source.indexOf("const renderHostPane = () =>"))
     + source.slice(source.indexOf("const renderCellPane = (profile: string) =>"), source.indexOf("// A pane mounts on its first selection"))
     + source.slice(source.indexOf("function CellSettings("), source.indexOf("function HostSettingsRegion("));
-  for (const marker of ["polyforge-config-status", "data-pf-host-region", "polyforge-config-package", "polyforge-config-cards", "polyforge.settings.configHistory", "polyforge-config-install"]) {
+  for (const marker of ["polyforge-config-status", "data-pf-host-region", "<PackageStatusCard", "polyforge-config-cards", "polyforge.settings.configHistory", "polyforge-config-install"]) {
     assert.ok(hostPane.includes(marker), `${marker} lives in the Host pane`);
     assert.ok(!cellPanes.includes(marker), `${marker} never renders in a Cell pane`);
   }
@@ -1242,4 +1215,35 @@ test("a row's refused write with no body reads as the forbidden line in Chinese"
   const { fold, outside } = render(failureLine(t, responseError(null, 403)));
   assert.equal(outside, "服务端拒绝了这次改动，原文在「详情」里。");
   assert.ok(fold !== null && fold.includes("HTTP 403"), "the status line is not kept for the fold");
+});
+
+// polyforge#271 AC2 (B2, Q4 A): the package card is read-only and links to the
+// Plugins page; it never issues an /api/plugins write. Without a cwd the link
+// is disabled with a readable reason, and a failed detection is its own status,
+// never a fake "not installed".
+test("package status never writes and management navigates", async () => {
+  const ssr = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+  const React = await ssr.import("react");
+  const { PackageStatusCard } = await ssr.import("./PolyforgeConfig.tsx");
+  const { renderToStaticMarkup } = await ssr.import("react-dom/server");
+  const { I18nProvider } = await ssr.import("@/hooks/useI18n");
+  const h = React.createElement;
+  const render = (props) => renderToStaticMarkup(h(I18nProvider, null, h(PackageStatusCard, {
+    onManage: () => {}, cwd: "/tmp/project", ...props,
+  })));
+  for (const [status, text] of [["enabled", "installed · enabled"], ["disabled", "installed · disabled"], ["missing", "not installed"]]) {
+    const html = render({ status });
+    assert.ok(html.includes(text), `${status} is shown as its own fact`);
+    assert.ok(!html.includes('role="switch"'), "the card offers no package switch");
+    assert.match(html, /data-package-manage=""/, "the card links to the Plugins page");
+    assert.ok(html.includes("Manage on the Plugins page"));
+  }
+  const noCwd = render({ status: "enabled", cwd: null });
+  assert.match(noCwd, /data-package-manage=""[^>]*disabled/);
+  assert.ok(noCwd.includes("Choose a project folder before you manage plugins."));
+
+  const failed = render({ status: "unknown" });
+  assert.ok(failed.includes("Status unavailable"), "a failed detection is not 'not installed'");
+  assert.ok(!failed.includes("not installed"));
+  assert.ok(render({ status: "unknown" }).includes("settings.packageUnknownHint") === false, "the hint is localized text, not a key");
 });

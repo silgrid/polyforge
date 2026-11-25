@@ -2,7 +2,7 @@
 
 ## The settings rail and General's left column (85a1b, #149)
 - 导航的唯一来源是 `lib/settings-navigation.ts`：九项依次为常规、账号、模型、权限、技能、MCP、子代理、插件、Polyforge，原 Models (legacy) 页及挂载已删除。模型页由 `HarnessModelSettings` 承载四个子页（默认模型、模型清单、pi Providers、Claude 自定义模型），侧栏只做子页导航；历史 `legacy-models` 分区恢复为 `models`，旧全局 `models` 详情选择读一次迁入 `["models","pi"]`，以后只写新键。无效 provider/model 选择由模型编辑器回退。
-- A stored old navigation value: `models` needs no map, its id now being the new Models page's; the deleted Claude page's `claude` key is gone with the page and its migration map (85a4, as the 85a1b comment promised — review r1#7), so a browser still holding it lands on 常规. The account page is 85a2's (polyforge#142): `components/AccountSettings.tsx` — the left column lists the harnesses (pi, Claude), and the selected pane shows the interactive session card and one daemon-step row per Cell (状态、来源含「共享 default」、配置根、凭据是否跟随配置目录、步骤能否使用及原因), all from one cached `pf --json doctor` read through `GET /api/settings/account` (owner ruling Q8; claude's status runs `claude auth status`, each distinct model-credential source dir is checked with `pi auth check --provider <p> --json --no-refresh`); claude's pane adds the credential form — `POST /api/settings/account` writes the value into the native env block of the interactive session and of the checked Cells through the adapter's gated write (owner ruling Q3; 沿用交互会话的值 is a server-side copy, the value never passing through the browser) — and the 「打开终端」 buttons that run the adapter-declared login commands in a one-shot terminal (Q5). pi's pane embeds `components/PiAccountLogin.tsx` (see docs/agents/models.md). polyforge#256 B3: `useAccountRead` owns the read's state — the first read and every refresh show the localized 「正在读取…」 status (`role="status"`, `data-account-loading`), a refresh keeps the last good data on screen, a non-2xx or thrown read ends the pending state with a visible retry line (`role="alert"`, `data-account-read-error`; the refresh button is the retry), a request sequence drops a late older answer so it never overwrites a newer read, and a finished read that answered `claude:null` shows the completed-but-unavailable line instead of the loading one. The capability slice's failure degrades without blocking the account data. 模型页的 pi Providers 子页是扁平化的 `ModelsConfig`（无第二层侧栏/嵌套 footer），provider 定义和上下文窗口共用该子页的原生草稿 Save；权限页仍由 85a4 实现。
+- A stored old navigation value: `models` needs no map, its id now being the new Models page's; the deleted Claude page's `claude` key is gone with the page and its migration map (85a4, as the 85a1b comment promised — review r1#7), so a browser still holding it lands on 常规. The account page is 85a2's (polyforge#142): `components/AccountSettings.tsx` — the left column lists the harnesses (pi, Claude), and the selected pane shows the interactive session card and one daemon-step row per Cell (状态、来源含「共享 default」、配置根、凭据是否跟随配置目录、步骤能否使用及原因), all from one cached `pf --json doctor` read through `GET /api/settings/account` (owner ruling Q8; claude's status runs `claude auth status`, each distinct model-credential source dir is checked with `pi auth check --provider <p> --json --no-refresh`); claude's pane adds the credential form — `POST /api/settings/account` writes the value into the native env block of the interactive session and of the checked Cells through the adapter's gated write (owner ruling Q3; 沿用交互会话的值 is a server-side copy, the value never passing through the browser) — and the 「打开终端」 buttons that run the adapter-declared login commands in a one-shot terminal (Q5). pi's pane embeds `components/PiAccountLogin.tsx` (see docs/agents/models.md; polyforge#271 adds its connected list, add picker and three states). polyforge#256 B3: `useAccountRead` owns the read's state — the first read and every refresh show the localized 「正在读取…」 status (`role="status"`, `data-account-loading`), a refresh keeps the last good data on screen, a non-2xx or thrown read ends the pending state with a visible retry line (`role="alert"`, `data-account-read-error`; the refresh button is the retry), a request sequence drops a late older answer so it never overwrites a newer read, and a finished read that answered `claude:null` shows the completed-but-unavailable line instead of the loading one. The capability slice's failure degrades without blocking the account data. 模型页的 pi Providers 子页是扁平化的 `ModelsConfig`（无第二层侧栏/嵌套 footer），provider 定义和上下文窗口共用该子页的原生草稿 Save；权限页仍由 85a4 实现。
 - **First-open onboarding (polyforge#167, 91-onboarding)**: in the workstation image (`imageManaged`) Pi Web's null-session branch (no selected session — a draft tab included) mounts a four-step wizard (`components/OnboardingWizard.tsx`); a selected session never auto-opens it, and 设置 › 常规's 「重新打开首次设置」 opens it over one at the first unfinished step — AIHub connection (the first-boot record's connection whitelist; the team mode adds a Cell through the existing `POST /api/polyforge/cells`, the key on stdin), account (a deep link to Settings › 账号 plus #142's `GET /api/settings/account` login read), workspace (`/api/cwd/validate`) and the first ticket (`PolyforgeFileTicketDialog` with `lane="develop"`). Each step is skippable and a skipped step stays 「未完成」; closing dismisses the popup, and only a completed reopen write clears that dismissal (`lib/onboarding-state.ts` / `app/api/onboarding/route.ts`; host mode answers only `imageManaged:false`, so no entry and no wizard). The wizard copies no configuration logic.
 - **General is a left-column layout**: `components/HarnessGeneralSettings.tsx` hosts the three settled panes — 界面与对话 (Interface & conversation), 环境 (Environment), 生效值与来源 (Effective values & sources) — in the shared `ConfigSplitView`. A phone walks them list → detail → back through the settings panel's own detail navigation (Q7 A: no navigation system of its own); a desktop shows the list beside the detail. Only the chosen pane is mounted, so each reads once per activation — the settings pages' cadence, never a poll.
 - The 界面与对话 pane is the former GeneralSettings whole (`components/GeneralSettings.tsx`, `is-pane`: the shared `.config-detail` is the one scroll region) plus the claude hook-activity switch, which reads and writes `/api/claude-permissions`' `includeHookEvents` key (85a4: a Pi Web preference in `pi-web-settings.json`'s `claude` object — General's own fetch, a value shown only after the PUT succeeded, a failed read hiding the section). The retired `lib/claude-settings-store.ts` / `hooks/useClaudeSettings.ts` shared holder went with the legacy Claude page: one editor remains per value. A failed save keeps the last state and shows the route's reason.
@@ -53,6 +53,8 @@ Settings › 权限 is the unified permission page (`components/HarnessPermissio
 - **One 「应用到」 chip.** `components/HarnessApplyTo.tsx` is a native `<details>` chip reading 「应用到：全部 ▾」, its menu holding the all/specific choice and one checkbox per harness, an unsupported harness greyed with its reason as visible text. The control never submits: the page that shows it renders the save (MCP's Apply button beside it, the step-tier drawer's Apply in its footer, the skills page's 启用/停用). A result row may carry the server's own words in a details fold (`detailsLabel`), which is where a refusal's English stays; its main line is the Chinese the route's `code` names.
 - **Display names lead.** `lib/settings-display-names.ts` maps each raw id to its message key — claude's six approval modes, `denyInsteadOfPrompting`, the account write targets (「交互会话」 / 「Cell default」) and a plugin's package name. A page renders the display name first and the raw id as the second line in mono grey (`settings-name-stack` / `settings-secondary-id`); an unknown id keeps the id itself rather than an empty name.
 - **Server errors.** `lib/server-error.ts` splits a `{code, params}` payload (or a bare English string) into a Chinese message key plus the original text, and `SettingsUi`'s `ConfigErrorNotice` renders it as `role="alert"` with that original inside a 「详情」 fold. The settings routes this ticket touched (skills PATCH, MCP, `POST /api/polyforge/config`, the account write) add `code`/`params` beside their unchanged `error` and status (owner 2A); a client throws `responseError(body, status)` (a `ServerError` that keeps them, falling back to `http-<status>`) and shows `serverErrorText(error)`, so `config-cas-409` reads as the conflict line. `codeFromError()` matches `CAS` only as a word. Covered: the Polyforge page, the skills save/switch results, the account write results and MCP's apply/load failures (whose `reason` picks `mcp.reason.<code>`); the other settings components still show the server's words as their main line and are left to a follow-up sweep (owner ruling 2026-11-24).
+
+- **Sub-agents' settings are a sidebar destination (polyforge#271 AC2, Q7 A).** `components/AgentsConfig.tsx` shows 设置 as the list's first item (`data-agents-nav="settings"`, a key separate from a profile's `scope:name`); its detail holds the built-in sub-agent switch, the concurrency field, the description and the reload notice/action that used to be a banner above the list. No profile, or no valid remembered profile, lands on 设置; a valid remembered profile stays selected, and navigating never writes.
 
 ## Polyforge section (pi#122, configuration panel)
 
@@ -175,8 +177,8 @@ removed or conditionally hidden; parts are folded:
   rollback renders its result under its own row/entry (keyed by `item.key` /
   `entry.id`; a connection row's notice rollback under that row), an error
   with `role="alert"`; copy feedback renders in the
-  install block. The footer keeps page-level status only: detection, the
-  package switch and Reload. The write request shapes are unchanged.
+  install block. The footer keeps page-level status only: detection and
+  Reload. The write request shapes are unchanged.
 - **Locks.** A region holding an unsaved draft, a pending connection-key
   confirmation or a row error (a cli.toml zone's advanced keys are writable;
   the history block by a failed rollback) renders open
@@ -241,7 +243,7 @@ table membership, so the `[daemon]` zone uses a copy of pf's nine `[daemon]` key
 names (a key pf adds later shows in the top-level zone until the list is
 extended — cosmetic), a `section` item is a workspace mapping, a `summarize.`
 key is summarize, and any other key stays in the top-level zone, never dropped.
-The detection block and the package switch are cards too, and the detection
+The detection block and the read-only package card are cards too, and the detection
 rows use the same key-column width as the configuration cards.
 
 Every card and zone declares only its effective columns:
@@ -349,18 +351,17 @@ claim.
   Claude Code items (skill symlink present/absent, SessionStart hook
   present/absent — no control either way), and the daemon row
   (可达/不可达 + pf's own stderr/不适用 without pf).
-- **The one switch.** The pi package switch renders only when the skill is
-  installed (未安装 shows no toggle — only the state and the install command).
-  It is the section's only switch, and it writes through the existing global
-  path exactly as PluginsConfig's package switch does: `POST /api/plugins`
-  `{action: "enable"|"disable", source, scope: "global", cwd}`. The source is
-  resolved from that listing's join (`scope === "global" &&
-  packageName === "polyforge"`), never from the detect response (which
-  carries no paths). With no project selected the switch renders disabled
-  with visible reason text (the write path needs a `cwd`); it is never a
-  tooltip-only title. Write failures surface as a visible footer status.
-  Nothing in the section edits `cli.toml` or writes Claude Code config; the
-  one install it runs is the install entry below, through its route.
+- **The package card is read-only (polyforge#271 AC2/B2, Q4 A).** It shows
+  pf's package fact as text — 已安装 · 已启用 / 已安装 · 已停用 / 未安装, or
+  状态不可用 when the detection failed — and one 「去插件页管理」 button that
+  calls the section navigation `SettingsPanel` injects (`activateSection
+  ("plugins")`); the Plugins page remains the only enable/disable writer, and
+  Polyforge issues no `/api/plugins` POST and reads no package source: the
+  card's fact is detection's own. With no project selected the button is
+  disabled with the visible reason 「先选择项目目录才能管理插件。」 — it never
+  opens an empty Plugins page. Nothing in the section edits `cli.toml` or
+  writes Claude Code config; the one install it runs is the install entry
+  below, through its route.
 - **Install / update entry** (`components/PolyforgeInstallCard.tsx`,
   `lib/polyforge-install*.ts`, `app/api/polyforge/install/**`). A Host-pane
   card shows the installed pf (`pf --version`), the release channel's latest
@@ -421,6 +422,10 @@ claim.
   reason. The card reads once per open and never polls. Updating Pi Web itself is out of
   scope (it needs a restart that ends every session): the card only says
   when Pi Web is out of sync.
+
+## Loading, empty and error states (polyforge#271)
+- Every settings page that reads asynchronous facts shows three distinct states, from the shared blocks: a first read with no value yet renders `ConfigSkeleton` (`data-config-skeleton`), whose visible label is the page's localized loading line and whose skeleton lines are `aria-hidden` decoration styled with theme variables (`app/settings.css`; the pulse stops under `prefers-reduced-motion`); a successful read with no rows renders `ConfigEmptyState` with the page's action (add or refresh) beside its text; a failed read renders `ConfigErrorNotice` (`role="alert"`) with its retry action passed as `action`, and never the empty state. A refresh keeps the last good data on screen and says it is stale; a partial success keeps the rows that answered and shows the failure beside them.
+- `ConfigNotice` stays `role="status"`; only `ConfigErrorNotice` is `role="alert"`, so an ordinary notice is not announced again on every poll. Pages reuse these blocks instead of styling their own banner.
 
 ## Shared blocks
 - Panels are built from the shared blocks in `components/SettingsUi.tsx` (`ConfigScopeTag`, `ConfigScopeSwitch`, `ConfigSaveTarget`, `ConfigAddSourceHeading`, `ConfigAddSourcePanel`, `ConfigDetailGrid`, `ConfigFooterStatus`, `ConfigTrustNotice`), `itemsToSwitch()` in `components/settings-ui-helpers.ts`, and `lib/display-path.ts`; a new settings section reuses them instead of copying a panel. `SettingsUi.tsx` takes every word as a prop and holds no state, so it renders outside the i18n provider; panels pass `t()` strings.

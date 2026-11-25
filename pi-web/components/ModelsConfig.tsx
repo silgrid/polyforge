@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useId, useRef } from "react";
+import { useState, useEffect, useCallback, useId, useRef, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { ModelCatalogPreset, ModelCatalogRecommendation } from "@/lib/model-catalog";
 import type { DiscoveredModel } from "@/lib/model-discovery";
@@ -37,6 +37,8 @@ import {
   ConfigDetailHeaderInfo,
   ConfigDetailStack,
   ConfigEmptyState,
+  ConfigErrorNotice,
+  ConfigSkeleton,
   ConfigField,
   ConfigFooter,
   ConfigPanelShell,
@@ -1388,6 +1390,41 @@ export function ModelDetail({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+/** The Providers subpage's read states (polyforge#271 AC1/A4): skeleton with
+ *  no value, 「没有 Provider」 with Add on a successful empty file, and an alert
+ *  with a retry on a failed read. Hook-free so each state renders alone. */
+export function ProvidersReadStates({ loading, loadError, providerCount, t, onRetry, onAdd, children }: {
+  loading: boolean;
+  loadError: string | null;
+  providerCount: number;
+  t: (key: string) => string;
+  onRetry: () => void;
+  onAdd: () => void;
+  children?: ReactNode;
+}) {
+  if (loading) {
+    return <div data-models-config-loading=""><ConfigSkeleton label={t("i18n.loading")} lines={4} /></div>;
+  }
+  if (loadError) {
+    return (
+      <ConfigErrorNotice
+        summary={t("models.configReadFailed")}
+        detailsLabel={t("i18n.detailsLabel")}
+        details={loadError}
+        action={<ConfigButton size="small" data-models-config-retry="" onClick={onRetry}>{t("i18n.retry")}</ConfigButton>}
+      />
+    );
+  }
+  if (providerCount === 0) {
+    return (
+      <ConfigEmptyState action={<ConfigButton data-models-config-add="" onClick={onAdd}>{t("models.configAddFirstProvider")}</ConfigButton>}>
+        {t("models.configNoProviders")} {t("models.configNoProvidersHint")}
+      </ConfigEmptyState>
+    );
+  }
+  return <>{children}</>;
+}
+
 export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount, enabledModels }: {
   onClose: () => void; embedded?: boolean; cwd?: string | null; onOpenAccount?: () => void;
   /** The page's one shared controller — the table and this editor must never
@@ -1401,6 +1438,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
   // apply immediately instead of waiting for this panel's Save button.
   const [config, setConfig] = useState<ModelsJson>({ providers: {} });
   const [loading, setLoading] = useState(true);
+  const [reload, setReload] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   // Set when models.json could not be read. Saving stays disabled: the draft
@@ -1439,6 +1477,8 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
   }, []);
 
   useEffect(() => {
+    setLoading(true);
+    setLoadError(null);
     fetch("/api/models-config")
       .then(async (r) => {
         const d = await r.json() as ModelsJson & { error?: string };
@@ -1460,7 +1500,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
     refreshAuthProviders();
-  }, [refreshAuthProviders]);
+  }, [refreshAuthProviders, reload]);
 
   useEffect(() => {
     if (selection) setLastSettingsSelection("models", JSON.stringify(selection));
@@ -1722,6 +1762,19 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
     const customProvider = (selection?.type === "provider" || selection?.type === "model")
       ? (selection.type === "provider" ? selection.name : selection.providerName) : null;
     const customEntry = customProvider ? config.providers?.[customProvider] : undefined;
+    const retry = () => setReload((previous) => previous + 1);
+    const body = (
+      <ProvidersReadStates
+        loading={loading}
+        loadError={loadError}
+        providerCount={options.length}
+        t={t}
+        onRetry={retry}
+        onAdd={addProvider}
+      >
+        {detailContent ?? <ConfigEmptyState>{t("i18n.selectProviderModel")}</ConfigEmptyState>}
+      </ProvidersReadStates>
+    );
     return (
       <div className="config-panel-root is-embedded" data-models-page="providers" data-provider-page="flat">
         <div className="config-panel-surface">
@@ -1766,9 +1819,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
           </div>
           <ConfigDetail>
             <ConfigDetailStack className="is-fill">
-              {loading ? null : detailContent ?? (
-                <ConfigEmptyState>{t("i18n.selectProviderModel")}</ConfigEmptyState>
-              )}
+              {body}
             </ConfigDetailStack>
           </ConfigDetail>
           <div data-provider-footer="">

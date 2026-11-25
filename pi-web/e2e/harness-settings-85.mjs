@@ -511,7 +511,14 @@ async function openSettings(page) {
 }
 
 const modelSubpage = (page, id) => sectionHost(page, "models").locator(`[data-model-subpage="${id}"]`);
-const openModelSubpage = async (page, id) => { await modelSubpage(page, id).click({ timeout: ACTION_MS }); };
+const openModelSubpage = async (page, id) => {
+  await modelSubpage(page, id).click({ timeout: ACTION_MS });
+  // polyforge#271: a subpage's first read is a skeleton now; a scenario that
+  // reads the pane right after the click must wait for that read to settle.
+  const host = sectionHost(page, "models");
+  await waitFor(async () => (await host.locator("[data-model-skeleton], [data-models-config-loading], [data-claude-models-loading]").count()) === 0,
+    ACTION_MS, `the ${id} subpage stayed loading`);
+};
 const generalSidebarItems = (page) => sectionHost(page, "general").locator(".config-sidebar-item");
 const generalPane = (page, pane) => sectionHost(page, "general").locator(`[data-general-pane="${pane}"]`);
 
@@ -609,9 +616,10 @@ try {
     }
     assert.ok(!modelText.includes("Chat availability"), "only the chosen subpage renders");
     await openModelSubpage(page, "list");
+    await host.getByText("Chat availability", { exact: true }).first().waitFor({ state: "visible", timeout: ACTION_MS });
     assert.ok((await host.innerText()).includes("Chat availability"), "the model list subpage lacks the chat availability column");
     await openModelSubpage(page, "providers");
-    await host.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: COLD_MS });
+    await host.getByRole("button", { name: "Add provider", exact: true }).first().waitFor({ state: "visible", timeout: COLD_MS });
     await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
     const permission = sectionHost(page, "permission");
     await permission.locator(".config-sidebar-item").first().waitFor({ state: "visible", timeout: ACTION_MS });
@@ -734,13 +742,24 @@ try {
     await tab(page, /^Account$/).click({ timeout: ACTION_MS });
     const account = sectionHost(page, "account");
     await account.locator(".config-sidebar-item").filter({ hasText: /^pi$/ }).click({ timeout: ACTION_MS });
+    // polyforge#271 B3: the pane lists connected credentials only — Google's
+    // OAuth and API-key rows — and reaches the unconnected entries through the
+    // Add-provider picker, never by listing them as not connected.
     const piText = await waitFor(async () => {
       const text = await account.innerText();
-      return text.includes("ChatGPT Plus/Pro") ? text : false;
-    }, ACTION_MS, "the account pi pane never listed the offered providers");
+      return text.includes("Google") && text.includes("API key") ? text : false;
+    }, ACTION_MS, "the account pi pane never listed the connected providers");
     assert.ok(piText.includes("Add provider"), "the account pi pane lost the Add provider entry");
-    assert.ok(piText.includes("Anthropic"), "the Anthropic API-key entry is gone from the account pane");
-    assert.ok(!piText.includes("Anthropic (Claude Pro/Max)"), "the never-offered Anthropic subscription appears");
+    assert.ok(!piText.includes("ChatGPT Plus/Pro"), "an unconnected provider is listed as connected");
+    assert.ok(!piText.includes("Anthropic"), "an unconfigured API key is listed as connected");
+    await account.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
+    const pickerText = await waitFor(async () => {
+      const text = await account.innerText();
+      return text.includes("ChatGPT Plus/Pro") ? text : false;
+    }, ACTION_MS, "the picker never offered the unconnected providers");
+    assert.ok(pickerText.includes("Anthropic"), "the Anthropic API-key entry is gone from the picker");
+    assert.ok(!pickerText.includes("Anthropic (Claude Pro/Max)"), "the never-offered Anthropic subscription appears");
+    await page.keyboard.press("Escape");
     await page.context().close();
   });
 
@@ -805,10 +824,11 @@ try {
     const models = sectionHost(page, "models");
     await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     await openModelSubpage(page, "list");
+    await models.getByText("Model list", { exact: true }).first().waitFor({ state: "visible", timeout: ACTION_MS });
     assert.ok((await models.innerText()).includes("Model list"), "the model list subpage is missing");
     await openModelSubpage(page, "providers");
-    await models.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
-    await models.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
+    await models.getByRole("button", { name: "Add provider", exact: true }).first().waitFor({ state: "visible", timeout: ACTION_MS });
+    await models.getByRole("button", { name: "Add provider", exact: true }).first().click({ timeout: ACTION_MS });
     await models.getByPlaceholder("provider-name", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     await page.context().close();
   });

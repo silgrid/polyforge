@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { buildModelRows, type ModelViewInput, type ModelViewRow } from "@/lib/harness/model-view";
 import type { ModelPayload } from "@/lib/harness/concepts";
@@ -25,7 +25,18 @@ import {
 import { ModelsConfig } from "./ModelsConfig";
 import { ClaudeCustomModels } from "./ClaudeCustomModels";
 import { ModelStepTierDrawer, stepTierIdentity, type StepTierRead, type StepTierWriteFn } from "./ModelStepTierDrawer";
-import { ConfigButton, ConfigSidebar, ConfigSidebarItem, ConfigSidebarList, ConfigDetail, ConfigSplitView } from "./SettingsUi";
+import { readView } from "@/lib/settings-read-states";
+import {
+  ConfigButton,
+  ConfigEmptyState,
+  ConfigErrorNotice,
+  ConfigSidebar,
+  ConfigSidebarItem,
+  ConfigSidebarList,
+  ConfigDetail,
+  ConfigSkeleton,
+  ConfigSplitView,
+} from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
 
@@ -213,6 +224,32 @@ export function ModelEnabledBulk({ enabled }: { enabled: EnabledModelsController
   </div>;
 }
 
+/** 模型页读取失败时的页顶状态（polyforge#271 AC1/A3）：alert + 重试，纯展示。 */
+export function ModelPageError({ summary, onRetry, t }: { summary: ReactNode; onRetry: () => void; t: (key: string) => string }) {
+  return (
+    <ConfigErrorNotice
+      summary={summary}
+      action={<ConfigButton size="small" data-model-retry="" onClick={onRetry}>{t("i18n.retry")}</ConfigButton>}
+    />
+  );
+}
+
+/** 模型集合成功读回但为空时的空状态（polyforge#271 AC1/A3）：点明缺什么，
+ *  并给出两个真实动作——去账号连接、去 Providers 配置。 */
+export function ModelEmptyState({ onOpenAccount, onOpenProviders }: { onOpenAccount?: () => void; onOpenProviders?: () => void }) {
+  const { t } = useI18n();
+  return (
+    <ConfigEmptyState action={(
+      <>
+        {onOpenAccount && <ConfigButton data-model-action="open-account" onClick={onOpenAccount}>{t("models.openAccount")}</ConfigButton>}
+        {onOpenProviders && <ConfigButton data-model-action="open-providers" onClick={onOpenProviders}>{t("models.openProviders")}</ConfigButton>}
+      </>
+    )}>
+      {t("models.noModels")} {t("models.noModelsHint")}
+    </ConfigEmptyState>
+  );
+}
+
 export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage = "default", onUnsavedChange }: {
   cwd: string | null;
   onClose?: () => void;
@@ -239,6 +276,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   const [piSettings, setPiSettings] = useState<ModelPayload | null>(null);
   const [levels, setLevels] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const [saving, setSaving] = useState(false);
   // A save failure is not a read failure: a reload after a landed write must
@@ -249,6 +287,8 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
 
   useEffect(() => {
     const abort = new AbortController();
+    setLoading(true);
+    setError(null);
     const get = async (url: string) => {
       const response = await fetch(url, { signal: abort.signal });
       const data = await response.json();
@@ -302,6 +342,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
           : catalog?.defaultModel ? { harness: "pi", provider: catalog.defaultModel.provider, id: catalog.defaultModel.modelId } : null);
       const failed = answers.find((answer) => answer.status === "rejected");
       setError(failed?.status === "rejected" ? String(failed.reason?.message ?? failed.reason) : null);
+      setLoading(false);
     });
     return () => abort.abort();
   }, [cwd, query, revision]);
@@ -423,13 +464,38 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
     claude: rows.filter((row) => row.harnesses.includes("claude")).map((row) => row.id),
   };
   const invalidTiers = tierColumn?.capable ? stepTierInvalidReferences(tierColumn.tiers, defined) : [];
+  const view = readView({ loading, error: Boolean(error || saveError), count: models.length });
+  // A kept draft (or the last good default) is data: a reload keeps the select
+  // on screen instead of replacing it with a skeleton (Q5 A).
+  const defaultView = readView({ loading: loading && !shownDefault, error: Boolean(error || saveError), count: models.length + (shownDefault ? 1 : 0) });
   return (
     <div className="settings-section settings-models" data-model-page="unified">
-      {(error || saveError || enabled.failure) && <div role="alert">{saveError ?? error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}</div>}
+      {(error || saveError || enabled.failure) && (
+        error ? (
+          <ModelPageError
+            summary={saveError ?? error}
+            onRetry={() => setRevision((previous) => previous + 1)}
+            t={t}
+          />
+        ) : (
+          <ConfigErrorNotice summary={saveError ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")} />
+        )
+      )}
       <ConfigSplitView>
         <ModelPageNav page={page} onSelect={changePage} />
         <ConfigDetail>
-          {page === "default" && (
+          {page === "default" && defaultView.kind === "loading" && (
+            <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
+              <div data-model-skeleton=""><ConfigSkeleton label={t("i18n.loading")} lines={3} /></div>
+              <ModelSaveBar count={0} saving={saving} onSave={() => void saveDraft()} />
+            </section>
+          )}
+          {page === "default" && defaultView.kind === "empty" && (
+            <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
+              <ModelEmptyState onOpenAccount={onOpenAccount} onOpenProviders={() => setPage("providers")} />
+            </section>
+          )}
+          {page === "default" && defaultView.kind === "ready" && (
             <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
               <h3>{t("models.defaultHeading")}</h3>
               <select className="settings-model-default-select" aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
@@ -448,7 +514,17 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
               <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
             </section>
           )}
-          {page === "list" && (
+          {page === "list" && view.kind === "loading" && (
+            <section className="settings-model-section" data-model-page-pane="list" aria-label={t("models.listHeading")}>
+              <div data-model-skeleton=""><ConfigSkeleton label={t("i18n.loading")} lines={4} /></div>
+            </section>
+          )}
+          {page === "list" && view.kind === "empty" && (
+            <section className="settings-model-section" data-model-page-pane="list" aria-label={t("models.listHeading")}>
+              <ModelEmptyState onOpenAccount={onOpenAccount} onOpenProviders={() => setPage("providers")} />
+            </section>
+          )}
+          {page === "list" && view.kind === "ready" && (
             <section className="settings-model-section" data-model-page-pane="list" aria-label={t("models.listHeading")}>
               <EnabledModelsBanner controller={enabled} />
               <h3>{t("models.listHeading")}</h3>
