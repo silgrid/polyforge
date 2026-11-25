@@ -131,3 +131,71 @@ test("the concurrency field shows the read-back value and an unchanged blur send
   assert.equal(concurrencyCommit("0", 4), null, "an out-of-range value is not written");
   assert.equal(concurrencyCommit("", 4), null, "an empty value is not written");
 });
+
+// polyforge#271 round 3 (review r3#1): driven through the hook shim, the
+// concurrency field follows the value read back from the server — a 10 shown
+// before the read must become 4 once the read answers 4 — and a blur that
+// leaves the read-back value alone writes nothing; an edit writes once.
+test("the concurrency field follows the read-back value through a re-render", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const fixture = (name) => new URL(`../hooks/__fixtures__/${name}`, import.meta.url).pathname;
+  const stubs = join(mkdtempSync(join(tmpdir(), "pf271-agents-stub-")), "stubs.mjs");
+  writeFileSync(stubs, `const t = (key) => key;
+const i18n = { t, locale: "en" };
+export function useI18n() { return i18n; }
+export function useIsMobile() { return false; }
+const inert = function Stub({ children }) { return children ?? null; };
+for (const name of []) void name;
+export const ConfigButton = function Btn({ children, onClick, disabled }) { return { type: "button", props: { onClick, disabled, children } }; };
+export const ConfigDetail = inert, ConfigDetailActions = inert, ConfigDetailHeader = inert, ConfigDetailHeaderInfo = inert,
+  ConfigDetailStack = inert, ConfigDetailTitle = inert, ConfigEmptyState = inert, ConfigField = inert, ConfigFooter = inert,
+  ConfigListAction = inert, ConfigPanelShell = inert, ConfigSaveFooter = inert, ConfigSaveTarget = inert, ConfigScopeTag = inert,
+  ConfigSidebar = inert, ConfigSidebarGroupLabel = inert, ConfigSidebarItem = inert, ConfigSidebarList = inert,
+  ConfigSidebarText = inert, ConfigSplitView = inert, ConfigStatusDot = inert, ConfigSwitch = inert,
+  ConfigDangerMenu = inert, ModelSelector = inert;
+`);
+  const shim = createJiti(import.meta.url, {
+    jsx: { runtime: "automatic" },
+    moduleCache: false,
+    tsconfigPaths: true,
+    alias: {
+      react: fixture("react-hook-shim.mjs"),
+      "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
+      "@/hooks/useI18n": stubs,
+      "@/hooks/useIsMobile": stubs,
+      "./SettingsUi": stubs,
+      "./ConfigDangerMenu": stubs,
+      "./ModelSelector": stubs,
+    },
+  });
+  const { renderHook } = await import(fixture("react-hook-shim.mjs"));
+  const { AgentFeatureSettings } = await shim.import("./AgentsConfig.tsx");
+  const writes = [];
+  const props = (maxConcurrent) => ({
+    builtInEnabled: true, maxConcurrent, settingsLoading: false, settingsSaving: false,
+    reloadNeeded: false, reloading: false, sessionId: null,
+    onToggle: () => {}, onMaxConcurrent: (value) => writes.push(value), onReload: () => {},
+  });
+  const walk = (node, out = []) => {
+    if (Array.isArray(node)) { for (const child of node) walk(child, out); return out; }
+    if (!node || typeof node !== "object" || !("props" in node)) return out;
+    if (typeof node.type === "function") return walk(node.type(node.props), out);
+    out.push(node);
+    walk(node.props.children, out);
+    return out;
+  };
+  const input = (hook) => walk(hook.result).find((node) => node.type === "input");
+  const hook = renderHook(AgentFeatureSettings, props(10));
+  hook.rerender(props(4));
+  assert.equal(String(input(hook).props.value), "4", "the field still shows the value from before the read");
+  input(hook).props.onBlur({ target: { value: String(input(hook).props.value) } });
+  assert.deepEqual(writes, [], "a blur on the read-back value wrote to the server");
+  input(hook).props.onChange({ target: { value: "6" } });
+  hook.flush();
+  assert.equal(String(input(hook).props.value), "6", "an edit is shown");
+  input(hook).props.onBlur({ target: { value: "6" } });
+  assert.deepEqual(writes, [6], "an edit is written once");
+  hook.unmount();
+});
