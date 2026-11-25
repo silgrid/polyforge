@@ -385,10 +385,10 @@ type Daemon struct {
 	// (A3; progresslookup.go). Memory-only.
 	remoteSnaps *remoteSnapCache
 
-	// landingSnaps caches the last successful landing-lock projection per
+	// leaseSnaps caches the last successful landing-lock projection per
 	// WI, served as stale (never renewed) when a later hub read fails
 	// (polyforge#249, landingcache.go). Memory-only.
-	landingSnaps *landingSnapCache
+	leaseSnaps *leaseSnapCache
 
 	// lane is the demand-gated summarize lane (polyforge#224): per-WI
 	// memory-only state, the gates, the background dispatch — wired into
@@ -843,12 +843,12 @@ func New(cfg Config) (*Daemon, error) {
 		verifyQ:      cfg.SharedAdmission,
 		upgradeDrain: cfg.UpgradeDrain,
 		// the Cell's own command_path (a reload moves it)
-		commandPath:  cfg.StartupFile.Daemon.CommandPath,
-		pfDir:        selfDir(),
-		lane:         summarize.New(laneDispatcher),
-		remoteSnaps:  newRemoteSnapCache(remoteSnapTTL, remoteSnapCap),
-		landingSnaps: newLandingSnapCache(),
-		face:         initialFace(cfg),
+		commandPath: cfg.StartupFile.Daemon.CommandPath,
+		pfDir:       selfDir(),
+		lane:        summarize.New(laneDispatcher),
+		remoteSnaps: newRemoteSnapCache(remoteSnapTTL, remoteSnapCap),
+		leaseSnaps:  newLeaseSnapCache(),
+		face:        initialFace(cfg),
 		// the file-only baseline the reload compares against until the
 		// first successful reload moves it
 		lastAppliedFile: cfg.StartupFile,

@@ -141,7 +141,7 @@ func TestMaybeRemoteTypedBranches(t *testing.T) {
 		td.hub.mu.Unlock()
 		item, _ := td.hub.GetWorkItem("wi_b")
 		local := protocol.WatchSnapshot{WorkItem: "wi_b", Events: []protocol.EventEntry{},
-			LandingLock: &api.LandingLock{State: api.LandingLockWaiting, Keys: []api.LandingLockKey{{Repo: "github.com/o/app", Branch: "main", Position: 2}}}}
+			LeaseProjection: &api.LeaseProjection{State: api.LeaseWaiting, Keys: []api.LeaseProjectionKey{{Repo: "github.com/o/app", Branch: "main", Position: 2}}}}
 		got, err := td.Daemon.maybeRemoteSnapshot(item, local)
 		if code == api.ErrCoreStaleHolder || code == api.ErrCoreUpstream {
 			// Q3: the progress is unavailable but the lock is readable: a

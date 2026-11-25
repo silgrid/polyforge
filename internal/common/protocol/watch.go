@@ -57,11 +57,11 @@ type WatchSnapshot struct {
 	// (20 calls per dispatch) is reached: the last summary stays and the
 	// panel can display the cap honestly.
 	SummaryCapped *bool `json:"summary_capped,omitempty"`
-	// LandingLock is the ticket's read-only landing-lock projection
+	// LeaseProjection is the ticket's read-only landing-lock projection
 	// (polyforge#245 epic 3/3): this ticket's own queue state only, with
 	// no holder, token or other ticket. Omitted when no evidence exists;
 	// a reader that predates the field ignores it.
-	LandingLock *api.LandingLock `json:"landing_lock,omitempty"`
+	LeaseProjection *api.LeaseProjection `json:"landing_lock,omitempty"`
 	// LockOnly is true on the partial snapshot a remote relay serves when
 	// the remote progress is stale/upstream but the hub record (and its
 	// landing lock) is still readable (Q3). It never fabricates known=true

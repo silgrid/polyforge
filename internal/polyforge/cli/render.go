@@ -374,7 +374,7 @@ func renderWITable(w io.Writer, items []WIView) {
 		if len(it.WaitingFor) > 0 {
 			waiting = true
 		}
-		if watcher.LandingLockLine(it.LandingLock) != "" {
+		if watcher.LeaseProjectionLine(it.LeaseProjection) != "" {
 			landing = true
 		}
 	}
@@ -384,7 +384,7 @@ func renderWITable(w io.Writer, items []WIView) {
 		last := len(row) - 1
 		insert := make([]string, 0, 2)
 		if landing {
-			insert = append(insert, orDash(watcher.LandingLockLine(it.LandingLock)))
+			insert = append(insert, orDash(watcher.LeaseProjectionLine(it.LeaseProjection)))
 		}
 		if waiting {
 			insert = append(insert, orDash(waitingText(it.WaitingFor)))
@@ -429,9 +429,9 @@ func renderWIDetail(w io.Writer, wi *WIView) {
 	if wi.WaitingOn != nil {
 		fmt.Fprintf(w, "  waiting:  %s\n", *wi.WaitingOn)
 	}
-	if line := watcher.LandingLockLine(wi.LandingLock); line != "" {
+	if line := watcher.LeaseProjectionLine(wi.LeaseProjection); line != "" {
 		fmt.Fprintf(w, "  landing:  %s", line)
-		if keys := watcher.LandingKeysText(wi.LandingLock); keys != "" {
+		if keys := watcher.LeaseKeysText(wi.LeaseProjection); keys != "" {
 			fmt.Fprintf(w, " — %s", keys)
 		}
 		fmt.Fprintln(w)

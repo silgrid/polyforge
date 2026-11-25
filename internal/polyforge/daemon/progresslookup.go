@@ -154,7 +154,7 @@ func (d *Daemon) maybeRemoteSnapshot(item *api.WorkItem, local protocol.WatchSna
 				// partial snapshot with a controlled error, never a fabricated
 				// known=true or an execution block; no lock evidence keeps the
 				// typed error.
-				if ll := landingLockOf(local, item); ll != nil {
+				if ll := leaseLockOf(local, item); ll != nil {
 					return lockOnlySnapshot(local, item, ae.Code), nil
 				}
 				return local, ae
@@ -245,15 +245,15 @@ func (d *Daemon) artifactRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ans.Artifact)
 }
 
-// landingLockOf answers the freshest landing-lock evidence a partial watch
+// leaseLockOf answers the freshest landing-lock evidence a partial watch
 // may keep: the local snapshot's own projection (built from the same hub
 // read) or the hub item's.
-func landingLockOf(local protocol.WatchSnapshot, item *api.WorkItem) *api.LandingLock {
-	if local.LandingLock != nil && (local.LandingLock.Waiting() || local.LandingLock.State == api.LandingLockNone) {
-		return local.LandingLock
+func leaseLockOf(local protocol.WatchSnapshot, item *api.WorkItem) *api.LeaseProjection {
+	if local.LeaseProjection != nil && (local.LeaseProjection.Waiting() || local.LeaseProjection.State == api.LeaseNone) {
+		return local.LeaseProjection
 	}
-	if item != nil && item.LandingLock != nil {
-		return item.LandingLock
+	if item != nil && item.LeaseProjection != nil {
+		return item.LeaseProjection
 	}
 	return nil
 }
@@ -263,12 +263,12 @@ func landingLockOf(local protocol.WatchSnapshot, item *api.WorkItem) *api.Landin
 // progress_error and no execution/known fabrication.
 func lockOnlySnapshot(local protocol.WatchSnapshot, item *api.WorkItem, code string) protocol.WatchSnapshot {
 	snap := protocol.WatchSnapshot{
-		WorkItem:      local.WorkItem,
-		Slug:          local.Slug,
-		LandingLock:   landingLockOf(local, item),
-		LockOnly:      true,
-		ProgressError: code,
-		Events:        []protocol.EventEntry{},
+		WorkItem:        local.WorkItem,
+		Slug:            local.Slug,
+		LeaseProjection: leaseLockOf(local, item),
+		LockOnly:        true,
+		ProgressError:   code,
+		Events:          []protocol.EventEntry{},
 	}
 	if item != nil {
 		if snap.WorkItem == "" {

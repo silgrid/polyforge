@@ -18,37 +18,37 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 )
 
-type landingSnapEntry struct {
-	lock *api.LandingLock
+type leaseSnapEntry struct {
+	lock *api.LeaseProjection
 	at   time.Time
 }
 
-type landingSnapCache struct {
+type leaseSnapCache struct {
 	mu      sync.Mutex
 	now     func() time.Time
-	entries map[string]landingSnapEntry
+	entries map[string]leaseSnapEntry
 }
 
-func newLandingSnapCache() *landingSnapCache {
-	return &landingSnapCache{now: time.Now, entries: map[string]landingSnapEntry{}}
+func newLeaseSnapCache() *leaseSnapCache {
+	return &leaseSnapCache{now: time.Now, entries: map[string]leaseSnapEntry{}}
 }
 
 // put stores a copy of one fresh projection (never a stale one: only the
 // hub's answer is stored, so the cache cannot renew itself).
-func (c *landingSnapCache) put(wi string, lock *api.LandingLock) {
+func (c *leaseSnapCache) put(wi string, lock *api.LeaseProjection) {
 	if c == nil || wi == "" || lock == nil {
 		return
 	}
 	cp := *lock
-	cp.Keys = append([]api.LandingLockKey(nil), lock.Keys...)
+	cp.Keys = append([]api.LeaseProjectionKey(nil), lock.Keys...)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[wi] = landingSnapEntry{lock: &cp, at: c.now()}
+	c.entries[wi] = leaseSnapEntry{lock: &cp, at: c.now()}
 }
 
 // get answers the cached projection and its age (the server observation gap
 // plus the local elapsed time).
-func (c *landingSnapCache) get(wi string) (*api.LandingLock, time.Duration, bool) {
+func (c *leaseSnapCache) get(wi string) (*api.LeaseProjection, time.Duration, bool) {
 	if c == nil {
 		return nil, 0, false
 	}
@@ -65,13 +65,13 @@ func (c *landingSnapCache) get(wi string) (*api.LandingLock, time.Duration, bool
 		}
 	}
 	cp := *e.lock
-	cp.Keys = append([]api.LandingLockKey(nil), e.lock.Keys...)
+	cp.Keys = append([]api.LeaseProjectionKey(nil), e.lock.Keys...)
 	return &cp, age, true
 }
 
 // drop forgets a ticket's cached projection (a terminal hub status outranks
 // a leftover waiting snapshot).
-func (c *landingSnapCache) drop(wi string) {
+func (c *leaseSnapCache) drop(wi string) {
 	if c == nil {
 		return
 	}

@@ -30,7 +30,7 @@ func TestLandingLockEventContract(t *testing.T) {
 	d, sp, log, fl := landingEnv(t, "sync", "publish",
 		spec("build"), spec("sync"), spec("merge"), spec("publish"), spec("after"))
 	fl.queued = true
-	fl.keys = []LandingKey{
+	fl.keys = []LeaseKey{
 		{Repo: "github.com/o/app", Branch: "epic/245", Position: 3, QueuedMS: 1200},
 		{Repo: "github.com/o/lib", Branch: "epic/245", Position: 1, QueuedMS: 0},
 	}

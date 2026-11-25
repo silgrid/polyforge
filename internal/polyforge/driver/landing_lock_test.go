@@ -37,24 +37,24 @@ type fakeLander struct {
 	held bool
 	// keys is the group's held-key list the events read (polyforge#249);
 	// nil keeps the pre-#249 shape for the older tests.
-	keys []LandingKey
+	keys []LeaseKey
 	// cycleN makes every hold's non-secret cycle id distinct, as the
 	// production manager's is.
 	cycleN int
 	cycle  string
 }
 
-func (f *fakeLander) Hold(_ context.Context, _, _ string, _ []string, queued func(LandingQueue)) (IntervalLease, error) {
+func (f *fakeLander) Hold(_ context.Context, _, _ string, _ []string, queued func(LeaseQueue)) (IntervalLease, error) {
 	f.mu.Lock()
 	f.holds++
 	f.cycleN++
 	f.cycle = "lc_test_" + strconv.Itoa(f.cycleN)
 	f.held = true
 	announce := f.queued
-	keys := append([]LandingKey(nil), f.keys...)
+	keys := append([]LeaseKey(nil), f.keys...)
 	f.mu.Unlock()
 	if announce && queued != nil {
-		q := LandingQueue{Position: 3, Since: time.Now(), Cycle: f.cycle}
+		q := LeaseQueue{Position: 3, Since: time.Now(), Cycle: f.cycle}
 		if len(keys) > 0 {
 			q.Repo, q.Branch, q.Position = keys[0].Repo, keys[0].Branch, keys[0].Position
 		}
@@ -70,10 +70,10 @@ func (f *fakeLander) Cycle() string {
 	return f.cycle
 }
 
-func (f *fakeLander) Keys() []LandingKey {
+func (f *fakeLander) Keys() []LeaseKey {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]LandingKey(nil), f.keys...)
+	return append([]LeaseKey(nil), f.keys...)
 }
 
 // Err answers a lost lease once (the next hold is healthy again).
@@ -154,7 +154,7 @@ func landingEnvAt(t *testing.T, dir, execPath, enter, exit string, steps ...Step
 	return d, sp, log, fl
 }
 
-// TestLandingLockIntervalAndRelease: one hold covers the interval, the
+// TestLeaseProjectionIntervalAndRelease: one hold covers the interval, the
 // release comes when the plan leaves it, and a step outside the interval
 // dispatches no second hold.
 func TestLandingLockIntervalAndRelease(t *testing.T) {
@@ -173,7 +173,7 @@ func TestLandingLockIntervalAndRelease(t *testing.T) {
 	}
 }
 
-// TestLandingLockQueueWaitAnnounced: waiting for the lease is a queue
+// TestLeaseProjectionQueueWaitAnnounced: waiting for the lease is a queue
 // fact, not a rewind — the driver takes the lease before the enter
 // step's first dispatch and announces the position.
 func TestLandingLockQueueWaitAnnounced(t *testing.T) {
@@ -517,9 +517,9 @@ func TestLandingSkippedExitReleases(t *testing.T) {
 	}
 }
 
-// TestLandingQueueFactReachesSupervisor: waiting for the lease sends the
+// TestLeaseQueueFactReachesSupervisor: waiting for the lease sends the
 // supervisor a StepQueued fact, never a stall.
-func TestLandingQueueFactReachesSupervisor(t *testing.T) {
+func TestLeaseQueueFactReachesSupervisor(t *testing.T) {
 	dir := t.TempDir()
 	sp := &fakeSpawner{}
 	log := &eventLog{}

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestLandingLockOldReader is the compatibility pin of the projection
+// TestLeaseProjectionOldReader is the compatibility pin of the projection
 // (polyforge#249 AC1): a reader struct that predates the field decodes a
 // document carrying landing_lock and keeps every old field byte for byte,
 // so an old CLI or panel never changes what it shows.
@@ -35,14 +35,14 @@ func TestLandingLockOldReader(t *testing.T) {
 	if err := json.Unmarshal(doc, &wi); err != nil {
 		t.Fatalf("new reader decode: %v", err)
 	}
-	if wi.LandingLock == nil || wi.LandingLock.State != LandingLockWaiting ||
-		len(wi.LandingLock.Keys) != 1 || wi.LandingLock.Keys[0].Position != 3 {
-		t.Fatalf("new reader lost the projection: %+v", wi.LandingLock)
+	if wi.LeaseProjection == nil || wi.LeaseProjection.State != LeaseWaiting ||
+		len(wi.LeaseProjection.Keys) != 1 || wi.LeaseProjection.Keys[0].Position != 3 {
+		t.Fatalf("new reader lost the projection: %+v", wi.LeaseProjection)
 	}
-	if !wi.LandingLock.Waiting() {
+	if !wi.LeaseProjection.Waiting() {
 		t.Fatalf("a live waiting projection must answer Waiting()")
 	}
-	out, err := json.Marshal(wi.LandingLock)
+	out, err := json.Marshal(wi.LeaseProjection)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -57,20 +57,20 @@ func TestLandingLockOldReader(t *testing.T) {
 	}
 }
 
-// TestLandingLockStates pins the state vocabulary and the 15 s window of Q2;
+// TestLeaseProjectionStates pins the state vocabulary and the 15 s window of Q2;
 // a change to either is a protocol change, not an implementation detail.
 func TestLandingLockStates(t *testing.T) {
-	if LandingLockWaiting != "waiting" || LandingLockNone != "none" ||
-		LandingLockStale != "stale" || LandingLockUnavailable != "unavailable" {
+	if LeaseWaiting != "waiting" || LeaseNone != "none" ||
+		LeaseStale != "stale" || LeaseUnavailable != "unavailable" {
 		t.Fatalf("state vocabulary changed")
 	}
-	if LandingLockStaleAfter.Seconds() != 15 {
-		t.Fatalf("stale window is %s, want 15s", LandingLockStaleAfter)
+	if LeaseStaleAfter.Seconds() != 15 {
+		t.Fatalf("stale window is %s, want 15s", LeaseStaleAfter)
 	}
-	if (&LandingLock{State: LandingLockNone}).Waiting() {
+	if (&LeaseProjection{State: LeaseNone}).Waiting() {
 		t.Fatalf("fresh-none answers no wait")
 	}
-	if (&LandingLock{State: LandingLockStale, Keys: []LandingLockKey{{Position: 2}}}).Waiting() != true {
+	if (&LeaseProjection{State: LeaseStale, Keys: []LeaseProjectionKey{{Position: 2}}}).Waiting() != true {
 		t.Fatalf("a stale snapshot still shows the last known wait")
 	}
 }

@@ -26,13 +26,13 @@ type IntervalLeases interface {
 	// Hold takes the lease of every repository at the ticket's target
 	// branch, waiting in the server's FIFO queue; queued reports one
 	// repository's queue position while it waits.
-	Hold(ctx context.Context, wi, capsuleDir string, repos []string, queued func(LandingQueue)) (IntervalLease, error)
+	Hold(ctx context.Context, wi, capsuleDir string, repos []string, queued func(LeaseQueue)) (IntervalLease, error)
 }
 
-// LandingQueue is one repository's queue observation during Hold: the
+// LeaseQueue is one repository's queue observation during Hold: the
 // normalized repository and target branch, the 1-based position and the
 // server's first-seen stamp. It is non-secret.
-type LandingQueue struct {
+type LeaseQueue struct {
 	Repo, Branch string
 	Position     int
 	Since        time.Time
@@ -41,10 +41,10 @@ type LandingQueue struct {
 	Cycle string
 }
 
-// LandingKey is one held lock key of a group, with the queue facts the
+// LeaseKey is one held lock key of a group, with the queue facts the
 // events carry. A manager may expose them through Keys; a test fake
 // without the method simply emits no key list.
-type LandingKey struct {
+type LeaseKey struct {
 	Repo, Branch string
 	Position     int
 	Since        time.Time
@@ -77,12 +77,12 @@ const (
 // cycle id and the held keys. A fake in a unit test need not implement it.
 type leaseCycleInfo interface {
 	Cycle() string
-	Keys() []LandingKey
+	Keys() []LeaseKey
 }
 
 // leaseInfo answers the group's cycle id and keys, or a driver-local id and
 // no key list for a manager that does not expose them.
-func leaseInfo(hold IntervalLease, fallbackCycle string) (string, []LandingKey) {
+func leaseInfo(hold IntervalLease, fallbackCycle string) (string, []LeaseKey) {
 	if info, ok := hold.(leaseCycleInfo); ok {
 		if c := info.Cycle(); c != "" {
 			return c, info.Keys()
@@ -93,7 +93,7 @@ func leaseInfo(hold IntervalLease, fallbackCycle string) (string, []LandingKey) 
 }
 
 // leaseEventKeys maps landing keys onto the event body's non-secret list.
-func leaseEventKeys(keys []LandingKey) []map[string]any {
+func leaseEventKeys(keys []LeaseKey) []map[string]any {
 	out := make([]map[string]any, 0, len(keys))
 	for _, k := range keys {
 		row := map[string]any{"repo": k.Repo, "branch": k.Branch, "position": k.Position, "queued_ms": k.QueuedMS}
@@ -329,7 +329,7 @@ func (d *Driver) ensureLease(ctx context.Context, stepID string) (bool, error) {
 	announcedAny := false
 	position := 0
 	var since time.Time
-	queued := func(q LandingQueue) {
+	queued := func(q LeaseQueue) {
 		id := q.Repo + "\n" + q.Branch
 		if announced[id] {
 			return

@@ -1765,7 +1765,8 @@ def delivery_row(cap, row, events):
          'estimate': est, 'estimate_ratio': estimate_ratio(est, approved), 'events': events,
          'wall': None, 'owner_wait': None, 'effective': None, 'build_wall': None,
          'review_rejections': None, 'verification_rejections': None, 'rework': None,
-         'failed_dispatches': None, 'throughput': throughput(cap)}
+         'failed_dispatches': None, 'throughput': throughput(cap),
+         'landing': landing_lock_stats(events)}
     if events is None:
         return d
     iv = owner_wait_intervals(events)
@@ -1787,7 +1788,6 @@ def delivery_row(cap, row, events):
         1 for e in events if e['kind'] == 'gate_verdict' and event_body(e).get('step') == 'verification')
     d['rework'] = rework_s(events, recs)
     d['failed_dispatches'] = sum(1 for e in events if e['kind'] == 'step_failed')
-    d['landing'] = landing_lock_stats(events)
     return d
 
 

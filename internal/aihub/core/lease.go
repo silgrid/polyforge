@@ -577,7 +577,7 @@ type leaseStmt interface {
 // The holder is not a position and other tickets never appear. The read
 // only SELECTs: GET never cleans an expired waiter, grants a lease or
 // changes the queue. A ticket with no live entry answers State none.
-func (m *LeaseManager) LandingSnapshot(workItemID string) (*api.LandingLock, error) {
+func (m *LeaseManager) LandingSnapshot(workItemID string) (*api.LeaseProjection, error) {
 	cfg, err := m.config("landing")
 	if err != nil {
 		return nil, err
@@ -594,7 +594,7 @@ func (m *LeaseManager) LandingSnapshot(workItemID string) (*api.LandingLock, err
 		return nil, err
 	}
 	defer rows.Close()
-	out := &api.LandingLock{State: api.LandingLockNone, ObservedAt: stamp(now), AsOf: stamp(now)}
+	out := &api.LeaseProjection{State: api.LeaseNone, ObservedAt: stamp(now), AsOf: stamp(now)}
 	for rows.Next() {
 		var key string
 		var requested, position int64
@@ -602,7 +602,7 @@ func (m *LeaseManager) LandingSnapshot(workItemID string) (*api.LandingLock, err
 			return nil, err
 		}
 		repo, branch, _ := strings.Cut(key, "\n")
-		out.Keys = append(out.Keys, api.LandingLockKey{
+		out.Keys = append(out.Keys, api.LeaseProjectionKey{
 			Repo: repo, Branch: branch, Position: int(position), Since: stamp(requested),
 		})
 	}
@@ -610,7 +610,7 @@ func (m *LeaseManager) LandingSnapshot(workItemID string) (*api.LandingLock, err
 		return nil, err
 	}
 	if len(out.Keys) > 0 {
-		out.State = api.LandingLockWaiting
+		out.State = api.LeaseWaiting
 	}
 	return out, nil
 }

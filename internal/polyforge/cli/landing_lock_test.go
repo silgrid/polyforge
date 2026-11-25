@@ -13,15 +13,15 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 )
 
-func landingWaiting(pos int) *api.LandingLock {
-	return &api.LandingLock{State: api.LandingLockWaiting, Keys: []api.LandingLockKey{
+func landingWaiting(pos int) *api.LeaseProjection {
+	return &api.LeaseProjection{State: api.LeaseWaiting, Keys: []api.LeaseProjectionKey{
 		{Repo: "github.com/o/app", Branch: "epic/245", Position: pos}}}
 }
 
 func TestQueueLandingLock(t *testing.T) {
 	var b bytes.Buffer
 	renderWITable(&b, []WIView{
-		{WorkItem: api.WorkItem{Slug: "alpha#1", ProjectName: "alpha", Status: "running", LandingLock: landingWaiting(3)}},
+		{WorkItem: api.WorkItem{Slug: "alpha#1", ProjectName: "alpha", Status: "running", LeaseProjection: landingWaiting(3)}},
 		{WorkItem: api.WorkItem{Slug: "alpha#2", ProjectName: "alpha", Status: "running"}},
 	})
 	out := b.String()
@@ -34,10 +34,10 @@ func TestQueueLandingLock(t *testing.T) {
 
 	// Multi-key positions stay in the projection's order.
 	b.Reset()
-	multi := &api.LandingLock{State: api.LandingLockWaiting, Keys: []api.LandingLockKey{
+	multi := &api.LeaseProjection{State: api.LeaseWaiting, Keys: []api.LeaseProjectionKey{
 		{Repo: "github.com/o/a", Branch: "epic/245", Position: 2},
 		{Repo: "github.com/o/b", Branch: "epic/245", Position: 4}}}
-	renderWITable(&b, []WIView{{WorkItem: api.WorkItem{Slug: "alpha#3", Status: "running", LandingLock: multi}}})
+	renderWITable(&b, []WIView{{WorkItem: api.WorkItem{Slug: "alpha#3", Status: "running", LeaseProjection: multi}}})
 	if !strings.Contains(b.String(), "等待合入锁 #2,#4") {
 		t.Fatalf("multi-key positions:\n%s", b.String())
 	}
@@ -45,9 +45,9 @@ func TestQueueLandingLock(t *testing.T) {
 	// A stale snapshot is not presented as fresh, and it keeps the source
 	// position instead of inventing one.
 	b.Reset()
-	stale := &api.LandingLock{State: api.LandingLockStale, AgeMS: 20000, Keys: []api.LandingLockKey{
+	stale := &api.LeaseProjection{State: api.LeaseStale, AgeMS: 20000, Keys: []api.LeaseProjectionKey{
 		{Repo: "github.com/o/app", Branch: "epic/245", Position: 3}}}
-	renderWITable(&b, []WIView{{WorkItem: api.WorkItem{Slug: "alpha#4", Status: "running", LandingLock: stale}}})
+	renderWITable(&b, []WIView{{WorkItem: api.WorkItem{Slug: "alpha#4", Status: "running", LeaseProjection: stale}}})
 	if !strings.Contains(b.String(), "等待合入锁 #3（陈旧）") {
 		t.Fatalf("stale row:\n%s", b.String())
 	}

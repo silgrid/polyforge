@@ -18,8 +18,8 @@ import (
 func landingFixture(wi string, pos int) *api.WorkItem {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	return &api.WorkItem{ID: wi, Slug: "alpha#1", Status: api.StatusRunning,
-		LandingLock: &api.LandingLock{State: api.LandingLockWaiting, ObservedAt: now, AsOf: now,
-			Keys: []api.LandingLockKey{{Repo: "github.com/o/app", Branch: "epic/245", Position: pos, Since: now}}}}
+		LeaseProjection: &api.LeaseProjection{State: api.LeaseWaiting, ObservedAt: now, AsOf: now,
+			Keys: []api.LeaseProjectionKey{{Repo: "github.com/o/app", Branch: "epic/245", Position: pos, Since: now}}}}
 }
 
 func TestLandingLockStatusWatchFreshness(t *testing.T) {
@@ -34,22 +34,22 @@ func TestLandingLockStatusWatchFreshness(t *testing.T) {
 	td.hub.mu.Unlock()
 
 	snap := td.watchSnapshot(wi, nil, true, 0)
-	if snap.LandingLock == nil || snap.LandingLock.State != api.LandingLockWaiting ||
-		len(snap.LandingLock.Keys) != 1 || snap.LandingLock.Keys[0].Position != 3 {
-		t.Fatalf("fresh watch projection = %+v", snap.LandingLock)
+	if snap.LeaseProjection == nil || snap.LeaseProjection.State != api.LeaseWaiting ||
+		len(snap.LeaseProjection.Keys) != 1 || snap.LeaseProjection.Keys[0].Position != 3 {
+		t.Fatalf("fresh watch projection = %+v", snap.LeaseProjection)
 	}
 
 	// The source record ages past 15 s; the next hub read fails, so the
 	// last successful projection is served as stale with its old position.
 	base := time.Now()
-	td.landingSnaps.now = func() time.Time { return base.Add(20 * time.Second) }
+	td.leaseSnaps.now = func() time.Time { return base.Add(20 * time.Second) }
 	td.hub.mu.Lock()
 	td.hub.probeFails = 1
 	td.hub.mu.Unlock()
 	snap = td.watchSnapshot(wi, nil, true, 0)
-	if snap.LandingLock == nil || snap.LandingLock.State != api.LandingLockStale ||
-		len(snap.LandingLock.Keys) != 1 || snap.LandingLock.Keys[0].Position != 3 || snap.LandingLock.AgeMS < 15000 {
-		t.Fatalf("stale watch projection = %+v", snap.LandingLock)
+	if snap.LeaseProjection == nil || snap.LeaseProjection.State != api.LeaseStale ||
+		len(snap.LeaseProjection.Keys) != 1 || snap.LeaseProjection.Keys[0].Position != 3 || snap.LeaseProjection.AgeMS < 15000 {
+		t.Fatalf("stale watch projection = %+v", snap.LeaseProjection)
 	}
 
 	// A terminal hub status clears the leftover waiting entry.
@@ -57,9 +57,9 @@ func TestLandingLockStatusWatchFreshness(t *testing.T) {
 	td.hub.items[wi].Status = api.StatusWrapped
 	td.hub.probeFails = 0
 	td.hub.mu.Unlock()
-	if snap := td.watchSnapshot(wi, nil, true, 0); snap.LandingLock == nil || snap.LandingLock.State != api.LandingLockNone ||
-		len(snap.LandingLock.Keys) != 0 {
-		t.Fatalf("terminal watch projection = %+v", snap.LandingLock)
+	if snap := td.watchSnapshot(wi, nil, true, 0); snap.LeaseProjection == nil || snap.LeaseProjection.State != api.LeaseNone ||
+		len(snap.LeaseProjection.Keys) != 0 {
+		t.Fatalf("terminal watch projection = %+v", snap.LeaseProjection)
 	}
 
 	// No record and no cache is unknown, never fresh-none.
@@ -69,8 +69,8 @@ func TestLandingLockStatusWatchFreshness(t *testing.T) {
 	}
 	td.hub.unknown["wi_absent"] = true
 	td.hub.mu.Unlock()
-	if snap := td.watchSnapshot("wi_absent", nil, true, 0); snap.LandingLock == nil || snap.LandingLock.State != api.LandingLockUnavailable {
-		t.Fatalf("unreadable watch projection = %+v", snap.LandingLock)
+	if snap := td.watchSnapshot("wi_absent", nil, true, 0); snap.LeaseProjection == nil || snap.LeaseProjection.State != api.LeaseUnavailable {
+		t.Fatalf("unreadable watch projection = %+v", snap.LeaseProjection)
 	}
 }
 
@@ -86,14 +86,14 @@ func TestLandingLockRemotePartialSnapshot(t *testing.T) {
 		}
 		td.hub.items[item.ID] = item
 		td.hub.mu.Unlock()
-		local := protocol.WatchSnapshot{WorkItem: item.ID, Slug: item.Slug, LandingLock: item.LandingLock,
+		local := protocol.WatchSnapshot{WorkItem: item.ID, Slug: item.Slug, LeaseProjection: item.LeaseProjection,
 			Events: []protocol.EventEntry{}}
 		got, err := td.Daemon.maybeRemoteSnapshot(item, local)
 		if err != nil {
 			t.Fatalf("%s: a lock-only partial snapshot must answer, got %v", code, err)
 		}
 		if !got.LockOnly || got.ProgressError != code || got.Known || got.Execution != nil ||
-			got.LandingLock == nil || got.LandingLock.Keys[0].Position != 4 {
+			got.LeaseProjection == nil || got.LeaseProjection.Keys[0].Position != 4 {
 			t.Fatalf("%s: partial snapshot = %+v", code, got)
 		}
 	}

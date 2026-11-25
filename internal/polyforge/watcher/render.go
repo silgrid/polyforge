@@ -57,7 +57,7 @@ func FormatOnce(s *protocol.WatchSnapshot, now time.Time, maxEvents int) string 
 	if s.HolderMachine != "" {
 		fmt.Fprintf(&b, "holder:     %s\n", safeID(s.HolderMachine))
 	}
-	if line := LandingLockLine(s.LandingLock); line != "" {
+	if line := LeaseProjectionLine(s.LeaseProjection); line != "" {
 		fmt.Fprintf(&b, "landing:    %s\n", line)
 	}
 	if s.ProgressError != "" {
@@ -223,21 +223,21 @@ func clean(s string) string {
 	return out
 }
 
-// LandingLockLine renders one ticket's landing-lock projection for a human
+// LeaseProjectionLine renders one ticket's landing-lock projection for a human
 // face (polyforge#249 Q11). "" when the ticket is not waiting on a lock.
 // The line names only this ticket's positions and lock keys; a stale
 // snapshot keeps its old position and says it is stale, and unavailable
 // says so instead of inventing a position.
-func LandingLockLine(l *api.LandingLock) string {
+func LeaseProjectionLine(l *api.LeaseProjection) string {
 	if l == nil {
 		return ""
 	}
 	switch l.State {
-	case api.LandingLockUnavailable:
+	case api.LeaseUnavailable:
 		return "锁状态不可用（读取不到锁快照）"
-	case api.LandingLockStale:
+	case api.LeaseStale:
 		return "等待合入锁 " + landingPositions(l) + "（陈旧）"
-	case api.LandingLockWaiting:
+	case api.LeaseWaiting:
 		return "等待合入锁 " + landingPositions(l)
 	}
 	return ""
@@ -245,7 +245,7 @@ func LandingLockLine(l *api.LandingLock) string {
 
 // landingPositions formats the 1-based queue positions this ticket holds, in
 // the projection's key order: "#3" for one key, "#1,#3" for several.
-func landingPositions(l *api.LandingLock) string {
+func landingPositions(l *api.LeaseProjection) string {
 	out := make([]string, 0, len(l.Keys))
 	for _, k := range l.Keys {
 		if k.Position < 1 {
@@ -259,9 +259,9 @@ func landingPositions(l *api.LandingLock) string {
 	return strings.Join(out, ",")
 }
 
-// LandingKeysText names the lock keys of a projection for the human watch
+// LeaseKeysText names the lock keys of a projection for the human watch
 // face: "repo (branch)" per key, comma separated. It never names a holder.
-func LandingKeysText(l *api.LandingLock) string {
+func LeaseKeysText(l *api.LeaseProjection) string {
 	if l == nil || len(l.Keys) == 0 {
 		return ""
 	}

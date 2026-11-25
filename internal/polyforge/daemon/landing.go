@@ -134,7 +134,7 @@ func newLeaseManager(hub leaseHub, journalPath string) *leaseManager {
 // every repo at the ticket's target branch and answers the group. queued
 // is called with the 1-based queue position while it waits. The group is
 // held until Release; a renewal failure marks it lost (Err).
-func (l *leaseManager) Hold(ctx context.Context, wi, capsuleDir string, repos []string, queued func(driver.LandingQueue)) (leaseHold, error) {
+func (l *leaseManager) Hold(ctx context.Context, wi, capsuleDir string, repos []string, queued func(driver.LeaseQueue)) (leaseHold, error) {
 	if l == nil || l.hub == nil {
 		return nil, fmt.Errorf("this daemon has no aihub client for the landing lock: upgrade or configure the daemon's aihub connection")
 	}
@@ -151,7 +151,7 @@ func (l *leaseManager) Hold(ctx context.Context, wi, capsuleDir string, repos []
 		return nil, err
 	}
 	for _, repo := range sorted {
-		if err := l.acquire(ctx, c, branch, repo, func(q driver.LandingQueue) {
+		if err := l.acquire(ctx, c, branch, repo, func(q driver.LeaseQueue) {
 			if queued != nil {
 				queued(q)
 			}
@@ -260,7 +260,7 @@ func (l *leaseManager) cycle(ctx context.Context, wi string) (*leaseCycle, error
 // the first call (Q9: a crash after the server granted but before the
 // answer loses the token, so the id is the only way back) and polling the
 // queue until the server grants it.
-func (l *leaseManager) acquire(ctx context.Context, c *leaseCycle, branch, repo string, queued func(driver.LandingQueue)) error {
+func (l *leaseManager) acquire(ctx context.Context, c *leaseCycle, branch, repo string, queued func(driver.LeaseQueue)) error {
 	rid := leaseRequestID()
 	if err := l.journal.Add(aihubclient.LeaseJournalEntry{
 		RequestID: rid, Kind: leaseKind, WorkItem: c.wi, Cycle: c.cycle,
@@ -300,7 +300,7 @@ func (l *leaseManager) acquire(ctx context.Context, c *leaseCycle, branch, repo 
 				position, since = g.Position, l.now()
 			}
 			if queued != nil {
-				queued(driver.LandingQueue{Repo: repo, Branch: branch, Position: g.Position, Since: since, Cycle: c.cycle})
+				queued(driver.LeaseQueue{Repo: repo, Branch: branch, Position: g.Position, Since: since, Cycle: c.cycle})
 			}
 			select {
 			case <-ctx.Done():
@@ -562,17 +562,17 @@ func (g *leaseHoldGroup) Cycle() string { return g.cycle.cycle }
 
 // Keys answers the held lock keys and their queue facts, in the group's
 // repository order (the events' keys list).
-func (g *leaseHoldGroup) Keys() []driver.LandingKey {
+func (g *leaseHoldGroup) Keys() []driver.LeaseKey {
 	g.cycle.mu.Lock()
 	defer g.cycle.mu.Unlock()
-	out := make([]driver.LandingKey, 0, len(g.repos))
+	out := make([]driver.LeaseKey, 0, len(g.repos))
 	for _, repo := range g.repos {
 		h := g.cycle.leases[repo]
 		if h == nil {
 			continue
 		}
 		_, branch, _ := strings.Cut(h.key, "\n")
-		out = append(out, driver.LandingKey{Repo: repo, Branch: branch, Position: h.position,
+		out = append(out, driver.LeaseKey{Repo: repo, Branch: branch, Position: h.position,
 			Since: h.since, QueuedMS: h.queuedMS})
 	}
 	return out

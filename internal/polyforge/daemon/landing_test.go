@@ -95,7 +95,7 @@ func TestLandingHoldRenewsAndReleases(t *testing.T) {
 	l.poll = time.Millisecond
 	dir := landingCapsule(t)
 	var positions []int
-	hold, err := l.Hold(context.Background(), "wi_1", dir, []string{"o/app", "o/lib"}, func(q driver.LandingQueue) {
+	hold, err := l.Hold(context.Background(), "wi_1", dir, []string{"o/app", "o/lib"}, func(q driver.LeaseQueue) {
 		positions = append(positions, q.Position)
 	})
 	if err != nil {
