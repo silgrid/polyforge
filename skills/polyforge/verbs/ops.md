@@ -71,6 +71,11 @@ retry that verb ONCE. A non-zero exit carries the reason (no `[workspace]`
 mapping, missing release workflows, the daemon log tail) — relay it and
 run `pf doctor`. `pf ops shutdown` stops the daemon for good: its clean
 exit ends the restart loop as well; `pf daemon ensure` starts it again.
+One exception: when the shutdown's runtime drain runs out of its 30s
+deadline (an actor stuck in a hub call), the daemon exits 1 and the
+restart loop (`pf supervise` in the workstation container) starts it
+again after 5s, which reconciles; to stop it for good, run
+`pf ops shutdown` once more.
 
 The daemon's other production knobs are not ops verbs: they live in the
 `[daemon]` table of `cli.toml` (`step_timeout`, `stall_window`,

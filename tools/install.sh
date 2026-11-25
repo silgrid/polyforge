@@ -774,7 +774,9 @@ if [ -n "$STAGED" ]; then
   # and wait until daemon AND loop are gone: never a swap under a live
   # daemon, no loop left to restart the old binary (a loop without a
   # daemon is killed). The daemon's shutdown waits at most 30s (its WIP
-  # pushes), hence the 30s wait.
+  # pushes and its runtime drain share that deadline), hence the 30s
+  # wait; a drain that runs out exits 1 and leaves the loop running,
+  # which the kill-session branch below removes.
   if daemon_running || loop_running; then
     # A graceful shutdown terminates every live agent tree: never behind
     # the back of a running job unless the operator says so. Fails

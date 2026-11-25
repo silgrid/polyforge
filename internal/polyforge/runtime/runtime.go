@@ -235,11 +235,15 @@ type Runtime struct {
 	spawner Spawner
 	toOB    *supervise.Queue[protocol.RTMsg]
 	fromOB  *supervise.Queue[protocol.OBMsg]
-	// ctx is the actors' context: the shutdown cancels it (Close, or the
-	// end of Run's or Restart's context) — a cancelled actor starts no
-	// agent and schedules no retry.
+	// ctx is the actors' context: the shutdown cancels it (Close, Drain,
+	// or the end of Run's or Restart's context) — a cancelled actor starts
+	// no agent and schedules no retry, and the mailboxes take no new
+	// operation (post refuses it).
 	ctx    context.Context
 	cancel context.CancelFunc
+	// actors counts the work items' running actor goroutines (actor.go):
+	// post registers one under mu, and Drain waits for them.
+	actors sync.WaitGroup
 
 	mu   sync.Mutex
 	jobs map[string]*job
@@ -552,8 +556,11 @@ func (r *Runtime) applyOB(msg protocol.OBMsg) {
 // sender never blocks.
 func (r *Runtime) send(msg protocol.RTMsg) { r.toOB.Push(msg) }
 
-// Close cancels the actors' context (the shutdown): no agent starts and
-// no retry runs after it. Idempotent.
+// Close cancels the actors' context (the shutdown): the mailboxes take no
+// new operation (a call answers errStopped, a Start the shutdown
+// deferral), no agent starts and no retry runs after it. It never
+// blocks: the operations already accepted run on, and Drain waits for
+// them. Idempotent.
 func (r *Runtime) Close() { r.cancel() }
 
 // stopped reports whether the shutdown (or the caller's ctx) ended: an
@@ -817,8 +824,8 @@ func (r *Runtime) Start(ctx context.Context, wi string, opts StartOpts) error {
 		opts.lane = stage
 	}
 	err = r.call(ctx, probe.ID, func() error { return r.claim(ctx, wi, probe.ID, opts) })
-	if errors.Is(err, errAbandoned) {
-		return claimDeferredError(wi) // the shutdown came while it waited its turn
+	if errors.Is(err, errAbandoned) || errors.Is(err, errStopped) {
+		return claimDeferredError(wi) // the shutdown came while it waited its turn, or before it was queued
 	}
 	return err
 }

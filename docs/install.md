@@ -125,8 +125,10 @@ while the daemon runs jobs — wait, `pf pause` them, or re-run with
 `PF_INSTALL_FORCE=1` in front of `bash`; such a refusal, like the one for a
 job list it cannot read, exits 3, so a calling program tells it from a
 failure — then shuts the daemon down gracefully (the loop ends with that clean exit —
-`pf ops shutdown` always stops for good, only failures are restarted — except
-exit 78, below),
+`pf ops shutdown` stops for good, only failures are restarted — except
+exit 78, below; a shutdown whose runtime drain runs out of its 30s deadline
+exits 1 and is restarted like a failure, so stopping for good then takes a
+second `pf ops shutdown`, while the upgrade kills a loop it finds left),
 swaps the binary, then ensures again; meanwhile it holds the ensure lock,
 so a harness session starting mid-upgrade starts nothing. A daemon already running with a different workflows
 dir, or without its loop, is reported, never auto-restarted. Finally it
