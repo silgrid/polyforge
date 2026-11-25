@@ -11,7 +11,8 @@ lanes, `develop` and `micro` (`workflows/<lane>/README.md`):
    `run.py` re-run of fix's evidence plan), opens a PR for it or reuses the
    open one, and never merges;
 2. `merge` merges the PR with `gh pr merge --merge
-   --match-head-commit <head>` under the repo's merge lock and lands the work
+   --match-head-commit <head>` under the ticket's server landing lease
+   (`pf step lock-check` before each real merge) and lands the work
    item — on both lanes through the merge agent step's `merge.py` (a PR it
    cannot take — closed, moved, refused, a moved default branch that
    conflicts — FAILs back to `sync`; gh unreachable is `incomplete`,
