@@ -154,7 +154,7 @@ func landingEnvAt(t *testing.T, dir, execPath, enter, exit string, steps ...Step
 	return d, sp, log, fl
 }
 
-// TestLeaseProjectionIntervalAndRelease: one hold covers the interval, the
+// TestLandingLockIntervalAndRelease: one hold covers the interval, the
 // release comes when the plan leaves it, and a step outside the interval
 // dispatches no second hold.
 func TestLandingLockIntervalAndRelease(t *testing.T) {
@@ -173,7 +173,7 @@ func TestLandingLockIntervalAndRelease(t *testing.T) {
 	}
 }
 
-// TestLeaseProjectionQueueWaitAnnounced: waiting for the lease is a queue
+// TestLandingLockQueueWaitAnnounced: waiting for the lease is a queue
 // fact, not a rewind — the driver takes the lease before the enter
 // step's first dispatch and announces the position.
 func TestLandingLockQueueWaitAnnounced(t *testing.T) {
@@ -517,9 +517,9 @@ func TestLandingSkippedExitReleases(t *testing.T) {
 	}
 }
 
-// TestLeaseQueueFactReachesSupervisor: waiting for the lease sends the
+// TestLandingQueueFactReachesSupervisor: waiting for the lease sends the
 // supervisor a StepQueued fact, never a stall.
-func TestLeaseQueueFactReachesSupervisor(t *testing.T) {
+func TestLandingQueueFactReachesSupervisor(t *testing.T) {
 	dir := t.TempDir()
 	sp := &fakeSpawner{}
 	log := &eventLog{}
