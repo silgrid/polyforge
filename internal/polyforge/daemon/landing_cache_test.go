@@ -15,8 +15,10 @@ import (
 func cacheFixture(t *testing.T) (*testDaemon, *api.LeaseProjection) {
 	t.Helper()
 	td := newTestDaemon(t, nil)
-	lock := &api.LeaseProjection{State: api.LeaseNone,
-		ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), AsOf: time.Now().UTC().Format(time.RFC3339Nano)}
+	// One stamp for both fields: the source observation gap is zero, so the
+	// 15 s boundary is exactly 15 s (review r2#1).
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	lock := &api.LeaseProjection{State: api.LeaseNone, ObservedAt: now, AsOf: now}
 	td.hub.mu.Lock()
 	if td.hub.items == nil {
 		td.hub.items = map[string]*api.WorkItem{}
