@@ -10,7 +10,10 @@ package daemon
 // takes no new one) → persist state.json once → close the face. The WIP
 // step and the drain share one wipLimit deadline, so Run (which returns
 // after the shutdown) releases the data-dir lock only once no actor
-// writes runtime-state.json any more. Running work items are not
+// writes runtime-state.json any more. A drain that runs out of the
+// deadline makes the shutdown's result errRuntimeDrainTimeout (every
+// caller and Run return it) and Run keeps the lock until the actors
+// really stopped or the process exits. Running work items are not
 // session-ended: they stay running at aihub with their session, and the
 // next start attaches them.
 
@@ -29,18 +32,19 @@ import (
 // counted from the cancel.
 const wipLimit = 30 * time.Second
 
-// Shutdown runs the shutdown once; concurrent callers wait for the first
-// run (or their ctx). cause names the trigger for the log.
 // obsDrainLimit bounds the shutdown's wait for the observe lane.
 const obsDrainLimit = 10 * time.Second
 
+// Shutdown runs the shutdown once; concurrent callers wait for the first
+// run (or their ctx) and get its result. cause names the trigger for the
+// log.
 func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 	first := false
 	d.shutOnce.Do(func() { first = true })
 	if !first {
 		select {
 		case <-d.shutDone:
-			return nil
+			return d.shutErr
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -81,9 +85,13 @@ func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 	// a close parked in a hub call, a reconcile mid-push — runs to its
 	// end, its state persist included, before the final persist below and
 	// before Run releases the data-dir lock. No lock is held while it
-	// waits.
+	// waits. Running out is the shutdown's result; the final persist
+	// still runs (its generation guard keeps an older snapshot from
+	// landing last).
+	var shutErr error
 	if err := d.drainRuntime(wctx); err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: shutdown: the runtime's actors did not stop within %s: %v\n", wipLimit, err)
+		shutErr = fmt.Errorf("%w: %v", errRuntimeDrainTimeout, err)
+		fmt.Fprintf(os.Stderr, "daemon: shutdown: the runtime's actors did not stop within %s: %v — the data-dir lock is kept until they do\n", wipLimit, err)
 	}
 	// the observe lane drains (its context is the run context): its last
 	// event and decision-feed writes land before the shutdown returns
@@ -106,6 +114,7 @@ func (d *Daemon) Shutdown(ctx context.Context, cause string) error {
 		_ = mh.Close()
 	}
 	d.closeFace()
+	d.shutErr = shutErr
 	close(d.shutDone)
-	return nil
+	return shutErr
 }

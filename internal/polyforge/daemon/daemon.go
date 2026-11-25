@@ -418,6 +418,9 @@ type Daemon struct {
 
 	shutOnce sync.Once
 	shutDone chan struct{} // closed when the shutdown finished
+	// shutErr is the shutdown's result (nil, or errRuntimeDrainTimeout
+	// wrapped): written before shutDone closes, read only after it did.
+	shutErr error
 	// obsDone is closed when the observe lane's Run returned (its monitors
 	// stopped, its event log closed); obsStarted says Run was started. The
 	// shutdown waits for it (bounded): the lane's last appends — a release's
@@ -997,8 +1000,9 @@ var errRuntimeDrainTimeout = errors.New("daemon: shutdown: the runtime's actors 
 
 // Run drives the daemon until a shutdown completes (or the caller's
 // context ends, which triggers the same shutdown).
-// It returns when the process should exit.
-func (d *Daemon) Run(ctx context.Context) error {
+// It returns when the process should exit, with the shutdown's result
+// once one ran.
+func (d *Daemon) Run(ctx context.Context) (runErr error) {
 	// M5: flock the daemon data dir BEFORE the socket probe — the two
 	// together are the single-instance guard. The dial probe alone is a
 	// TOCTOU: two daemons started in the same window can both observe a
@@ -1007,14 +1011,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// lifetime and released when Run returns — after the shutdown drained
 	// the runtime actors and persisted, so no actor of this process
 	// writes runtime-state.json once the next holder can take the lock.
-	// Both come before any lane starts: a refused start has nothing to
-	// unwind, and only the lock holder ever writes the data dir (see
-	// ownsDataDir).
+	// A shutdown whose drain ran out (errRuntimeDrainTimeout) returns
+	// with the lock still held: it comes down once the actors really
+	// stopped, or with the process. Both come before any lane starts: a
+	// refused start has nothing to unwind, and only the lock holder ever
+	// writes the data dir (see ownsDataDir).
 	lock, err := acquireDataDirLock(d.cfg.DataDir)
 	if err != nil {
 		return err
 	}
-	defer d.releaseDataLock()
+	defer func() {
+		if errors.Is(runErr, errRuntimeDrainTimeout) {
+			go func() {
+				_ = d.rt.Drain(context.Background())
+				d.releaseDataLock()
+			}()
+			return
+		}
+		d.releaseDataLock()
+	}()
 	// the cross-machine identity is loaded/created once,
 	// with the data-dir flock held. A corrupt key refuses the start (an
 	// operator fix); the key is never regenerated silently.
@@ -1123,10 +1138,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		fmt.Fprintf(os.Stderr, "daemon: task recovery: %v\n", err)
 	}
 
+	// The two early returns below are a shutdown's doing (only it sets
+	// the shutting-down mode and closes the face): Run returns its
+	// result once it finished.
 	var serveErr chan error
 	if d.cfg.Hosted {
 		if d.modes.ShuttingDown() {
-			return nil
+			<-d.shutDone
+			return d.shutErr
 		}
 	} else {
 		var serving bool
@@ -1134,7 +1153,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if !serving {
 			// A shutdown closed the face while this process was reconciling:
 			// nothing is left to drive.
-			return nil
+			<-d.shutDone
+			return d.shutErr
 		}
 	}
 	close(d.ready)
@@ -1156,16 +1176,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 			// The caller gave up: run the same shutdown.
 			return d.Shutdown(context.Background(), "caller-context: the Run caller's context is done")
 		case <-d.shutDone:
-			return nil
+			return d.shutErr
 		case err := <-serveErr:
 			if err != nil && err != http.ErrServerClosed {
-				_ = d.Shutdown(context.Background(), fmt.Sprintf("serve-error: %v", err))
-				return err
+				return errors.Join(err, d.Shutdown(context.Background(), fmt.Sprintf("serve-error: %v", err)))
 			}
 			// Only the shutdown closes the face, and it still has the
 			// runtime's Close to run: wait for it.
 			<-d.shutDone
-			return nil
+			return d.shutErr
 		case <-dispatch.C:
 			d.maybeSwitchConnection()
 			d.dispatch()
@@ -1773,10 +1792,14 @@ func (d *Daemon) modelHealthTracker() *modelhealth.Tracker {
 }
 
 // releaseDataLock drops the data-dir flock (Run returning is the
-// daemon's end; the next process may take over the data dir).
+// daemon's end; the next process may take over the data dir). After a
+// shutdown whose drain ran out it runs only once the runtime's actors
+// really stopped (Run's deferred release), so no actor of this process
+// writes runtime-state.json while the next holder owns the data dir.
 // ownsDataDir reports whether this process holds daemon.lock: only the
 // holder writes the data dir's state (a start the lock refused never
-// seeded its runtime and must not overwrite the running daemon's).
+// seeded its runtime and must not overwrite the running daemon's). The
+// holder stays the owner after a timed-out shutdown until that release.
 func (d *Daemon) ownsDataDir() bool {
 	d.faceMu.Lock()
 	defer d.faceMu.Unlock()
