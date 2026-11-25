@@ -289,7 +289,7 @@ func (d *Daemon) leaseLockFor(wi string, hubItem *api.WorkItem) *api.LeaseProjec
 	}
 	if ll, age, ok := d.leaseSnaps.get(wi); ok {
 		ll.AgeMS = age.Milliseconds()
-		if age >= api.LeaseStaleAfter {
+		if age > api.LeaseStaleAfter {
 			if len(ll.Keys) > 0 && (ll.State == api.LeaseWaiting || ll.State == api.LeaseStale) {
 				ll.State = api.LeaseStale
 			} else {
