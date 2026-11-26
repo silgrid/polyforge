@@ -557,18 +557,28 @@ export interface AddProviderPickerProps {
   apiKeyProviders: ApiKeyProvider[];
   onSelectOAuth: (id: string) => void;
   onSelectApiKey: (id: string) => void;
+  onOpenModels?: () => void;
   onClose: () => void;
 }
 
 export function AddProviderPicker({
   oauthProviders, apiKeyProviders,
-  onSelectOAuth, onSelectApiKey, onClose,
+  onSelectOAuth, onSelectApiKey, onOpenModels, onClose,
 }: AddProviderPickerProps) {
   const [search, setSearch] = useState("");
   const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
+  const pickerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 30); }, []);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const picker = pickerRef.current;
+    const timer = setTimeout(() => inputRef.current?.focus(), 30);
+    return () => {
+      clearTimeout(timer);
+      if (opener?.isConnected && (document.activeElement === document.body || picker?.contains(document.activeElement))) opener.focus();
+    };
+  }, []);
 
   const q = search.trim().toLowerCase();
 
@@ -579,6 +589,9 @@ export function AddProviderPicker({
   const availableOAuth = matched.filter((row) => row.kind === "oauth");
   const availableApiKey = matched.filter((row) => row.kind === "apikey");
   const totalCount = matched.length;
+  const showCustom = Boolean(onOpenModels) && (totalCount === 0 || providerMatchesSearch(q,
+    "custom third-party third party api openai compatible anthropic compatible 第三方 自定义 自訂 自定義 自訂義 openai兼容 anthropic兼容 openai相容 anthropic相容",
+    `${t("providers.customTitle")} ${t("providers.customSubtitle")}`));
 
   const cardStyle: React.CSSProperties = {
     display: "flex", flexDirection: "row", alignItems: "center", gap: 8,
@@ -598,9 +611,17 @@ export function AddProviderPicker({
 
   return (
     <div
+      ref={pickerRef}
+      role="dialog" aria-modal="true" aria-label={t("i18n.addProvider")} data-add-provider-picker
       style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       onKeyDown={(e) => {
+        if (e.key === "Tab") {
+          const controls = [...e.currentTarget.querySelectorAll<HTMLElement>('input, button:not(:disabled)')].filter((element) => element.getClientRects().length > 0);
+          const first = controls[0]; const last = controls.at(-1);
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+        }
         if (e.key !== "Escape" || e.nativeEvent.isComposing || e.keyCode === 229) return;
         e.preventDefault();
         e.stopPropagation();
@@ -618,13 +639,14 @@ export function AddProviderPicker({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
              placeholder={t("i18n.searchProviders")}
+             aria-label={t("i18n.searchProviders")}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--text)", fontSize: 13, boxSizing: "border-box" }}
           />
         </div>
 
         {/* Card grid */}
         <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
-          {totalCount === 0 ? (
+          {totalCount === 0 && !showCustom ? (
             available.length === 0 ? (
               <ConfigEmptyState action={<ConfigButton onClick={onClose}>{t("i18n.close")}</ConfigButton>}>
                 {t("settings.accountProviderAvailableNone")}
@@ -654,9 +676,19 @@ export function AddProviderPicker({
                 </button>
               ))}
 
-              {availableApiKey.length > 0 && (
+              {(availableApiKey.length > 0 || showCustom) && (
                 <div style={{ gridColumn: "1 / -1", paddingTop: availableOAuth.length > 0 ? 6 : 0, fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em" }}>API Key</div>
               )}
+              {showCustom && <button type="button" data-provider-custom data-provider-kind="custom" onClick={() => { onClose(); onOpenModels?.(); }}
+                style={cardStyle}
+                onMouseEnter={(event) => { event.currentTarget.style.borderColor = "var(--accent)"; event.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseLeave={(event) => { event.currentTarget.style.borderColor = "var(--border)"; event.currentTarget.style.background = "var(--bg-panel)"; }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3 }}>{t("providers.customTitle")}</div>
+                  <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>{t("providers.customSubtitle")}</div>
+                </div>
+                <span aria-hidden="true" style={{ width: 28, flexShrink: 0, textAlign: "center", color: "var(--text-muted)", fontSize: 24 }}>+</span>
+              </button>}
               {availableApiKey.map((row) => (
                 <button key={row.id} data-provider-available={row.id} data-provider-kind="apikey" onClick={() => { onSelectApiKey(row.id); onClose(); }}
                   style={cardStyle}
@@ -828,6 +860,7 @@ export function PiAccountLogin({ onOpenModels }: { onOpenModels?: () => void }) 
           apiKeyProviders={apiKeyProviders}
           onSelectOAuth={(id) => { setSelection({ kind: "oauth", id }); setPickerOpen(false); }}
           onSelectApiKey={(id) => { setSelection({ kind: "apikey", id }); setPickerOpen(false); }}
+          onOpenModels={onOpenModels}
           onClose={() => setPickerOpen(false)}
         />
       )}

@@ -57,7 +57,7 @@ test("an offered provider keeps its login button; the API-key entry stays for An
   assert.match(key, /Anthropic/);
 });
 
-test("the picker offers what the filtered route answers — no custom entry, no never-offered login", () => {
+test("the picker keeps native logins and puts the custom API navigation first in API Key", () => {
   const html = renderToStaticMarkup(h(I18nProvider, null, h(AddProviderPicker, {
     oauthProviders: [
       { id: "openai-codex", name: "ChatGPT Plus/Pro", usesCallbackServer: false, loggedIn: false },
@@ -68,11 +68,16 @@ test("the picker offers what the filtered route answers — no custom entry, no 
     ],
     onSelectOAuth: noop,
     onSelectApiKey: noop,
+    onOpenModels: noop,
     onClose: noop,
   })));
   assert.match(html, /ChatGPT Plus\/Pro/);
   assert.match(html, /Anthropic/);
-  assert.ok(!html.includes("Custom endpoint"), "the custom provider definition is 85a3's, not the account picker's");
+  assert.match(html, /Third-party API/);
+  assert.match(html, /Custom URL · OpenAI \/ Anthropic compatible/);
+  const kinds = [...html.matchAll(/data-provider-kind="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(kinds, ["oauth", "custom", "apikey", "apikey"]);
+  assert.match(html, /role="dialog" aria-modal="true"/);
 });
 
 // polyforge#271 AC2 (B3, Q2 A/Q3 A): the pi pane is a connected list plus an

@@ -250,12 +250,13 @@ export function ModelEmptyState({ onOpenAccount, onOpenProviders }: { onOpenAcco
   );
 }
 
-export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage = "default", onUnsavedChange }: {
+export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage = "default", addProviderRequest = 0, onUnsavedChange }: {
   cwd: string | null;
   onClose?: () => void;
   onOpenAccount?: () => void;
   /** A component test's entry point; the page opens on the default subpage. */
   initialSubpage?: ModelSubpage;
+  addProviderRequest?: number;
   /** The page reports its unsaved draft so Settings can guard a close (owner plan review item 1 A). */
   onUnsavedChange?: (dirty: boolean) => void;
 }) {
@@ -266,6 +267,12 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   // mounted (hidden), so switching subpages never throws that draft away; it
   // is not fetched before the first visit.
   const [providersVisited, setProvidersVisited] = useState(initialSubpage === "providers");
+  useEffect(() => {
+    if (!addProviderRequest) return;
+    // Keep every mounted page's draft; navigation is not a save or discard.
+    setPage("providers");
+    setProvidersVisited(true);
+  }, [addProviderRequest]);
   const [draft, setDraft] = useState<ModelPageDraft>(emptyDraft);
   const [drawerRow, setDrawerRow] = useState<ModelViewRow | null>(null);
   // The drawer keeps the catalog it opened with, so a background re-read never
@@ -548,7 +555,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
           )}
           {(page === "providers" || providersVisited) && (
             <section hidden={page !== "providers"} className="settings-model-section is-provider-page" data-model-page-pane="providers" aria-label={t("models.providersHeading")}>
-              <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
+              <ModelsConfig embedded cwd={cwd} addProviderRequest={addProviderRequest} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
             </section>
           )}
           {page === "claude" && (

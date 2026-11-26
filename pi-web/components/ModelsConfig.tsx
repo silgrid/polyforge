@@ -1425,8 +1425,9 @@ export function ProvidersReadStates({ loading, loadError, providerCount, t, onRe
   return <>{children}</>;
 }
 
-export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount, enabledModels }: {
+export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount, enabledModels, addProviderRequest = 0 }: {
   onClose: () => void; embedded?: boolean; cwd?: string | null; onOpenAccount?: () => void;
+  addProviderRequest?: number;
   /** The page's one shared controller — the table and this editor must never
  * hold two views of pi's enabledModels, or a Save's resync would re-enable
  * what the table just switched off (review r1#1). */
@@ -1452,6 +1453,9 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
   const [authListed, setAuthListed] = useState(false);
   /** Provider ids as models.json has them on disk, and where renames moved them. */
   const savedProvidersRef = useRef<Set<string>>(new Set());
+  const addedProvidersRef = useRef<Set<string>>(new Set());
+  const providerPageRef = useRef<HTMLDivElement>(null);
+  const focusAddRequestRef = useRef(false);
   const renamesRef = useRef<Map<string, string>>(new Map());
   /**
    * Per provider, the model id saved at each slot, or null for a model added
@@ -1477,6 +1481,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
   }, []);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     setLoadError(null);
     fetch("/api/models-config")
@@ -1486,9 +1491,11 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
         return d;
       })
       .then((d) => {
+        if (!active) return;
         const normalized = d.providers ? d : { ...d, providers: {} };
         setConfig(normalized);
         savedProvidersRef.current = new Set(Object.keys(normalized.providers ?? {}));
+        addedProvidersRef.current.clear();
         savedModelIdsRef.current = savedModelIds(normalized);
         const keys = Object.keys(normalized.providers ?? {});
         setSelection((current) => current && customSelectionExists(normalized, current)
@@ -1497,9 +1504,10 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
             ? { type: "provider", name: keys[0] }
             : null);
       })
-      .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
+      .catch((e: unknown) => { if (active) setLoadError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (active) setLoading(false); });
     refreshAuthProviders();
+    return () => { active = false; };
   }, [refreshAuthProviders, reload]);
 
   useEffect(() => {
@@ -1532,6 +1540,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
       slots: savedModelIdsRef.current,
     }, oldName, newName);
     if (!next) return null;
+    if (addedProvidersRef.current.delete(oldName)) addedProvidersRef.current.add(newName);
     setConfig(next);
     setProviderNameDraft(null);
     setSelection((prev) => {
@@ -1549,6 +1558,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
   }, [applyProviderRename, config, t]);
 
   const deleteProvider = useCallback((name: string) => {
+    addedProvidersRef.current.delete(name);
     const next = deleteProviderEntry(config, {
       savedProviders: savedProvidersRef.current,
       renames: renamesRef.current,
@@ -1580,10 +1590,33 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
     let name = "custom";
     let suffix = 1;
     while (Object.hasOwn(config.providers ?? {}, name)) name = `custom-${suffix++}`;
+    addedProvidersRef.current.add(name);
     setConfig((previous) => ({ ...previous, providers: { ...previous.providers, [name]: { api: "openai-completions" } } }));
     setSelection({ type: "provider", name });
     openDetail();
   }, [config.providers, openDetail]);
+
+  const handledAddRequest = useRef(0);
+  useEffect(() => {
+    if (!addProviderRequest || handledAddRequest.current === addProviderRequest || loading || loadError) return;
+    handledAddRequest.current = addProviderRequest;
+    focusAddRequestRef.current = true;
+    // Only the explicit Add flow owns these entries. New modelOverrides for
+    // a managed provider are a different draft and must never be selected here.
+    const unfinished = [...addedProvidersRef.current].find((name) => config.providers?.[name]);
+    if (unfinished) {
+      setSelection({ type: "provider", name: unfinished });
+      openDetail();
+    } else addProvider();
+  }, [addProviderRequest, loading, loadError, config.providers, addProvider, openDetail]);
+
+  useEffect(() => {
+    if (!focusAddRequestRef.current || loading || selection?.type !== "provider" || !addedProvidersRef.current.has(selection.name)) return;
+    const input = providerPageRef.current?.querySelector<HTMLInputElement>('input:not([type="password"])');
+    if (!input || input.getClientRects().length === 0) return;
+    input.focus();
+    focusAddRequestRef.current = false;
+  }, [selection, config, loading, authListed]);
 
   const addDiscoveredModels = useCallback((providerName: string, discovered: DiscoveredModel[]) => {
     setConfig((prev) => {
@@ -1665,6 +1698,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
         const renames = [...renamesRef.current].map(([from, to]) => ({ from, to }));
         const modelRenames = collectModelRenames(draft, savedModelIdsRef.current, renamesRef.current);
         savedProvidersRef.current = new Set(Object.keys(draft.providers ?? {}));
+        addedProvidersRef.current.clear();
         savedModelIdsRef.current = savedModelIds(draft);
         renamesRef.current.clear();
         enabledModels.resync(renames, modelRenames);
@@ -1776,7 +1810,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
       </ProvidersReadStates>
     );
     return (
-      <div className="config-panel-root is-embedded" data-models-page="providers" data-provider-page="flat">
+      <div ref={providerPageRef} className="config-panel-root is-embedded" data-models-page="providers" data-provider-page="flat">
         <div className="config-panel-surface">
           <div className="models-provider-picker">
             <label className="models-provider-picker-field">

@@ -30,6 +30,8 @@ interface Props {
   initialSection: SettingsSection;
   /** A phone opens on the list of sections instead of `initialSection` (the plain Settings button). */
   openAtHome?: boolean;
+  /** Open the existing pi Providers add flow from onboarding. */
+  initialAddProvider?: boolean;
   onClose: () => void;
   onSessionReloaded: () => void;
   quoteSelectionEnabled: boolean;
@@ -157,6 +159,7 @@ export function SettingsPanel({
   sessionId,
   initialSection,
   openAtHome = false,
+  initialAddProvider = false,
   onClose: closeSettings,
   onSessionReloaded,
   quoteSelectionEnabled,
@@ -168,6 +171,7 @@ export function SettingsPanel({
 }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<SettingsSection>(initialSection);
+  const [addProviderRequest, setAddProviderRequest] = useState(initialAddProvider ? 1 : 0);
   const [mountedSections, setMountedSections] = useState<ReadonlySet<SettingsSection>>(
     () => new Set([section]),
   );
@@ -256,6 +260,12 @@ export function SettingsPanel({
     setMountedSections((current) => new Set(current).add(nextSection));
     setSection(nextSection);
     setLastSettingsSection(nextSection);
+  };
+
+  const openCustomProvider = () => {
+    if (!mayLeaveSection(unsavedSections, section, "models", (question) => window.confirm(question), t("settings.unsavedLeave"))) return;
+    activateSection("models");
+    setAddProviderRequest((request) => request + 1);
   };
 
   const openSectionFromHome = (nextSection: SettingsSection) => {
@@ -362,8 +372,8 @@ export function SettingsPanel({
               placeholder is 85a3's; the permission page is 85a4's, mounted
               above (its Claude part is where a stored old `claude` navigation
               value lands). */}
-          {sectionHost("account", <AccountSettings onOpenModels={() => activateSection("models")} />)}
-          {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} onOpenAccount={() => activateSection("account")} onUnsavedChange={(dirty) => reportUnsaved("models", dirty)} />)}
+          {sectionHost("account", <AccountSettings onOpenModels={openCustomProvider} />)}
+          {sectionHost("models", <HarnessModelSettings cwd={cwd} addProviderRequest={addProviderRequest} onClose={onClose} onOpenAccount={() => activateSection("account")} onUnsavedChange={(dirty) => reportUnsaved("models", dirty)} />)}
           {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}

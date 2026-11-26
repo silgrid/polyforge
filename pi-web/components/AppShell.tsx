@@ -565,6 +565,7 @@ export function AppShell() {
   const [onboardingReopened, setOnboardingReopened] = useState(false);
   // The plain Settings button opens a phone's Settings on its list of sections; shortcuts open theirs.
   const [settingsOpenAtHome, setSettingsOpenAtHome] = useState(false);
+  const [settingsAddProvider, setSettingsAddProvider] = useState(false);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [projectTrust, setProjectTrust] = useState<ProjectTrustStatus | null>(null);
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
@@ -968,6 +969,7 @@ export function AppShell() {
 
   // The composer opens Settings too: a bare /mcp opens Settings › MCP (useAgentSession).
   const openSettingsSection = useCallback((section: SettingsSection) => {
+    setSettingsAddProvider(false);
     setSettingsOpenAtHome(false);
     setSettingsSection(section);
   }, []);
@@ -4142,6 +4144,7 @@ export function AppShell() {
         onSkip={handleOnboardingSkip}
         onClose={handleOnboardingDismiss}
         onOpenAccount={() => openSettingsSection("account")}
+        onOpenModels={() => { openSettingsSection("models"); setSettingsAddProvider(true); }}
         onWorkspaceChange={handleCwdChange}
       />
     )}
@@ -4151,11 +4154,13 @@ export function AppShell() {
         sessionId={selectedSession?.id ?? null}
         initialSection={settingsSection}
         openAtHome={settingsOpenAtHome}
+        initialAddProvider={settingsAddProvider}
         quoteSelectionEnabled={quoteSelectionEnabled}
         onQuoteSelectionChange={handleQuoteSelectionChange}
         onReopenOnboarding={onboarding?.imageManaged === true ? handleOnboardingReopen : undefined}
         onClose={() => {
           setSettingsSection(null);
+          setSettingsAddProvider(false);
           setModelsRefreshKey((key) => key + 1);
         }}
         onSessionReloaded={() => setSessionKey((key) => key + 1)}

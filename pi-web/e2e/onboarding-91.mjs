@@ -1,5 +1,6 @@
 // carries: components/OnboardingWizard*, components/AppShell.tsx, components/GeneralSettings.tsx
 // carries: app/api/onboarding/*, lib/onboarding-state.ts, lib/onboarding-flow.ts
+// carries: app/onboarding.css, components/PiAccountLogin.tsx, components/SettingsPanel.tsx, components/HarnessModelSettings.tsx, components/ModelsConfig.tsx
 // — polyforge#167 (91-onboarding) AC2, authored before the implementation from
 // the ticket alone: image mode only, four steps (AIHub → 账号 → 工作区 → 第一张票),
 // each skippable, the team mode's `pf cell add` key on stdin, the account deep
@@ -185,6 +186,7 @@ try {
     assert.equal(await page.locator('[data-onboarding-step-panel="aihub"]').count(), 1, "the wizard does not start on AIHub");
     assert.equal(await page.locator("[data-onboarding-connection]").getAttribute("data-onboarding-connection"), "external", "the team mode is not read from the first-boot record");
     assert.match(await page.locator('[data-fact="server"]').innerText(), /aihub\.team\.example\.test:8420/, "the connection result does not show the team server");
+    await page.locator(".onboarding-details summary").click();
     assert.match(await page.locator('[data-fact="userReady"]').innerText(), /ready/, "the first-boot user fact is not shown");
     assert.match(await page.locator('[data-fact="keyReady"]').innerText(), /ready/, "the first-boot key fact is not shown");
   });
@@ -247,13 +249,23 @@ try {
     await waitFor(async () => (await stepStatuses(page)).find(([step]) => step === "workspace")[1] === "complete", COLD_MS, "the workspace step did not complete");
 
     await page.locator("[data-onboarding-ticket-open]").click({ timeout: ACTION_MS });
-    const dialog = page.locator('[role="dialog"][data-lane="develop"]').first();
+    const dialog = page.locator('[data-onboarding-ticket-form][data-lane="develop"]').first();
     await dialog.waitFor({ state: "visible", timeout: COLD_MS });
     await dialog.locator('option[value="polyforge"]').waitFor({ state: "attached", timeout: COLD_MS });
     await dialog.locator("input").first().fill("First ticket from onboarding");
     await dialog.locator("textarea").fill("Created by the first-open onboarding e2e.");
+    let releaseCreate;
+    const createGate = new Promise((resolve) => { releaseCreate = resolve; });
+    await page.route("**/api/polyforge/messages/file-ticket", async (route) => { await createGate; await route.continue(); });
     await dialog.getByRole("button", { name: "Confirm and file" }).click({ timeout: ACTION_MS });
+    try {
+      assert.equal(await page.locator("[data-onboarding-close]").isDisabled(), true);
+      assert.equal(await page.locator('[data-onboarding-step="workspace"] button').isDisabled(), true);
+      await page.keyboard.press("Escape");
+      assert.equal(await dialog.isVisible(), true, "Escape cannot discard an in-flight ticket");
+    } finally { releaseCreate(); }
     await wizard.waitFor({ state: "detached", timeout: COLD_MS });
+    await page.unroute("**/api/polyforge/messages/file-ticket");
     const create = calls().find((call) => call.argv.includes("file") && call.argv.includes("create"));
     assert.ok(create, "no `pf file create` was spawned");
     assert.ok(create.argv.includes("--stdin"), "the wizard's create did not go through stdin");
@@ -320,6 +332,151 @@ try {
       return call.argv.some((arg) => arg.includes(KEY_SENTINEL));
     }), false, "a pf command line leaked the key");
     assert.deepEqual(problems, [], "the page raised an uncaught error");
+  });
+
+  await scenario("OB10", "setup layouts, local failure facts, keyboard focus and screenshots", async () => {
+    const screenshotDir = process.env.ONBOARDING_SCREENSHOT_DIR;
+    if (screenshotDir) mkdirSync(screenshotDir, { recursive: true });
+    const localConnection = { phase: "done", mode: "local", defaultCell: "default", server: "http://aihub:8420", project: "workstation", userReady: true, keyReady: true };
+    for (const width of [900, 1280, 390]) for (const theme of ["light", "dark"]) {
+      const { context: visualContext, page: visual } = await newPage();
+      contexts.push(visualContext);
+      await visual.setViewportSize({ width, height: 800 });
+      await visualContext.addInitScript(({ theme }) => { localStorage.setItem("pi-theme", theme); localStorage.setItem("pi-locale", "zh-CN"); }, { theme });
+      let connection = localConnection;
+      await visual.route("**/api/onboarding", async (route) => {
+        if (route.request().method() !== "GET") return route.fulfill({ json: { imageManaged: true, version: 1, steps: { aihub: "incomplete", account: "incomplete", workspace: "incomplete", ticket: "incomplete" }, nextStep: "aihub", dismissed: false, connection } });
+        await route.fulfill({ json: { imageManaged: true, version: 1, steps: { aihub: "incomplete", account: "incomplete", workspace: "incomplete", ticket: "incomplete" }, nextStep: "aihub", dismissed: false, connection } });
+      });
+      await visual.goto(base, { waitUntil: "domcontentloaded", timeout: COLD_MS });
+      const surface = visual.locator("[data-onboarding-wizard]");
+      await surface.waitFor({ state: "visible" });
+      for (const step of ["aihub", "account", "workspace", "ticket"]) {
+        await visual.locator(`[data-onboarding-step-panel="${step}"]`).waitFor({ state: "visible" });
+        assert.match(await visual.locator(".onboarding-step-count").innerText(), new RegExp(String(["aihub", "account", "workspace", "ticket"].indexOf(step) + 1)), "progress must follow the displayed skipped-to step");
+        const bounds = await surface.evaluate((element) => {
+          const footer = element.querySelector(".onboarding-footer").getBoundingClientRect();
+          return { overflow: element.scrollWidth > element.clientWidth, pageOverflow: document.documentElement.scrollWidth > innerWidth, footerBottom: footer.bottom, height: innerHeight };
+        });
+        assert.equal(bounds.overflow || bounds.pageOverflow, false, `${width}/${theme}/${step} overflows`);
+        assert.ok(bounds.footerBottom <= bounds.height, "actions stay inside the viewport");
+        if (screenshotDir) await visual.screenshot({ path: join(screenshotDir, `${width}-${theme}-${step}.png`) });
+        if (step === "ticket") {
+          await visual.locator("[data-onboarding-ticket-open]").click();
+          await visual.locator("[data-onboarding-ticket-form]").waitFor();
+          await visual.locator('[data-onboarding-ticket-form] option[value="polyforge"]').waitFor({ state: "attached" });
+          assert.equal(await surface.locator(".onboarding-footer").count(), 1, "embedded ticket has only one footer");
+          assert.equal(await surface.evaluate((el) => el.scrollWidth > el.clientWidth), false);
+          if (screenshotDir) await visual.screenshot({ path: join(screenshotDir, `${width}-${theme}-ticket-form.png`) });
+        } else await visual.locator(".onboarding-skip").click();
+      }
+      await visualContext.close();
+    }
+    const { context: statusContext, page: statusPage } = await newPage();
+    contexts.push(statusContext);
+    let connection = localConnection;
+    await statusPage.route("**/api/onboarding", (route) => route.fulfill({ json: { imageManaged: true, version: 1, steps: { aihub: "incomplete", account: "incomplete", workspace: "incomplete", ticket: "incomplete" }, nextStep: "aihub", dismissed: false, connection } }));
+    for (const changes of [{ phase: "config/failed" }, { phase: "identity" }, { keyReady: false }, { mode: null }, null]) {
+      connection = changes === null ? null : { ...localConnection, ...changes };
+      await statusPage.goto(base, { waitUntil: "domcontentloaded" });
+      const primary = statusPage.locator('[data-onboarding-primary="aihub"]');
+      await primary.waitFor();
+      assert.equal(await primary.isDisabled(), true, "incomplete or absent setup cannot continue");
+      assert.equal(await statusPage.locator('[data-connection-status="ready"]').count(), 0);
+    }
+    const close = statusPage.locator("[data-onboarding-close]");
+    await close.focus();
+    await statusPage.keyboard.press("Shift+Tab");
+    assert.equal(await statusPage.locator(".onboarding-skip").evaluate((el) => el === document.activeElement), true, "Tab stays inside setup");
+    await statusContext.close();
+  });
+
+  await scenario("OB11", "custom API card is first in API Key, searchable, keyboard reachable and opens the existing draft", async () => {
+    const { context: customContext, page: customPage } = await newPage();
+    contexts.push(customContext);
+    await customPage.route("**/api/onboarding", (route) => route.fulfill({ json: { imageManaged: false } }));
+    await customPage.route("**/api/auth/providers", (route) => route.fulfill({ json: {
+      oauthProviders: [{ id: "openai-codex", name: "ChatGPT Plus/Pro", loggedIn: false }],
+      apiKeyProviders: [{ id: "openai", displayName: "OpenAI", configured: false, modelCount: 2 }, { id: "google", displayName: "Google", configured: true, modelCount: 1 }],
+    } }));
+    await customPage.route("**/api/models-config", (route) => route.fulfill({ json: { providers: {} } }));
+    await customPage.route("**/api/models/enabled**", (route) => route.fulfill({ json: {
+      allEnabled: true, patterns: null, stalePatterns: [], enabledTotal: 1, availableTotal: 1,
+      scope: "global", settingsPath: "~/.pi/agent/settings.json", editable: true,
+      providers: [{ id: "google", name: "Google", kind: "builtin", enabledCount: 1, models: [{ id: "test-model", name: "Test model", ref: "google/test-model", enabled: true, contextWindow: 32000 }] }],
+    } }));
+    await customPage.goto(base, { waitUntil: "domcontentloaded" });
+    const settings = await openSettings(customPage);
+    // A newly drafted native model override is not an unfinished custom provider.
+    await settings.locator(".settings-section-tabs").getByRole("button", { name: "Models", exact: true }).click();
+    await settings.getByRole("button", { name: "pi Providers", exact: true }).click();
+    const providerPane = settings.locator('[data-model-page-pane="providers"]');
+    await providerPane.locator('option[value="apikey:google"]').waitFor({ state: "attached" });
+    await providerPane.getByRole("combobox", { name: "Provider", exact: true }).selectOption("apikey:google");
+    await providerPane.locator(".model-context-input").fill("42000");
+    await settings.locator(".settings-section-tabs").getByRole("button", { name: "Account", exact: true }).click();
+    await settings.getByRole("button", { name: "pi", exact: true }).click();
+    await settings.locator('[data-account-action="add-provider"]').click();
+    const picker = customPage.locator("[data-add-provider-picker]");
+    await picker.waitFor();
+    assert.deepEqual(await picker.locator("[data-provider-kind]").evaluateAll((els) => els.map((el) => el.dataset.providerKind)), ["oauth", "custom", "apikey"]);
+    for (const query of ["第三方", "自定义", "OpenAI兼容", "Anthropic兼容", "custom", "no-such-native-provider"]) {
+      await picker.getByRole("textbox").fill(query);
+      assert.equal(await picker.locator("[data-provider-custom]").isVisible(), true, `custom entry missing for ${query}`);
+    }
+    await picker.getByRole("textbox").fill("");
+    if (process.env.ONBOARDING_SCREENSHOT_DIR) await customPage.screenshot({ path: join(process.env.ONBOARDING_SCREENSHOT_DIR, "1280-light-provider-picker.png") });
+    await picker.locator("[data-provider-custom]").focus();
+    await customPage.keyboard.press("Enter");
+    await picker.waitFor({ state: "detached" });
+    await providerPane.waitFor({ state: "visible" });
+    const baseUrl = providerPane.getByPlaceholder("https://api.example.com/v1");
+    await baseUrl.waitFor();
+    await waitFor(() => providerPane.evaluate((element) => element.contains(document.activeElement) && document.activeElement?.tagName === "INPUT"), NAV_MS, "keyboard navigation must focus the custom editor");
+    await baseUrl.fill("https://draft.example.test/v1");
+    await settings.locator(".settings-section-tabs").getByRole("button", { name: "Account", exact: true }).click();
+    await settings.locator('[data-account-action="add-provider"]').click();
+    await picker.locator("[data-provider-custom]").click();
+    await providerPane.waitFor({ state: "visible" });
+    assert.equal(await baseUrl.inputValue(), "https://draft.example.test/v1", "the custom navigation overwrote the unfinished draft");
+    assert.equal(await providerPane.locator('option[value="provider:custom-1"]').count(), 0, "returning created another blank provider");
+    await providerPane.getByRole("combobox", { name: "Provider", exact: true }).selectOption("apikey:google");
+    assert.equal(await providerPane.locator(".model-context-input").inputValue(), "42000", "custom navigation must preserve managed overrides too");
+    await customContext.close();
+  });
+
+  await scenario("OB12", "account completion uses saved available pi models, never navigation or an empty/failed read", async () => {
+    const { context: accountContext, page: accountPage } = await newPage();
+    contexts.push(accountContext);
+    const completions = [];
+    await accountPage.route("**/api/onboarding", (route) => {
+      if (route.request().method() === "POST") completions.push(route.request().postDataJSON());
+      return route.fulfill({ json: { imageManaged: true, version: 1, steps: { aihub: "complete", account: "incomplete", workspace: "incomplete", ticket: "incomplete" }, nextStep: "account", dismissed: false, connection: null } });
+    });
+    await accountPage.route("**/api/settings/account", (route) => route.fulfill({ json: { claude: { loggedIn: false }, cells: [] } }));
+    let models = { providers: [] };
+    await accountPage.route("**/api/models/enabled", (route) => route.fulfill({ json: models }));
+    await accountPage.route("**/api/models-config", (route) => route.fulfill({ json: { providers: {} } }));
+    await accountPage.goto(base, { waitUntil: "domcontentloaded" });
+    await accountPage.locator("[data-onboarding-models-link]").click();
+    const providers = accountPage.locator('[data-model-page-pane="providers"]');
+    await providers.waitFor({ state: "visible" });
+    await providers.getByPlaceholder("https://api.example.com/v1").waitFor();
+    assert.equal(completions.length, 0, "opening custom setup is not completion");
+    await accountPage.keyboard.press("Escape");
+    await accountPage.locator('[role="dialog"][aria-label="Settings"]').waitFor({ state: "detached" });
+    assert.equal(await accountPage.locator("[data-onboarding-models-link]").evaluate((el) => el === document.activeElement), true);
+    for (const result of [{ providers: [] }, { error: "unavailable" }, { modelError: "invalid configuration", providers: [{ models: [{ ref: "custom/model" }] }] }]) {
+      models = result;
+      await accountPage.locator("[data-onboarding-account-check]").click();
+      await accountPage.locator("[data-onboarding-account-status]").waitFor();
+      assert.equal(completions.length, 0, "an empty/failed model read must not complete");
+    }
+    models = { providers: [{ id: "custom", kind: "custom", models: [{ ref: "custom/model" }] }] };
+    await accountPage.locator("[data-onboarding-account-check]").click();
+    await accountPage.locator('[data-onboarding-step-panel="workspace"]').waitFor();
+    assert.deepEqual(completions, [{ action: "complete", step: "account" }]);
+    await accountContext.close();
   });
 
   await scenario("OB8", "outside the image no entry and no wizard appear, and the API answers one boolean", async () => {

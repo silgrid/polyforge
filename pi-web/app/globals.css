@@ -1,5 +1,6 @@
 @import "@xterm/xterm/css/xterm.css";
 @import "tailwindcss";
+@import "./onboarding.css";
 /* demo/ is a separate project; keep its sources out of this app's class scan. */
 @source not "../demo";
 /* Agent worktrees: scanning them makes webpack snapshot their symlinked

@@ -30,7 +30,7 @@ const view = (overrides = {}) => ({
 });
 
 function render(overrides = {}) {
-  const props = { view: view(overrides.view), cwd: overrides.cwd ?? null, onComplete: noop, onSkip: noop, onClose: noop, onOpenAccount: noop, onWorkspaceChange: noop };
+  const props = { view: view(overrides.view), cwd: overrides.cwd ?? null, onComplete: noop, onSkip: noop, onClose: noop, onOpenAccount: noop, onOpenModels: noop, onWorkspaceChange: noop };
   return renderToStaticMarkup(h(I18nProvider, null, h(OnboardingWizard, props)));
 }
 
@@ -54,7 +54,7 @@ test("the first open shows the four steps in the ticket's order, all 「未完�
   assert.match(html, /data-onboarding-current="aihub"/);
   assert.match(html, />Step 1 of 4</);
   assert.match(html, /data-onboarding-step-panel="aihub"/, "the first open does not start on AIHub");
-  assert.match(html, /No first-boot record yet/, "a missing first-boot record is not said");
+  assert.match(html, /No connection record is available/, "a missing first-boot record is not said");
   assert.match(html, /data-onboarding-close/, "the wizard offers no close control");
 });
 
@@ -76,6 +76,7 @@ test("a skipped step stays 「未完成」 while a completed one is marked compl
   assert.match(html, /data-onboarding-account-link/, "the account step offers no deep link");
   assert.match(html, /data-onboarding-account-check/, "the account step cannot read the login status");
   assert.match(html, /Open Settings › Account/);
+  assert.match(html, /data-onboarding-models-link/, "custom providers have a direct settings entry");
 });
 
 test("the AIHub step shows the first-boot connection result, and the team mode offers pf cell add with the key as a password", () => {
@@ -106,10 +107,10 @@ test("the AIHub step shows the first-boot connection result, and the team mode o
 test("the local mode shows the machine's own Cell and continues without the team form", () => {
   const html = render({
     view: view({
-      connection: { phase: "done", mode: "local", defaultCell: "default", server: null, project: null, userReady: true, keyReady: true },
+      connection: { phase: "done", mode: "local", defaultCell: "default", server: "http://aihub:8420", project: null, userReady: true, keyReady: true },
     }),
   });
-  assert.match(html, /This machine[\s\S]{0,8}s local AIHub/);
+  assert.match(html, /Local setup is ready/);
   assert.match(html, /data-onboarding-primary="aihub"/);
   assert.doesNotMatch(html, /data-onboarding-team-form/);
   assert.doesNotMatch(html, /type="password"/, "the local mode asks for no key");
@@ -131,7 +132,7 @@ test("the first-ticket step offers the dialog, and the dialog renders the develo
   });
   assert.match(html, /data-onboarding-step-panel="ticket"/);
   assert.match(html, /data-onboarding-ticket-open/, "the first-ticket step offers no dialog");
-  assert.match(html, /develop lane/);
+  assert.match(html, /Create first ticket/);
 
   const dialog = renderToStaticMarkup(h(I18nProvider, null, h(PolyforgeFileTicketDialog, {
     projects: ["polyforge", "other"],
@@ -142,6 +143,27 @@ test("the first-ticket step offers the dialog, and the dialog renders the develo
   assert.match(dialog, /data-lane="develop"/, "the wizard's ticket dialog does not carry the develop lane");
   assert.match(dialog, /<input[^>]*value=""\/>/, "the message-less dialog does not start with a blank goal");
   assert.match(dialog, /<option value="polyforge" selected="">polyforge<\/option>/, "the dialog does not list the mapped projects with the first one defaulted");
+});
+
+test("local setup requires a completed boot, both readiness facts and a Cell; unknown and failed records never look ready", () => {
+  const connection = { phase: "done", mode: "local", defaultCell: "default", server: "http://aihub:8420", project: "workstation", userReady: true, keyReady: true };
+  const ready = render({ view: { connection } });
+  assert.match(ready, /data-connection-status="ready"/);
+  assert.match(ready, /data-fact="project">workstation</);
+  assert.doesNotMatch(ready, /disabled="" data-onboarding-primary/);
+  assert.match(ready, /<details[^>]*>[\s\S]*Startup details/);
+  assert.doesNotMatch(ready, /<details[^>]* open/);
+  for (const changes of [{ phase: "identity/failed" }, { phase: "config" }, { phase: null }, { userReady: false }, { keyReady: false }, { mode: null }, { defaultCell: null }, { server: null }]) {
+    const html = render({ view: { connection: { ...connection, ...changes } } });
+    assert.doesNotMatch(html, /data-connection-status="ready"/);
+    assert.match(html, /disabled="" data-onboarding-primary="aihub"/);
+  }
+  const missing = render();
+  assert.match(missing, /data-connection-status="missing"/);
+  assert.doesNotMatch(missing, /This machine/);
+  const external = render({ view: { connection: { ...connection, mode: "external" } } });
+  assert.match(external, /does not verify remote access/);
+  assert.doesNotMatch(external, /data-connection-status="ready"/);
 });
 
 test("the message-backed prefill is unchanged when a source message is given", () => {
