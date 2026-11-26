@@ -16,9 +16,11 @@ two harness CLIs run on it — nothing installs at boot), and — read-only,
 at `/opt/polyforge/seed/releases/<ver>` — the seed the first boot installs
 (#162, 84-components-A): the release checkout, `bin/pf`, Pi Web with its
 production build and the two pinned harness packages, pinned by a manifest
-the install verifies. The image's PATH `pf` links to
-`/components/current/bin/pf`, live on the current version after an
-upgrade; the base pf remains the entrypoint bootstrap. The versions that
+the install verifies. The image includes GitHub CLI (`gh`) through apt.
+Its PATH `pf` links to `/components/current/bin/pf`; `pi` and `claude`
+link to `/components/current/harness/<name>/node_modules/.bin/<name>`.
+Each new command follows `current` after an upgrade or rollback; the base
+pf remains the entrypoint bootstrap. The versions that
 RUN live in the components volume (`releases/<ver>` there, with `current`
 and `previous` at the volume root), never in the image: a newer seed
 upgrades the volume, an older seed never downgrades it.
@@ -37,7 +39,7 @@ environment. Full reference: docs/workstation.md, "The first boot".
 
 | File | What it is |
 | --- | --- |
-| `Containerfile` | the base image: webui dist + pf built from this repository (context: the repo root), ubuntu:24.04 with podman/crun/catatonit/git/curl/python3, the Node runtime and the seed stage |
+| `Containerfile` | the base image: webui dist + pf built from this repository (context: the repo root), ubuntu:24.04 with podman/crun/catatonit/git/gh/curl/python3, the Node runtime and the seed stage |
 | `build-seed.sh` | the seed assembly, run inside the image build: Pi Web's `npm ci` + production build + prune, the two pinned harness packages, `bin/pf`, then seedtool writes and verifies the seed's manifest (never on a host) |
 | `entrypoint.sh` | cgroup-namespace init (as root), then the environment boundary whitelist, then the base pf's absolute path running first boot and `pf supervise` |
 | `env-whitelist.sh` | the environment boundary itself, sourced: PI_*/PI_WEB_* pass, PI_TEST_* never, the first boot's WORKSTATION_AIHUB_* pass, the fixed `BUILDAH_ISOLATION=chroot` and PORT's default |

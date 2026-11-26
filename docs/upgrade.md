@@ -1648,3 +1648,37 @@ under the calling ticket and refuses on any failure, and `merge.py` /
 server first (the v0.2.4 lease tables and routes), then the daemon:
 a daemon without the lease client refuses to open a declared interval,
 and the old capsules drained before the daemon upgrade never take one.
+
+## v0.2.5, workstation project publication and command entries (polyforge#282)
+
+The local first boot now records `project: "workstation"` after its
+identity transaction succeeds. The subsequent phase records, including
+`done`, expose the same project as the `/workspace` mapping, so
+`/api/onboarding` can show the established project. An interrupted boot
+runs the identity transaction again and publishes the project, including
+when its earlier record omitted it. An identity failure does not invent
+a project; external mode still uses only its optional supplied project
+and creates nothing remote.
+
+The completed-boot gate is unchanged: a `done` record with a default Cell
+is skipped without rewriting either file. An already completed older
+record missing `project` therefore remains missing it after upgrading;
+this change does not backfill it or rerun identity/key creation.
+
+The workstation base now installs GitHub CLI (`gh`) through apt and
+provides `/usr/local/bin/pi` and `/usr/local/bin/claude` links to
+`/components/current/harness/<name>/node_modules/.bin/<name>`. New command
+invocations from the daemon or operator shell follow `current` through
+component upgrades and rollbacks. Existing harness sessions are not
+restarted by a link switch.
+
+Take a new workstation image and recreate the container to receive the
+base packages, command links and the fixed bootstrap `pf first-boot`;
+a component-only upgrade cannot change those image files. No schema,
+configuration or credential migration is required. For an unreleased
+validation build pass `SEED_VERSION=v0.2.5-dev.1` explicitly; this section
+does not announce a published v0.2.5 image. Reusing unchanged v0.2.4
+Pi Web and harness trees is possible on the same target platform, but
+both pf copies must be rebuilt and the seed manifest regenerated and
+verified for the new version and contents; copying the old pf or its
+manifest unchanged would retain the bug or stale digests/provenance.

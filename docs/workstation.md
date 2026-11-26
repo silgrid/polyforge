@@ -6,10 +6,14 @@ the aihub server) alive, and podman — rootful, with crun — runs the
 verification containers. The image is the base plus the component
 seed: podman, crun, catatonit as PID 1, the base pf (`/usr/local/libexec/polyforge/pf`, the bootstrap the
 entry point runs by absolute path), the container configs and the Node
-runtime, while the image's PATH `pf` is a link to the components
+runtime and GitHub CLI (`gh`, installed through apt), while the image's
+PATH `pf` is a link to the components
 volume's `/components/current/bin/pf` (an upgrade that switches current
 is live on PATH too; dangling until the first boot installs the
-volume), plus one complete seed of the versioned
+volume). The PATH entries `pi` and `claude` likewise link through
+`/components/current/harness/<name>/node_modules/.bin/<name>`, so each
+new invocation follows upgrades and rollbacks. The image also carries
+one complete seed of the versioned
 components — the release checkout, `bin/pf`, Pi Web built with its
 production dependencies and the two pinned harness packages —
 read-only at `/opt/polyforge/seed/releases/<ver>` and pinned by the
@@ -23,7 +27,7 @@ Everything the workstation needs lives in `dist/workstation/`:
 
 | File | What it is |
 |---|---|
-| `Containerfile` | the base image: webui's dist tree and the pf binary built from this repository, on ubuntu with podman, crun, catatonit, plus the Node runtime and the seed stage |
+| `Containerfile` | the base image: webui's dist tree and the pf binary built from this repository, on ubuntu with podman, crun, catatonit and gh, plus the Node runtime and the seed stage |
 | `build-seed.sh` | the seed assembly, run inside the image build (Pi Web's build and prune, the two pinned harness packages, `bin/pf`, the manifest seedtool writes and verifies) |
 | `entrypoint.sh` | cgroup-namespace init as root, then the environment boundary, then the first boot (`/usr/local/libexec/polyforge/pf first-boot`), then `exec /usr/local/libexec/polyforge/pf supervise` |
 | `compose.yaml` | the outer container's minimal parameter set, the six persistent volumes and the two boot modes |
@@ -88,6 +92,45 @@ PI_WEB_PASSWORD='<a long, unique secret>' docker compose --profile aihub up -d
 Build and start are two explicit steps, never `up --build`: measured
 once on compose v5, `up --build` left a stale image tagged when the
 Containerfile had changed, and the boot then proved the wrong tree.
+
+For a local validation build of the #282 fix, use an explicit development
+version (the recipe's older default also serves the existing upgrade-smoke
+fixture). This builds locally; it does not publish a release:
+
+```sh
+# From the repository root; use the target machine's platform.
+docker buildx build --load --platform linux/amd64 \
+  -f dist/workstation/Containerfile \
+  --build-arg SEED_VERSION=v0.2.5-dev.1 \
+  --build-arg SEED_COMMIT="$(git rev-parse HEAD)-dirty" \
+  --build-arg SEED_CHANNEL_REPO=silgrid/polyforge \
+  --build-arg PI_HARNESS_VERSION=1.4.0 \
+  --build-arg CLAUDE_HARNESS_VERSION=2.1.326 \
+  -t polyforge-workstation:fix282 .
+```
+
+For a cheaper validation image based on v0.2.4, an assembly stage can
+reuse that image's unchanged `pi-web/` and `harness/` seed trees on the
+same platform. The standard recipe above does not select that reuse
+path. Rebuild pf from the changed source with the new version and commit,
+replace both `/usr/local/libexec/polyforge/pf` and the new seed's `bin/pf`,
+and copy the current release checkout (`package.json`, `skills/`,
+`workflows/`). Add the base's apt package and command links too. After
+assembling the new tree at `/seed`, use the newly built seedtool:
+
+```sh
+seedtool write --root /seed --version v0.2.5-dev.1 \
+  --commit '<source-commit>-dirty' --platform linux/amd64 \
+  --channel-repo silgrid/polyforge \
+  --harness-pi-package /seed/harness/pi/node_modules/@earendil-works/pi-coding-agent \
+  --harness-claude-package /seed/harness/claude/node_modules/@anthropic-ai/claude-code
+seedtool verify --root /seed
+```
+
+The old pf retains the first-boot bug; its manifest cannot describe the
+new binary, version or digests. Keep the reused Pi Web package's actual
+version in the manifest: its built UI still reports the old version.
+Such reuse is for validating this fix, not a complete release build.
 
 The default boot passes `--with-aihub` to `pf supervise`: the aihub
 server starts as another watched child on the AIHub volume, and Pi Web
@@ -296,6 +339,7 @@ the phase is `<stage>/failed` with the reason, never a credential):
    `<data-dir>/release/current` for host installs; the two are
    independent and neither calls the other.)
 5. **done** — the record names the mode, the default Cell, the server,
+   `project` (local `workstation`, or the optional external project),
    `userReady`/`keyReady` (true only after the facts are verified;
    `keyReady` says issued-and-written, never authenticated) and
    `imageManaged`.
@@ -307,12 +351,18 @@ management mode and the first-boot wizard consume it): its fields are
 (`default`), `server`, `project` (the mapped project, when there is
 one), `userReady`, `keyReady`, `imageManaged`, `error` (the failure
 reason, on a failed phase) and `updatedAt` — and nothing else ever:
-no key, no hash, no token.
+no key, no hash, no token. Local `project` is set only after the identity
+transaction succeeds, and is published at the next phase transition,
+including after an interrupted boot resumes. An external boot retains
+its chosen project or omits the field when none was supplied; it never
+invents a remote project. `/api/onboarding` projects this record directly.
 
 A completed first boot is skipped (the record says done and cli.toml
 carries the default Cell — the first choice is made exactly once, and a
 restart with a different `WORKSTATION_AIHUB_*` environment changes
-nothing); a cell with no record at all, or a done record without the
+nothing). This skip also leaves a pre-fix completed record with a missing
+`project` untouched; upgrading the image does not backfill that field.
+A cell with no record at all, or a done record without the
 cell, is an inconsistency the container refuses to start on, naming
 both files. An interrupted first boot resumes, with the record — not
 the environment — as the authority for the choice (the owner's ruling
@@ -341,13 +391,14 @@ components volume: after the first boot they live at
 `/components/current/harness/pi` and `/components/current/harness/claude`
 (`node_modules/…`, the packages' own executables under
 `node_modules/.bin`), and the pi packages entry in pf-home points at
-the current. The image's PATH carries `pf` and the Node runtime, not
-the harness CLIs — name them by their full paths (or log in through
-Pi Web's terminal panel, whose sessions run inside the machine):
+the current. The image's `/usr/local/bin/pi` and `/usr/local/bin/claude`
+links point at these executables through `current`, making them available
+on the daemon's inherited PATH and in an operator shell. Log in by command
+name (or through Pi Web's terminal panel inside the machine):
 
 ```sh
-docker compose --profile aihub exec workstation /components/current/harness/pi/node_modules/.bin/pi
-docker compose --profile aihub exec workstation /components/current/harness/claude/node_modules/.bin/claude
+docker compose --profile aihub exec workstation pi
+docker compose --profile aihub exec workstation claude
 ```
 
 Logins land in pf-home (`/root/.pi/agent`, `/root/.claude`) and survive

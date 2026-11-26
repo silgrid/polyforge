@@ -30,6 +30,8 @@ credential):
   user's own skill entries. The host installer (`tools/install.sh`)
   keeps its own merge for host installs; the two are independent.
 - done — the record names the mode, the default Cell, the server,
+  `project` (`workstation` after a successful local identity transaction,
+  or the optional external project),
   `userReady`/`keyReady` (`keyReady` says issued-and-written, never
   authenticated — the real authentication proof is the smoke's
   `pf recall` inside the container) and `imageManaged`.
