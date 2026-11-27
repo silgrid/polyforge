@@ -44,14 +44,15 @@ test("a Cell row carries every field of the ticket's list, per harness", () => {
     source: "/home/op/.pi/agent", sourceKind: "operator",
     credentialsFollow: true, keychainHint: false,
     credentialKinds: null, credentialsFile: null,
-    usable: true, reason: null,
+    provider: null, checkedAt: null, checkBasis: "not-checked", observation: "not-read", modelUsable: null,
+    usable: null, reason: "authentication not checked",
   });
   const claude = row.harnesses.claude;
   assert.deepEqual(claude.credentialKinds, { oauthToken: false, apiKey: false, gateway: false });
   assert.equal(claude.credential, "set");
   assert.equal(claude.credentialsFile, "absent");
-  assert.equal(claude.usable, true);
-  assert.equal(claude.reason, null);
+  assert.equal(claude.usable, null);
+  assert.match(claude.reason, /not checked/);
 
   // the gateway pair (BASE_URL + AUTH_TOKEN) is its own kind (Q3)
   const gateway = buildAccountCellRow(cell({
@@ -73,8 +74,25 @@ test("a Cell row carries every field of the ticket's list, per harness", () => {
     },
   }), CAPS, new Map());
   assert.equal(residual.harnesses.claude.credential, "unset");
-  assert.equal(residual.harnesses.claude.usable, true);
+  assert.equal(residual.harnesses.claude.usable, null);
   assert.ok(residual.harnesses.claude.reason === null || !residual.harnesses.claude.reason.includes("no credential"));
+});
+
+test("missing facts, failed checks and configuration presence preserve unknown (#285)", () => {
+  const missing = buildAccountCellRow({ profile: "empty" }, CAPS, new Map());
+  assert.equal(missing.harnesses.claude.credential, null);
+  assert.equal(missing.harnesses.claude.status, "unknown");
+  assert.equal(missing.harnesses.claude.observation, "not-read");
+  assert.equal(missing.harnesses.claude.usable, null);
+  const check = { sourceDir: "/home/op/.pi/agent", status: "unknown", provider: "kimi", checkedAt: "2026-11-21T00:00:00.000Z", basis: "pi-auth-check-no-refresh", authType: null, reason: "timeout" };
+  const row = buildAccountCellRow(cell({}), CAPS, new Map([[check.sourceDir, check]]));
+  assert.equal(row.harnesses.pi.provider, "kimi");
+  assert.equal(row.harnesses.pi.checkedAt, check.checkedAt);
+  assert.equal(row.harnesses.pi.observation, "read-failed");
+  assert.equal(row.harnesses.pi.usable, null);
+  assert.equal(row.harnesses.claude.credential, "set");
+  assert.equal(row.harnesses.claude.status, "unknown");
+  assert.equal(row.harnesses.claude.modelUsable, null);
 });
 
 test("the source kinds mark shared-default and independent directories (含「共享 default」)", () => {
@@ -88,7 +106,7 @@ test("the source kinds mark shared-default and independent directories (含「�
   assert.equal(shared.harnesses.pi.sourceKind, "shared-default");
   assert.equal(shared.harnesses.claude.sourceKind, "shared-default");
   // unset credentials with no residual login: the step cannot use claude, with the reason
-  assert.equal(shared.harnesses.claude.usable, false);
+  assert.equal(shared.harnesses.claude.usable, null);
   assert.ok(shared.harnesses.claude.reason && shared.harnesses.claude.reason.includes("no credential"), shared.harnesses.claude.reason);
 
   const own = buildAccountCellRow(cell({
@@ -121,7 +139,7 @@ test("an execution-disabled Cell and a probe error are carried whole, never fake
   const broken = buildAccountCellRow({ profile: "delta", probeError: "the daemon does not answer" }, CAPS, new Map());
   assert.equal(broken.probeError, "the daemon does not answer");
   assert.equal(broken.harnesses.pi.configRoot, null);
-  assert.equal(broken.harnesses.pi.usable, false);
+  assert.equal(broken.harnesses.pi.usable, null);
   assert.equal(broken.harnesses.claude.status, "unknown");
 });
 

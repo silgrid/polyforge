@@ -2532,6 +2532,11 @@ fallback.
 
 ## Workflow card
 
+The Models page's advanced automatic-task entry (#285 final polish) opens a compact explicit target picker in Polyforge: Cell first, then project + workspace, then this same workflow editor. It neither guesses the Cell from the chat cwd nor lands on the Host root. Same-name projects in different workspaces are separate choices in this targeted view; the ordinary card keeps its existing project union. Reads and writes use the selected Cell's existing endpoints. The source lookup for a held draft checks workspace plus project, and save/rebase/reveal retain its exact workspace, project, step and captured YAML hash. A rejected CAS keeps the draft. Successful empty mappings show a no-workspace note, distinct from read failure. The existing CellSettings/WorkflowCard instances stay mounted when switching to ordinary settings, so there is no second draft or writer. Settings owns ordinary Save/Discard; standalone WorkflowCard keeps local Save. Clear/skip keep their prior immediate behavior. `e2e/provider-flow-285.mjs` asserts same-name workspace separation, cross-Cell reveal/save, 409 retry and unchanged Host-tier scope.
+
+Settings #285 retains Cell and workflow drafts across category activation. A chain draft is keyed by the owning workspace, project and step inside its Cell component, and captures that workspace YAML hash at edit time. Switching the selected project cannot apply another project's pending chain. The shared Settings change summary saves/discards each chain separately; a successful write clears only its own entry, while a CAS refusal retains the draft. The original candidate order and native precedence below are unchanged.
+
+
 The Settings › Polyforge workflow card reads `GET /api/polyforge/workflows`
 and writes through `POST /api/polyforge/config`. Its row model is pure
 (`lib/polyforge-workflows-pure.ts`, client-safe, type-only imports):
@@ -2620,7 +2625,7 @@ configuration cards; `aria-label` 「工作流」 / Workflow):
   with.
 - **Project.** A select of the union's projects, defaulting
   as above; switching re-renders that project's rows from the same read and
-  drops the unsaved drafts; the disclosure state is the card's own, kept.
+  retains the unsaved drafts under their workspace/project/step keys; the disclosure state is the card's own, kept.
   The 工作区 card lists and edits the pane's Cell file's own mapping rows,
   not the settings cwd's; the workflow card is the union of
   that Cell's mapped workspaces.
@@ -2712,7 +2717,7 @@ carried.
 `Settings › Polyforge` is a master-detail page built from the shared split
 view (`ConfigPanelShell embedded` › `ConfigSplitView`): a list beside one
 detail pane, the footer (Re-detect, which also re-reads the Cell list) below
-both. The list holds a **Host** entry first (`data-pf-host-entry`, its dot
+both. The list holds a **Shared machine settings** entry first (the Host scope, `data-pf-host-entry`, its dot
 and badge the machine detection in one word), then a **Cells** group
 (`data-pf-cells`, counted) with one entry per Cell (`data-pf-cell-entry`,
 `default` first and always listed — without the registry read too), then

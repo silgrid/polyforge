@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { buildModelRows, type ModelViewInput, type ModelViewRow } from "@/lib/harness/model-view";
 import type { ModelPayload } from "@/lib/harness/concepts";
@@ -22,7 +22,14 @@ import {
   settleWrite,
   type ModelPageDraft,
 } from "@/lib/model-page-draft";
-import { ModelsConfig } from "./ModelsConfig";
+import { ModelsConfig, type ModelConnection, type ModelConnectionCatalog } from "./ModelsConfig";
+import { AccountSettings, useAccountRead } from "./AccountSettings";
+import { AddProviderPicker } from "./PiAccountLogin";
+import { ConnectionOverview } from "./ConnectionOverview";
+import { ProviderIcon } from "./ProviderIcon";
+import { NativeModelTiers } from "./NativeModelTiers";
+import { modelReferenceImpact, modelReferenceError } from "@/lib/model-reference-impact";
+import { useSettingsDraft } from "./SettingsDrafts";
 import { ClaudeCustomModels } from "./ClaudeCustomModels";
 import { ModelStepTierDrawer, stepTierIdentity, type StepTierRead, type StepTierWriteFn } from "./ModelStepTierDrawer";
 import { readView } from "@/lib/settings-read-states";
@@ -32,43 +39,50 @@ import {
   ConfigErrorNotice,
   ConfigSidebar,
   ConfigSidebarItem,
+  ConfigSidebarGroupLabel,
   ConfigSidebarList,
   ConfigDetail,
   ConfigSkeleton,
   ConfigSplitView,
+  useConfigDetailNavigation,
 } from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
 
-/** The model page's four subpages (T3's settled information architecture):
- *  the sidebar navigates pages, never a copy of the model table. */
-export type ModelSubpage = "default" | "list" | "providers" | "claude";
+/** Main destinations plus object-specific detail pages. */
+export type ModelSubpage = "connections" | "account-claude" | "default" | "list" | "providers" | "claude" | "tiers";
 
 const MODEL_SUBPAGES: ReadonlyArray<{ id: ModelSubpage; labelKey: string }> = [
   { id: "default", labelKey: "models.defaultHeading" },
   { id: "list", labelKey: "models.listHeading" },
-  { id: "providers", labelKey: "models.providersHeading" },
-  { id: "claude", labelKey: "models.claudeCustomHeading" },
+  { id: "tiers", labelKey: "models.tiersHeading" },
 ];
 
-/** The model page's left column: the four subpages, each with its translated
- *  label. Presentational, so a component test can render it alone. */
-export function ModelPageNav({ page, onSelect }: { page: ModelSubpage; onSelect: (page: ModelSubpage) => void }) {
+/** The main model destinations; object editors belong to connections. */
+export function ModelPageNav({ page, onSelect, connections = [], onConnection, selectedConnection, onOpenTasks }: { onOpenTasks?: () => void; page: ModelSubpage; onSelect: (page: ModelSubpage) => void; connections?: ModelConnection[]; onConnection?: (connection: ModelConnection) => void; selectedConnection?: ModelConnection | null }) {
   const { t } = useI18n();
   return (
     <ConfigSidebar>
+      <ConfigSidebarGroupLabel>{t("settings.connections")}</ConfigSidebarGroupLabel>
+      <div className="settings-connection-nav">
+        <ConfigSidebarItem data-model-subpage="connections" active={page === "connections" && !selectedConnection} onClick={() => onSelect("connections")}><span aria-hidden="true" className="settings-nav-symbol">↗</span><span className="config-sidebar-text">{t("settings.allConnections")}</span></ConfigSidebarItem>
+        <ConfigSidebarItem data-model-subpage="account-claude" active={page === "account-claude"} onClick={() => onSelect("account-claude")}><ProviderIcon id="anthropic" size={15} />{t("settings.accountHarnessClaude")}</ConfigSidebarItem>
+        {connections.map((connection) => <ConfigSidebarItem key={`${connection.kind}:${connection.id}`} data-connection-id={`${connection.kind}:${connection.id}`} active={selectedConnection?.id === connection.id && selectedConnection.kind === connection.kind} onClick={() => onConnection?.(connection)}><ProviderIcon id={connection.id} size={15} /><span className="config-sidebar-text">{connection.label}</span><small>{connection.kind === "oauth" ? "OAuth" : "API"}</small></ConfigSidebarItem>)}
+      </div>
+      <ConfigSidebarGroupLabel>{t("settings.modelSettings")}</ConfigSidebarGroupLabel>
       <ConfigSidebarList>
         {MODEL_SUBPAGES.map((subpage) => (
           <ConfigSidebarItem
             key={subpage.id}
             data-model-subpage={subpage.id}
-            active={page === subpage.id}
+            active={page === subpage.id && !selectedConnection}
             onClick={() => onSelect(subpage.id)}
           >
-            {t(subpage.labelKey)}
+            <span className="settings-nav-symbol" aria-hidden="true">{subpage.id === "default" ? "☆" : subpage.id === "list" ? "☷" : subpage.id === "tiers" ? "◇" : "⚙"}</span><span className="config-sidebar-text">{t(subpage.labelKey)}</span>
           </ConfigSidebarItem>
         ))}
       </ConfigSidebarList>
+      {onOpenTasks && <details className="settings-model-advanced"><summary>{t("models.advancedSettings")}</summary><ConfigSidebarItem data-model-task-entry="" onClick={onOpenTasks}>{t("polish.automaticTasks")}</ConfigSidebarItem></details>}
     </ConfigSidebar>
   );
 }
@@ -159,8 +173,8 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effo
       const supported = levels[`${row.provider}:${row.id}`] ?? [];
       return <tr key={key}>
         <td><strong>{row.name}</strong><br /><code>{key}</code></td>
-        <td>{row.harnesses.join(", ")}</td>
-        <td>
+        <td data-label={t("models.availableFor")}>{row.harnesses.join(", ")}</td>
+        <td data-label={t("models.chatAvailability")}>
           {row.harnesses.includes("pi") && (enabled
             ? <label>pi <input type="checkbox" aria-label={t("models.enabledToggle", { model: row.name })}
                 checked={row.chatAvailable} disabled={!enabled.view?.editable || enabled.pending !== null}
@@ -170,7 +184,7 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effo
             {" "}claude: {t("models.chatAlwaysOn")}<span className="settings-model-info" aria-hidden="true"> ⓘ</span>
           </span>}
         </td>
-        <td>
+        <td data-label={t("models.reasoning")}>
           {onEffort && row.harnesses.includes("pi") && supported.length > 0
             ? <label>pi <select
               aria-label={`${t("models.reasoning")} — ${key}`}
@@ -182,7 +196,7 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, effo
             </select></label>
             : <span data-reasoning="readonly">{row.reasoning.join(", ") || t("models.notProvided")}</span>}
         </td>
-        {tier && <td><StepTierBadges row={row} tier={tier} onOpen={onOpenTier} /></td>}
+        {tier && <td data-label={t("models.stepTier")}><StepTierBadges row={row} tier={tier} onOpen={onOpenTier} /></td>}
       </tr>;
     })}</tbody>
   </table>;
@@ -250,10 +264,11 @@ export function ModelEmptyState({ onOpenAccount, onOpenProviders }: { onOpenAcco
   );
 }
 
-export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpage = "default", addProviderRequest = 0, onUnsavedChange }: {
+export function HarnessModelSettings({ cwd, onClose, onOpenAccount: externalOpenAccount, onOpenPolyforge, initialSubpage = "connections", addProviderRequest = 0, onUnsavedChange }: {
   cwd: string | null;
   onClose?: () => void;
   onOpenAccount?: () => void;
+  onOpenPolyforge?: () => void;
   /** A component test's entry point; the page opens on the default subpage. */
   initialSubpage?: ModelSubpage;
   addProviderRequest?: number;
@@ -262,16 +277,45 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
 }) {
   const { t } = useI18n();
   const enabled = useEnabledModels(cwd);
+  const { openDetail, reportDetailTitle } = useConfigDetailNavigation();
   const [page, setPage] = useState<ModelSubpage>(initialSubpage);
   // The Provider editor owns a models.json draft. Once visited it stays
   // mounted (hidden), so switching subpages never throws that draft away; it
   // is not fetched before the first visit.
-  const [providersVisited, setProvidersVisited] = useState(initialSubpage === "providers");
+  const [connections, setConnections] = useState<ModelConnection[]>([]);
+  const [connectionCatalog, setConnectionCatalog] = useState<ModelConnectionCatalog>({ oauthProviders: [], apiKeyProviders: [], loading: true, error: null });
+  const account = useAccountRead();
+  const [connectionPickerOpen, setConnectionPickerOpen] = useState(false);
+  const [accountsVisited, setAccountsVisited] = useState(initialSubpage === "account-claude");
+  const [taskAuthOpen, setTaskAuthOpen] = useState(false);
+  const [taskAuthVisited, setTaskAuthVisited] = useState(false);
+  const [selectedConnection, setSelectedConnection] = useState<ModelConnection | null>(null);
+  const modelRootRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    // A newly chosen native connection is not in the connected sidebar yet.
+    if (selectedConnection && !modelRootRef.current?.closest("[hidden]")) reportDetailTitle(selectedConnection.label);
+  }, [selectedConnection, reportDetailTitle]);
+  useLayoutEffect(() => {
+    modelRootRef.current?.querySelector<HTMLElement>(":scope > .config-split-view > .config-detail")?.scrollTo?.({ top: 0 });
+  }, [page, selectedConnection?.kind, selectedConnection?.id]);
+  const [customRequest, setCustomRequest] = useState(0);
+  const [visited, setVisited] = useState<Set<ModelSubpage>>(() => new Set([initialSubpage]));
+  const openConnection = (connection: ModelConnection) => {
+    openDetail();
+    setTaskAuthOpen(false);
+    setSelectedConnection(connection);
+    setPage(connection.kind === "provider" ? "providers" : "connections");
+    if (connection.kind !== "provider") setAccountsVisited(true);
+  };
+  const openClaude = () => { setPage("account-claude"); setSelectedConnection(null); setAccountsVisited(true); setTaskAuthOpen(false); };
+  const openTaskAuth = () => { setPage("account-claude"); setTaskAuthVisited(true); setTaskAuthOpen(true); };
+  const onOpenAccount = () => { setTaskAuthOpen(false); setPage("connections"); setSelectedConnection(null); externalOpenAccount?.(); };
+  const openCustom = () => { setPage("providers"); setSelectedConnection(null); setCustomRequest((value) => value + 1); };
   useEffect(() => {
     if (!addProviderRequest) return;
     // Keep every mounted page's draft; navigation is not a save or discard.
     setPage("providers");
-    setProvidersVisited(true);
+    setSelectedConnection(null);
   }, [addProviderRequest]);
   const [draft, setDraft] = useState<ModelPageDraft>(emptyDraft);
   const [drawerRow, setDrawerRow] = useState<ModelViewRow | null>(null);
@@ -279,6 +323,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   // unmounts it mid-edit (the CAS re-read on save is what guards the write).
   const [drawerTier, setDrawerTier] = useState<StepTierColumnView | null>(null);
   const [models, setModels] = useState<ModelViewInput[]>([]);
+  const [claudeModelCount, setClaudeModelCount] = useState<number | null>(null);
   const [defaultModel, setDefaultModel] = useState<ModelIdentity | null>(null);
   const [piSettings, setPiSettings] = useState<ModelPayload | null>(null);
   const [levels, setLevels] = useState<Record<string, string[]>>({});
@@ -291,6 +336,12 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   const [saveError, setSaveError] = useState<string | null>(null);
   const [hostTierConfig, setHostTierConfig] = useState<HostTierConfig | null>(null);
   const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
+  const refreshEnabled = enabled.refresh;
+  useEffect(() => {
+    const refresh = () => { setRevision((previous) => previous + 1); refreshEnabled(); };
+    window.addEventListener("pi-web:connections-changed", refresh);
+    return () => window.removeEventListener("pi-web:connections-changed", refresh);
+  }, [refreshEnabled]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -315,6 +366,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
       const catalog = value(0);
       const preference = value(1);
       const claude = value(2);
+      setClaudeModelCount(Array.isArray(claude?.models) ? claude.models.length : null);
       const pi = value(3)?.data as ModelPayload | undefined;
       const claudeSettings = value(4)?.data as ModelPayload | undefined;
       // the Host's [step_tiers] catalog (85b2): the tier column's own read —
@@ -346,7 +398,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
         ? { harness: "claude", provider: "anthropic", id: preference.claudeDefaultModel }
         : pi?.defaultProvider && pi.defaultModel
           ? { harness: "pi", provider: pi.defaultProvider, id: pi.defaultModel }
-          : catalog?.defaultModel ? { harness: "pi", provider: catalog.defaultModel.provider, id: catalog.defaultModel.modelId } : null);
+          : null);
       const failed = answers.find((answer) => answer.status === "rejected");
       setError(failed?.status === "rejected" ? String(failed.reason?.message ?? failed.reason) : null);
       setLoading(false);
@@ -361,6 +413,26 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
     })), defaultModel);
   }, [models, defaultModel, enabled.view]);
 
+  const [search, setSearch] = useState("");
+  const [impactBusy, setImpactBusy] = useState(false);
+  const guardedEnabled: EnabledModelsController = { ...enabled,
+    pending: impactBusy ? "reference-check" : enabled.pending,
+    setModels: (key, refs, value) => {
+      if (value) { enabled.setModels(key, refs, value); return; }
+      setImpactBusy(true);
+      void modelReferenceImpact(refs, cwd).then((references) => {
+        if (references.some((reference) => reference.startsWith("default ·"))) {
+          setSaveError(t("models.referenceBlocked", { references: references.join("; ") })); return;
+        }
+        if (!references.length || window.confirm(t("models.visibilityImpact", { references: references.join("; ") }))) enabled.setModels(key, refs, false);
+      }).catch((cause) => setSaveError(modelReferenceError(cause, t))).finally(() => setImpactBusy(false));
+    },
+    setProvider: (provider, value) => {
+      if (value) { enabled.setProvider(provider, true); return; }
+      const refs = enabled.view?.providers.find((entry) => entry.id === provider)?.models.map((model) => model.ref) ?? [];
+      guardedEnabled.setModels(`provider:${provider}`, refs, false);
+    },
+  };
   const dirty = draftDirtyCount(draft);
   const saveDraft = useCallback(async () => {
     if (saving) return;
@@ -450,9 +522,12 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
+  const managed = useSettingsDraft({ label: t("models.defaultAndReasoning"), reveal: () => setPage(draft.defaultModel ? "default" : "list"), count: dirty, busy: saving, save: () => void saveDraft(), discard: () => { setDraft(emptyDraft()); setSaveError(null); } });
   const changePage = (next: ModelSubpage) => {
-    if (dirty > 0 && !window.confirm(t("models.unsavedLeave"))) return;
-    if (next === "providers") setProvidersVisited(true);
+    setTaskAuthOpen(false);
+    setSelectedConnection(null);
+    if (next === "account-claude") { setAccountsVisited(true); setTaskAuthOpen(false); }
+    setVisited((previous) => new Set(previous).add(next));
     setPage(next);
   };
 
@@ -476,7 +551,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
   // on screen instead of replacing it with a skeleton (Q5 A).
   const defaultView = readView({ loading: loading && !shownDefault, error: Boolean(error || saveError), count: models.length + (shownDefault ? 1 : 0) });
   return (
-    <div className="settings-section settings-models" data-model-page="unified">
+    <div ref={modelRootRef} className="settings-section settings-models" data-model-page="unified">
       {(error || saveError || enabled.failure) && (
         error ? (
           <ModelPageError
@@ -489,36 +564,49 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
         )
       )}
       <ConfigSplitView>
-        <ModelPageNav page={page} onSelect={changePage} />
+        <ModelPageNav page={page} onSelect={changePage} connections={connections} selectedConnection={selectedConnection} onConnection={openConnection} onOpenTasks={onOpenPolyforge} />
         <ConfigDetail>
+          {page === "connections" && !selectedConnection && <ConnectionOverview
+            connections={connections.map((connection) => ({ ...connection, modelCount: connection.modelCount ?? enabled.view?.providers.find((provider) => provider.id === connection.id)?.models.length ?? null }))}
+            catalog={connectionCatalog} account={account} claudeModelCount={claudeModelCount}
+            onAdd={() => setConnectionPickerOpen(true)} onSelect={openConnection} onClaude={openClaude} onModels={() => changePage("list")} />}
+          {accountsVisited && <div hidden={taskAuthOpen || (page !== "account-claude" && (page !== "connections" || !selectedConnection))} className="settings-connection-detail" data-connection-detail="">
+            <AccountSettings onRevealConnection={openConnection} accountState={account} onManageModels={page === "account-claude" ? () => changePage("claude") : selectedConnection ? () => { setPage("providers"); openDetail(); } : undefined} onTaskAuthentication={openTaskAuth} connectionLabel={selectedConnection?.label} onOpenConnections={onOpenAccount} cwd={cwd} onRevealCredentials={openClaude} selectedHarness={page === "account-claude" ? "claude" : "pi"} selectedConnection={selectedConnection && selectedConnection.kind !== "provider" ? { kind: selectedConnection.kind, id: selectedConnection.id } : null} onOpenModels={openCustom} />
+          </div>}
+          {taskAuthVisited && <div hidden={!taskAuthOpen || page !== "account-claude"} className="settings-connection-detail" data-task-auth-flow=""><AccountSettings purpose="tasks" selectedHarness="claude" cwd={cwd} onOpenConnections={openClaude} onRevealCredentials={openTaskAuth} /></div>}
+          {(page === "tiers" || visited.has("tiers")) && <div hidden={page !== "tiers"}><NativeModelTiers defined={defined} onReveal={() => setPage("tiers")} onSaved={() => setRevision((previous) => previous + 1)} /></div>}
           {page === "default" && defaultView.kind === "loading" && (
             <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
               <div data-model-skeleton=""><ConfigSkeleton label={t("i18n.loading")} lines={3} /></div>
-              <ModelSaveBar count={0} saving={saving} onSave={() => void saveDraft()} />
+              {!managed && <ModelSaveBar count={0} saving={saving} onSave={() => void saveDraft()} />}
             </section>
           )}
           {page === "default" && defaultView.kind === "empty" && (
             <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
-              <ModelEmptyState onOpenAccount={onOpenAccount} onOpenProviders={() => setPage("providers")} />
+              <ModelEmptyState onOpenAccount={onOpenAccount} onOpenProviders={() => setConnectionPickerOpen(true)} />
             </section>
           )}
           {page === "default" && defaultView.kind === "ready" && (
             <section className="settings-model-section" data-model-page-pane="default" aria-label={t("models.defaultHeading")}>
-              <h3>{t("models.defaultHeading")}</h3>
+              <header className="settings-content-heading"><div><h2>{t("models.defaultHeading")}</h2><p>{t("models.defaultBoundary")}</p></div></header>
+              <div className="settings-data-panel settings-default-card"><div className="settings-default-choice"><div><h3>{t("models.defaultScopeTitle")}</h3><p>{t("models.defaultUseHint")}</p></div>
               <select className="settings-model-default-select" aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
                 onChange={(event) => {
                   const choice = JSON.parse(event.target.value) as ModelIdentity;
-                  setDraft((previous) => setDraftDefaultModel(previous, choice));
+                  setDraft((previous) => setDraftDefaultModel(previous, JSON.stringify(choice) === JSON.stringify(defaultModel) ? null : choice));
                 }}>
                 <option value="" disabled>{t("models.notProvided")}</option>
                 {shownDefault && !models.some((model) => model.harness === shownDefault.harness && model.provider === shownDefault.provider && model.id === shownDefault.id)
                   && <option value={selected}>{shownDefault.harness} · {shownDefault.provider}/{shownDefault.id}</option>}
                 {models.map((model) => <option key={`${model.harness}/${model.provider}/${model.id}`}
                   value={JSON.stringify({ harness: model.harness, provider: model.provider, id: model.id })}>
-                  {model.harness} · {model.provider}/{model.id}
+                  {model.name} · {model.harness} / {model.provider}
                 </option>)}
-              </select>
-              <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
+              </select></div>
+              <dl className="settings-model-facts"><div><dt>Harness</dt><dd>{shownDefault?.harness ?? "—"}</dd></div><div><dt>{t("models.providerLabel")}</dt><dd>{shownDefault?.provider ?? "—"}</dd></div><div><dt>{t("models.modelIdentity")}</dt><dd>{shownDefault?.id ?? t("models.notProvided")}</dd></div></dl>
+              </div>
+              <details className="settings-model-advanced"><summary>{t("polish.automaticTasks")}</summary><p>{t("models.defaultAutomationHint")}</p><ConfigButton onClick={onOpenPolyforge}>{t("models.openActualChains")}</ConfigButton></details>
+              {!managed && <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />}
             </section>
           )}
           {page === "list" && view.kind === "loading" && (
@@ -528,13 +616,13 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
           )}
           {page === "list" && view.kind === "empty" && (
             <section className="settings-model-section" data-model-page-pane="list" aria-label={t("models.listHeading")}>
-              <ModelEmptyState onOpenAccount={onOpenAccount} onOpenProviders={() => setPage("providers")} />
+              <ModelEmptyState onOpenAccount={onOpenAccount} onOpenProviders={() => setConnectionPickerOpen(true)} />
             </section>
           )}
           {page === "list" && view.kind === "ready" && (
             <section className="settings-model-section" data-model-page-pane="list" aria-label={t("models.listHeading")}>
+              <header className="settings-content-heading"><div><h2>{t("models.listHeading")}</h2><p>{t("models.listIntro")}</p></div><span className="settings-count-badge">{rows.length}</span></header>
               <EnabledModelsBanner controller={enabled} />
-              <h3>{t("models.listHeading")}</h3>
               {tierColumn && !tierColumn.capable && tierColumn.reason && (
                 <p role="note" data-step-tier-reason="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>{tierColumn.reason}</p>
               )}
@@ -543,28 +631,40 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount, initialSubpa
                   {t("models.stepTierInvalidNote", { candidates: invalidTiers.join("、") })}
                 </p>
               )}
-              <ModelEnabledBulk enabled={enabled} />
-              <HarnessModelTable rows={rows} enabled={enabled} levels={levels} piSettings={piSettings}
+              <div className="settings-model-toolbar"><input className="settings-model-search" aria-label={t("models.searchModels")} placeholder={t("models.searchModels")} value={search} onChange={(event) => setSearch(event.target.value)} />
+              <ModelEnabledBulk enabled={guardedEnabled} /></div>
+              <div className="settings-data-panel settings-model-inventory"><HarnessModelTable rows={rows.filter((row) => `${row.name} ${row.provider}/${row.id}`.toLowerCase().includes(search.toLowerCase()))} enabled={guardedEnabled} levels={levels} piSettings={piSettings}
                 saving={saving}
                 effortValues={draft.efforts}
                 tier={tierColumn ?? undefined}
                 onOpenTier={(row) => { setDrawerTier(tierColumn); setDrawerRow(row); }}
-                onEffort={(provider, id, level) => setDraft((previous) => setDraftEffort(previous, `${provider}/${id}`, level))} />
-              <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />
+                onEffort={(provider, id, level) => setDraft((previous) => {
+                  const key = `${provider}/${id}`;
+                  const next = setDraftEffort(previous, key, level);
+                  if (level === (piSettings?.perModelReasoningEffort[key]?.raw ?? "")) delete next.efforts[key];
+                  return next;
+                })} /></div>
+              {!managed && <ModelSaveBar count={dirty} saving={saving} onSave={() => void saveDraft()} />}
             </section>
           )}
-          {(page === "providers" || providersVisited) && (
+          {(
             <section hidden={page !== "providers"} className="settings-model-section is-provider-page" data-model-page-pane="providers" aria-label={t("models.providersHeading")}>
-              <ModelsConfig embedded cwd={cwd} addProviderRequest={addProviderRequest} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
+              <ModelsConfig embedded cwd={cwd} onOpenConnection={openConnection} onBack={selectedConnection && selectedConnection.kind !== "provider" ? () => openConnection(selectedConnection) : onOpenAccount} onReveal={() => setPage("providers")} addProviderRequest={addProviderRequest + customRequest} selectedManaged={selectedConnection && selectedConnection.kind !== "provider" ? { kind: selectedConnection.kind, id: selectedConnection.id, label: selectedConnection.label } : null} selectedProvider={selectedConnection?.kind === "provider" ? selectedConnection.id : null} onConnections={setConnections} onCatalogChange={setConnectionCatalog} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
             </section>
           )}
-          {page === "claude" && (
-            <section className="settings-model-section" data-model-page-pane="claude" aria-label={t("models.claudeCustomHeading")}>
-              <ClaudeCustomModels onRefresh={() => setRevision((previous) => previous + 1)} />
+          {(page === "claude" || visited.has("claude")) && (
+            <section hidden={page !== "claude"} className="settings-model-section settings-connection-detail" data-model-page-pane="claude" aria-label={t("models.claudeCustomHeading")}>
+              <ConfigButton variant="ghost" data-claude-models-back="" onClick={openClaude}>← Claude Code</ConfigButton>
+              <ClaudeCustomModels cwd={cwd} onReveal={() => setPage("claude")} onRefresh={() => setRevision((previous) => previous + 1)} />
             </section>
           )}
         </ConfigDetail>
       </ConfigSplitView>
+      {connectionPickerOpen && <AddProviderPicker
+        oauthProviders={connectionCatalog.oauthProviders} apiKeyProviders={connectionCatalog.apiKeyProviders}
+        onSelectOAuth={(id) => openConnection({ id, kind: "oauth", label: connectionCatalog.oauthProviders.find((entry) => entry.id === id)?.name ?? id })}
+        onSelectApiKey={(id) => openConnection({ id, kind: "apikey", label: connectionCatalog.apiKeyProviders.find((entry) => entry.id === id)?.displayName ?? id })}
+        onOpenModels={openCustom} onClose={() => setConnectionPickerOpen(false)} />}
       {drawerRow && drawerTier?.capable && (
         <ModelStepTierDrawer
           row={drawerRow}

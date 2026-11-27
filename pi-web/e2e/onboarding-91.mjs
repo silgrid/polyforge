@@ -1,6 +1,6 @@
 // carries: components/OnboardingWizard*, components/AppShell.tsx, components/GeneralSettings.tsx
 // carries: app/api/onboarding/*, lib/onboarding-state.ts, lib/onboarding-flow.ts
-// carries: app/onboarding.css, components/PiAccountLogin.tsx, components/SettingsPanel.tsx, components/HarnessModelSettings.tsx, components/ModelsConfig.tsx
+// carries: app/onboarding.css, components/PiAccountLogin.tsx, components/HarnessModelSettings.tsx, components/ModelsConfig.tsx
 // — polyforge#167 (91-onboarding) AC2, authored before the implementation from
 // the ticket alone: image mode only, four steps (AIHub → 账号 → 工作区 → 第一张票),
 // each skippable, the team mode's `pf cell add` key on stdin, the account deep
@@ -167,7 +167,7 @@ async function openSettings(page) {
 
 try {
   ({ base } = await h.startServer({ name: "onboarding-91", logFile: serverFile, env: serverEnv(seedRoot) }));
-  browser = await h.launchBrowser(() => chromium.launch());
+  browser = await h.launchBrowser(() => chromium.launch(process.env.SETTINGS_BROWSER ? { executablePath: process.env.SETTINGS_BROWSER } : {}));
   const { context, page } = await newPage();
   contexts.push(context);
   const wizard = page.locator("[data-onboarding-wizard]");
@@ -305,7 +305,7 @@ try {
     await page.locator("[data-onboarding-account-link]").click({ timeout: ACTION_MS });
     const settings = page.locator('[role="dialog"][aria-label="Settings"]').first();
     await settings.waitFor({ state: "visible", timeout: COLD_MS });
-    await settings.locator('[data-settings-section="account"]').first().waitFor({ state: "visible", timeout: COLD_MS });
+    await settings.locator('[data-settings-section="models"]').first().waitFor({ state: "visible", timeout: COLD_MS });
     await page.keyboard.press("Escape");
     await settings.waitFor({ state: "hidden", timeout: NAV_MS });
 
@@ -414,8 +414,7 @@ try {
     await providerPane.locator('option[value="apikey:google"]').waitFor({ state: "attached" });
     await providerPane.getByRole("combobox", { name: "Provider", exact: true }).selectOption("apikey:google");
     await providerPane.locator(".model-context-input").fill("42000");
-    await settings.locator(".settings-section-tabs").getByRole("button", { name: "Account", exact: true }).click();
-    await settings.getByRole("button", { name: "pi", exact: true }).click();
+    await settings.locator('[data-model-subpage="connections"]').click();
     await settings.locator('[data-account-action="add-provider"]').click();
     const picker = customPage.locator("[data-add-provider-picker]");
     await picker.waitFor();
@@ -434,7 +433,7 @@ try {
     await baseUrl.waitFor();
     await waitFor(() => providerPane.evaluate((element) => element.contains(document.activeElement) && document.activeElement?.tagName === "INPUT"), NAV_MS, "keyboard navigation must focus the custom editor");
     await baseUrl.fill("https://draft.example.test/v1");
-    await settings.locator(".settings-section-tabs").getByRole("button", { name: "Account", exact: true }).click();
+    await settings.locator('[data-model-subpage="connections"]').click();
     await settings.locator('[data-account-action="add-provider"]').click();
     await picker.locator("[data-provider-custom]").click();
     await providerPane.waitFor({ state: "visible" });
@@ -463,6 +462,7 @@ try {
     await providers.waitFor({ state: "visible" });
     await providers.getByPlaceholder("https://api.example.com/v1").waitFor();
     assert.equal(completions.length, 0, "opening custom setup is not completion");
+    accountPage.once("dialog", (dialog) => dialog.accept());
     await accountPage.keyboard.press("Escape");
     await accountPage.locator('[role="dialog"][aria-label="Settings"]').waitFor({ state: "detached" });
     assert.equal(await accountPage.locator("[data-onboarding-models-link]").evaluate((el) => el === document.activeElement), true);

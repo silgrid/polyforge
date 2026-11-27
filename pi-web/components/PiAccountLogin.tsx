@@ -10,6 +10,8 @@
 // login is never offered (Q10): the providers route filters it, so it never
 // reaches this list; a stored credential of it shows its status and a
 // logout alone.
+import { providerReferenceImpact, modelReferenceError } from "@/lib/model-reference-impact";
+import { useSettingsDraft } from "./SettingsDrafts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { SUBSCRIPTION_LOGIN_HIDDEN_PROVIDER, accountProviderRows, type AccountProviderRows } from "@/lib/provider-listing";
@@ -77,6 +79,7 @@ function SecretTextInput({
   placeholder,
   mono,
   onKeyDown,
+  disabled = false,
   autoComplete = "off",
   spellCheck = false,
   style,
@@ -86,6 +89,7 @@ function SecretTextInput({
   placeholder?: string;
   mono?: boolean;
   onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>;
+  disabled?: boolean;
   autoComplete?: string;
   spellCheck?: boolean;
   style?: React.CSSProperties;
@@ -101,6 +105,8 @@ function SecretTextInput({
     <div style={{ position: "relative", width: "100%", ...style }}>
       <input
         type={visible ? "text" : "password"}
+        aria-label="API Key"
+        disabled={disabled}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
@@ -155,8 +161,8 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── OAuth detail ──────────────────────────────────────────────────────────────
 
-export function OAuthDetail({ provider, onRefresh }: {
-  provider: OAuthProvider; onRefresh: () => void;
+export function OAuthDetail({ provider, onRefresh, cwd = null }: {
+  provider: OAuthProvider; onRefresh: () => void; cwd?: string | null;
 }) {
   const [loginState, setLoginState] = useState<OAuthLoginState>({ phase: "idle" });
   const { t } = useI18n();
@@ -234,10 +240,16 @@ export function OAuthDetail({ provider, onRefresh }: {
   }, [provider.id, onRefresh, t]);
 
   const handleLogout = useCallback(async () => {
-    await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
-    setLoginState({ phase: "idle" });
-    onRefresh();
-  }, [provider.id, onRefresh]);
+    try {
+      const references = await providerReferenceImpact(provider.id, cwd);
+      if (references.length) { setLoginState({ phase: "error", message: t("models.referenceBlocked", { references: references.join("; ") }) }); return; }
+      const response = await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
+      const answer = await response.json();
+      if (!response.ok || answer.error) throw new Error(answer.error ?? `HTTP ${response.status}`);
+      setLoginState({ phase: "idle" });
+      onRefresh();
+    } catch (cause) { setLoginState({ phase: "error", message: modelReferenceError(cause, t) }); }
+  }, [provider.id, cwd, onRefresh, t]);
 
   const submitCode = useCallback(async (token: string, code: string) => {
     if (!code.trim()) return;
@@ -416,14 +428,15 @@ export function OAuthDetail({ provider, onRefresh }: {
 
 // ── API Key detail ────────────────────────────────────────────────────────────
 
-export function ApiKeyDetail({ provider, onRefresh }: {
-  provider: ApiKeyProvider; onRefresh: () => void;
+export function ApiKeyDetail({ provider, onRefresh, onReveal, cwd = null }: {
+  provider: ApiKeyProvider; onRefresh: () => void; onReveal?: () => void; cwd?: string | null;
 }) {
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
+  const submitting = useRef(false);
   const { t } = useI18n();
 
   // Reset state when provider changes
@@ -434,7 +447,8 @@ export function ApiKeyDetail({ provider, onRefresh }: {
   }, [provider.id]);
 
   const handleSave = useCallback(async () => {
-    if (!apiKey.trim()) return;
+    if (submitting.current || saving || removing || savedOk || !apiKey.trim()) return;
+    submitting.current = true;
     setSaving(true);
     setError(null);
     setSavedOk(false);
@@ -456,36 +470,40 @@ export function ApiKeyDetail({ provider, onRefresh }: {
     } catch (e) {
       setError(String(e));
     } finally {
+      submitting.current = false;
       setSaving(false);
     }
-  }, [apiKey, provider.id, onRefresh]);
+  }, [apiKey, provider.id, onRefresh, saving, removing, savedOk]);
 
   const handleRemove = useCallback(async () => {
+    if (submitting.current) return;
+    submitting.current = true;
     setRemoving(true);
     setError(null);
     try {
+      const references = await providerReferenceImpact(provider.id, cwd);
+      if (references.length) { setError(t("models.referenceBlocked", { references: references.join("; ") })); return; }
       const res = await fetch(`/api/auth/api-key/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
       const d = await res.json() as { success?: boolean; error?: string };
       if (!res.ok || d.error) setError(d.error ?? `HTTP ${res.status}`);
       else onRefresh();
     } catch (e) {
-      setError(String(e));
+      setError(modelReferenceError(e, t));
     } finally {
+      submitting.current = false;
       setRemoving(false);
     }
-  }, [provider.id, onRefresh]);
+  }, [provider.id, cwd, onRefresh, t]);
 
+  const managed = useSettingsDraft({ label: `${provider.displayName} · API key`, reveal: onReveal, count: apiKey ? 1 : 0, busy: saving || removing,
+    canSave: Boolean(apiKey.trim()) && !savedOk, save: () => void handleSave(), discard: () => { setApiKey(""); setError(null); setSavedOk(false); } });
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <ConfigDetailHeader>
-        <ConfigDetailHeaderInfo>
-          <SectionTitle>API Key</SectionTitle>
-        </ConfigDetailHeaderInfo>
-        <ConfigDetailActions>
+    <div className="settings-api-key-detail" data-api-key-detail={provider.id}>
+      <div className="settings-api-key-status">
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: provider.configured ? "#4ade80" : "var(--border)", display: "inline-block" }} />
             <span style={{ fontSize: 11, color: provider.configured ? "#4ade80" : "var(--text-dim)" }}>
-               {provider.configured ? t("i18n.configured") : t("i18n.notConfigured")}
+               {t(provider.configured === true ? "models.connectionKeySaved" : provider.configured === false ? "i18n.notConfigured" : "models.connectionUnknown")}
             </span>
           </div>
           {provider.configured && (
@@ -493,15 +511,14 @@ export function ApiKeyDetail({ provider, onRefresh }: {
               variant="danger"
               size="small"
               onClick={handleRemove}
-              disabled={removing}
+              disabled={removing || saving}
             >
                {removing ? t("i18n.removing") : t("i18n.disconnect")}
             </ConfigButton>
           )}
-        </ConfigDetailActions>
-      </ConfigDetailHeader>
+      </div>
 
-      {!provider.configured && (
+      {provider.configured === false && (
         <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
           {provider.modelCount === 1
             ? t("models.apiKeyEnableOne", { provider: provider.displayName })
@@ -509,20 +526,28 @@ export function ApiKeyDetail({ provider, onRefresh }: {
         </p>
       )}
 
-      <div style={{ display: "flex", gap: 6 }}>
+      <label className="settings-api-key-field">
+        <span>API Key</span>
         <SecretTextInput
+          disabled={saving || removing}
           value={apiKey}
-          onChange={setApiKey}
-          onKeyDown={(e) => { if (e.key === "Enter" && apiKey.trim()) handleSave(); }}
+          onChange={(value) => { setApiKey(value); setSavedOk(false); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (!managed && !e.nativeEvent.isComposing) void handleSave();
+            }
+          }}
           placeholder={provider.configured ? t("models.replaceApiKey") : "sk-…"}
           style={{ flex: 1 }}
           autoComplete="off"
           spellCheck={false}
           mono
         />
-        <button
+      </label>
+      {!managed && <button
           onClick={handleSave}
-          disabled={saving || !apiKey.trim() || savedOk}
+          disabled={saving || removing || !apiKey.trim() || savedOk}
           style={{
             padding: "6px 12px",
             background: savedOk ? "#16a34a" : apiKey.trim() ? "var(--accent)" : "var(--bg-panel)",
@@ -539,10 +564,10 @@ export function ApiKeyDetail({ provider, onRefresh }: {
             </svg>
           )}
            {savedOk ? t("i18n.saved") : saving ? t("i18n.saving") : t("i18n.save")}
-        </button>
-      </div>
+        </button>}
 
-      {error && <p style={{ margin: 0, fontSize: 12, color: "#f87171" }}>{error}</p>}
+      {savedOk && <p role="status">{t("i18n.saved")}</p>}
+      {error && <p role="alert" style={{ margin: 0, fontSize: 12, color: "#f87171" }}>{error}</p>}
 
       <ProviderUsageSummary providerId={provider.id} enabled={provider.configured} />
 
@@ -799,14 +824,16 @@ export function ProviderAccountView({ rows, loading, readError, hasData = false,
 
 /** The pi pane of Account › pi: the managed providers' status and the one
  * place to sign in, sign out and enter API keys. */
-export function PiAccountLogin({ onOpenModels }: { onOpenModels?: () => void }) {
+export function PiAccountLogin({ onOpenModels, selectedConnection, cwd = null, onBack, onRevealConnection, refreshRequest = 0 }: { onRevealConnection?: (connection: { kind: "oauth" | "apikey"; id: string; label: string }) => void; refreshRequest?: number; onBack?: () => void; onOpenModels?: () => void; selectedConnection?: { kind: "oauth" | "apikey"; id: string } | null; cwd?: string | null }) {
+  const { t } = useI18n();
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   const [loading, setLoading] = useState(true);
   const [readError, setReadError] = useState<string | null>(null);
   const [hasData, setHasData] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [selection, setSelection] = useState<{ kind: "oauth" | "apikey"; id: string } | null>(null);
+  const [visitedConnections, setVisitedConnections] = useState<Set<string>>(() => new Set());
+  const [selection, setSelection] = useState<{ kind: "oauth" | "apikey"; id: string } | null>(selectedConnection ?? null);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -820,29 +847,43 @@ export function PiAccountLogin({ onOpenModels }: { onOpenModels?: () => void }) 
         setOauthProviders(d.oauthProviders);
         setApiKeyProviders(d.apiKeyProviders);
         setHasData(true);
+        window.dispatchEvent(new Event("pi-web:connections-changed"));
       })
       .catch(() => { setReadError("settings.accountReadFailed"); })
       .finally(() => setLoading(false));
   }, []);
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh, refreshRequest]);
+  useEffect(() => { if (selectedConnection !== undefined) setSelection(selectedConnection); }, [selectedConnection]);
+  useEffect(() => {
+    if (selection) setVisitedConnections((previous) => new Set(previous).add(`${selection.kind}:${selection.id}`));
+  }, [selection]);
 
   const rows = accountProviderRows(oauthProviders, apiKeyProviders);
 
-  const detail = (() => {
-    if (selection?.kind === "oauth") {
-      const provider = oauthProviders.find((p) => p.id === selection.id);
-      if (provider) return <OAuthDetail key={provider.id} provider={provider} onRefresh={refresh} />;
+  const details = [...new Set([...visitedConnections, ...(selection ? [`${selection.kind}:${selection.id}`] : [])])].map((key) => {
+    const separator = key.indexOf(":");
+    const kind = key.slice(0, separator);
+    const id = key.slice(separator + 1);
+    const active = selection?.kind === kind && selection.id === id;
+    if (kind === "oauth") {
+      const provider = oauthProviders.find((entry) => entry.id === id);
+      return provider ? <div key={key} hidden={!active}><OAuthDetail provider={provider} onRefresh={refresh} cwd={cwd} /></div> : null;
     }
-    if (selection?.kind === "apikey") {
-      const provider = apiKeyProviders.find((p) => p.id === selection.id);
-      if (provider) return <ApiKeyDetail key={provider.id} provider={provider} onRefresh={refresh} />;
-    }
-    return null;
-  })();
+    const provider = apiKeyProviders.find((entry) => entry.id === id);
+    return provider ? <div key={key} hidden={!active}><ApiKeyDetail provider={provider} onRefresh={refresh} onReveal={() => { setSelection({ kind: "apikey", id }); onRevealConnection?.({ kind: "apikey", id, label: provider.displayName }); }} cwd={cwd} /></div> : null;
+  });
 
+  const selectionExists = selection?.kind === "oauth" ? oauthProviders.some((provider) => provider.id === selection.id)
+    : selection?.kind === "apikey" ? apiKeyProviders.some((provider) => provider.id === selection.id) : false;
   return (
     <div className="pi-account-login" data-pi-account-login="true">
-      {detail ?? (
+      <p className="settings-general-description">{t("settings.credentialsImmediate")}</p>
+      {selection && !onBack && <ConfigButton onClick={() => setSelection(null)}>{t("models.connectionsTitle")}</ConfigButton>}
+      {selection && loading && !hasData && <ConfigSkeleton label={t("i18n.loading")} />}
+      {selection && readError && <ConfigErrorNotice summary={t(readError)} action={<ConfigButton onClick={refresh}>{t("i18n.retry")}</ConfigButton>} />}
+      {selection && !loading && !readError && !selectionExists && <ConfigErrorNotice summary={t("models.connectionUnavailable")} action={<ConfigButton onClick={refresh}>{t("i18n.retry")}</ConfigButton>} />}
+      {details}
+      {!selection && !onBack && (
         <ProviderAccountView
           rows={rows}
           loading={loading}

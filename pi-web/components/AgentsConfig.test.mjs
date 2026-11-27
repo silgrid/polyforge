@@ -205,4 +205,46 @@ export const ConfigDetail = inert, ConfigDetailActions = inert, ConfigDetailHead
   input(hook).props.onBlur({ target: { value: "6" } });
   assert.deepEqual(writes, [6], "an edit is written once");
   hook.unmount();
+
+  // #285 B4: the real editor keeps its stored model through failed reads,
+  // retries and a successful catalog that omits that model.
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = (url, init) => new Promise((resolve) => requests.push({ url, init, resolve }));
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const { AgentsConfig } = await shim.import("./AgentsConfig.tsx");
+  const editor = renderHook(AgentsConfig, { cwd: "/tmp/pf285-models", onClose() {} });
+  t.after(() => editor.unmount());
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); editor.flush(); };
+  const answer = async (request, data, status = 200) => {
+    request.resolve(new Response(JSON.stringify(data), { status })); await settle();
+  };
+  const raw = (node, out = []) => {
+    if (Array.isArray(node)) { node.forEach((child) => raw(child, out)); return out; }
+    if (!node?.props) return out;
+    out.push(node); raw(node.props.children, out); return out;
+  };
+  await answer(requests.find((r) => r.url.includes("/profiles?")), { profiles: [{
+    name: "reviewer", displayName: "Reviewer285", scope: "global", model: "old/model:high",
+    tools: [], description: "", systemPrompt: "", enabled: true,
+  }] });
+  raw(editor.result).find((n) => n.props.onClick && JSON.stringify(n.props.children).includes("Reviewer285")).props.onClick();
+  editor.flush();
+  const selector = () => raw(editor.result).find((n) => n.props.ariaLabel === "agents.model").props;
+  assert.equal(selector().selectedLabel, "agents.modelUnconfirmed");
+  await answer(requests.find((r) => r.url.includes("/api/models?")), { error: "catalog failed" }, 500);
+  assert.equal(selector().selectedLabel, "agents.modelListReadFailed");
+  raw(editor.result).find((n) => n.props.onClick && n.props.children === "i18n.retry").props.onClick();
+  editor.flush();
+  assert.equal(selector().selectedLabel, "agents.modelUnconfirmed");
+  await answer(requests.filter((r) => r.url.includes("/api/models?")).at(-1), { modelList: [] });
+  assert.equal(selector().selectedLabel, "agents.modelNotListed");
+  assert.equal(selector().value.provider, "old");
+  assert.equal(selector().value.modelId, "model");
+  assert.ok(requests.every((r) => !r.init?.method || r.init.method === "GET"), "retry never writes or changes inheritance");
+  raw(editor.result).find((n) => n.type === "input" && n.props["aria-label"] === "agents.displayName").props.onChange({ target: { value: "Renamed" } });
+  editor.flush();
+  raw(editor.result).find((n) => n.props.onSave).props.onSave();
+  const saved = requests.find((r) => r.init?.method === "PUT");
+  assert.equal(JSON.parse(saved.init.body).profile.model, "old/model:high", "saving preserves the full original reference including effort");
 });

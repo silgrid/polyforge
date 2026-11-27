@@ -11,13 +11,14 @@ const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const { HarnessModelSettings, HarnessModelTable, ModelPageNav } = await jiti.import("./HarnessModelSettings.tsx");
 const { ModelStepTierDrawer } = await jiti.import("./ModelStepTierDrawer.tsx");
 
-test("four model subpages: the sidebar nav carries only the pages, and only the chosen pane renders", () => {
+test("main model navigation keeps connection-specific editors out of the primary list", () => {
   const page = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
   assert.match(page, /data-model-page="unified"/);
-  assert.ok(!/<h2[\s>]/.test(page), "the page-level 「模型」 h2 is gone (the tab already names the page)");
-  assert.equal((page.match(/data-model-subpage=/g) ?? []).length, 4, "the sidebar holds the four subpages and nothing else");
-  for (const key of ["default", "list", "providers", "claude"]) assert.match(page, new RegExp(`data-model-subpage="${key}"`), `${key} is one of the four subpages`);
-  assert.match(page, /data-model-page-pane="default"/, "the default subpage is the one mounted on open");
+  assert.match(page, /<h2>Connection management<\/h2>/, "the connection overview has its own content heading");
+  assert.equal((page.match(/data-model-subpage=/g) ?? []).length, 5, "connection entries and three model destinations");
+  for (const key of ["default", "list", "tiers"]) assert.match(page, new RegExp(`data-model-subpage="${key}"`));
+  for (const key of ["providers", "claude", "chains"]) assert.doesNotMatch(page, new RegExp(`data-model-subpage="${key}"`));
+  assert.match(page, /data-model-subpage="connections"[^>]*aria-current="page"/, "connections is the initial destination");
   assert.ok(!page.includes('data-model-page-pane="list"'), "the other panes are not mounted beside it");
 
   const nav = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ModelPageNav, { page: "list", onSelect: () => {} })));
@@ -233,7 +234,7 @@ test("model subpages expose loading empty and partial failure", async () => {
   assert.deepEqual(readView({ loading: false, error: false, count: 1 }), { kind: "ready", staleError: false });
 
   // SSR runs no effects, so the page's initial state is its first read.
-  const pending = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
+  const pending = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null, initialSubpage: "default" })));
   assert.match(pending, /data-model-skeleton/, "the default subpage's first read is a skeleton");
   assert.ok(!pending.includes("No model is available"), "a pending read is not the empty state");
 

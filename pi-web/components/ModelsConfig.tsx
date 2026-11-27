@@ -1,5 +1,7 @@
 "use client";
 
+import { modelReferenceImpact, modelReferenceError, providerReferenceImpact } from "@/lib/model-reference-impact";
+import { useSettingsDraft } from "./SettingsDrafts";
 import { useState, useEffect, useCallback, useId, useRef, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { ModelCatalogPreset, ModelCatalogRecommendation } from "@/lib/model-catalog";
@@ -15,6 +17,8 @@ import {
   hasModelCostDraftValue,
   modelCostToDraft,
   modelSidebarLabel,
+  modelsConfigEqual,
+  modelIdentitiesEqual,
   parseCompleteModelCost,
   savedModelIds,
   serializeHeaderRows,
@@ -35,6 +39,7 @@ import {
   ConfigDetailActions,
   ConfigDetailHeader,
   ConfigDetailHeaderInfo,
+  ConfigDetailTitle,
   ConfigDetailStack,
   ConfigEmptyState,
   ConfigErrorNotice,
@@ -99,6 +104,7 @@ interface ModelEntry {
 }
 
 interface ProviderEntry {
+  name?: string;
   baseUrl?: string;
   api?: string;
   apiKey?: string;
@@ -318,8 +324,11 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── Provider detail ───────────────────────────────────────────────────────────
 
-export function ProviderDetail({ name, editingName, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, enabledModels, contextOnly = false }: {
+export function ProviderDetail({ name, editingName, provider, onChange, onEditingNameChange, onRename, onDelete, onAddModels, onBack, onManageModels, definitionSaved, enabledModels, contextOnly = false }: {
   name: string; editingName: string; provider: ProviderEntry;
+  definitionSaved?: boolean;
+  onManageModels?: () => void;
+  onBack?: () => void;
   onChange: (p: ProviderEntry) => void; onEditingNameChange: (n: string) => void;
   onRename: (n: string) => void; onDelete: () => void;
   onAddModels: (models: DiscoveredModel[]) => void; enabledModels: EnabledModelsController;
@@ -408,14 +417,30 @@ export function ProviderDetail({ name, editingName, provider, onChange, onEditin
     setSelectedModelIds([]);
   };
 
+  const modelContexts = <EnabledModelsSection
+    providerId={name}
+    controller={enabledModels}
+    contextOnly={contextOnly}
+    contextSettings={{
+      overrides: provider.modelOverrides,
+      disabled: false,
+      onChange: (modelId, value) => {
+        const updated = withContextWindowOverride({ providers: { [name]: provider } }, name, modelId, value);
+        onChange(updated.providers?.[name] ?? {});
+      },
+    }}
+  />;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {onBack && <ConfigButton data-provider-back="connection" variant="ghost" onClick={onBack}>← {t("models.connectionsTitle")}</ConfigButton>}
       <div className="config-detail-heading">
         <ConfigDetailHeader>
           <ConfigDetailHeaderInfo>
-            <SectionTitle>{t("i18n.provider")}</SectionTitle>
+            {contextOnly ? <div><ConfigDetailTitle>{provider.name ?? name}</ConfigDetailTitle><p className="settings-general-description">{t(definitionSaved ? "models.connectionDefined" : "models.connectionDraft")}</p></div> : <SectionTitle>{t("i18n.provider")}</SectionTitle>}
           </ConfigDetailHeaderInfo>
           <ConfigDetailActions>
+            {onManageModels && <ConfigButton data-manage-custom-models="" onClick={onManageModels}>{t("flow.connectionModels")} →</ConfigButton>}
             {/* Chat availability has one home — the model list (T3); the
                 Provider subpage edits connection parameters only. */}
             {!contextOnly && <EnabledModelsProviderSwitch providerId={name} controller={enabledModels} noteId={switchNoteId} />}
@@ -434,14 +459,8 @@ export function ProviderDetail({ name, editingName, provider, onChange, onEditin
         {!contextOnly && <EnabledModelsProviderSwitchNote providerId={name} controller={enabledModels} id={switchNoteId} />}
       </div>
 
-       <Field label={t("i18n.providerName")}>
-        <TextInput value={editingName} onChange={onEditingNameChange} placeholder="provider-name" mono />
-        {editingName !== name && editingName.trim() && (
-          <button onClick={() => onRename(editingName.trim())}
-            style={{ marginTop: 4, padding: "3px 10px", background: "var(--accent)", border: "none", borderRadius: 4, color: "var(--accent-contrast)", cursor: "pointer", fontSize: 11, alignSelf: "flex-start" }}>
-             {t("i18n.rename")}
-          </button>
-        )}
+      <Field label={t("models.providerDisplayName")}>
+        <TextInput value={provider.name ?? ""} onChange={(v) => set("name", v || undefined)} placeholder={name} />
       </Field>
 
       <Field label="Base URL">
@@ -458,12 +477,18 @@ export function ProviderDetail({ name, editingName, provider, onChange, onEditin
         <Select value={provider.api ?? ""} onChange={(v) => set("api", v || undefined)} options={API_OPTIONS} />
       </Field>
 
-      <Field label="Headers">
-        <HeaderListEditor
-          headers={provider.headers}
-          onChange={(headers) => set("headers", headers)}
-        />
-      </Field>
+      <details className="settings-model-advanced">
+        <summary>{t("models.advancedSettings")}</summary>
+        <Field label={t("models.providerId")}>
+          <TextInput value={editingName} onChange={onEditingNameChange} placeholder="provider-id" mono />
+          <p style={{ color: "var(--text-muted)", fontSize: 12 }}>{t("models.providerIdHint")}</p>
+          {editingName !== name && editingName.trim() && <ConfigButton onClick={() => onRename(editingName.trim())}>{t("models.applyProviderId")}</ConfigButton>}
+        </Field>
+        <Field label="Headers">
+          <HeaderListEditor headers={provider.headers} onChange={(headers) => set("headers", headers)} />
+        </Field>
+        {contextOnly && modelContexts}
+      </details>
 
       <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
         {discoveryState.phase !== "success" && (
@@ -565,19 +590,7 @@ export function ProviderDetail({ name, editingName, provider, onChange, onEditin
           </>
         )}
       </div>
-      <EnabledModelsSection
-        providerId={name}
-        controller={enabledModels}
-        contextOnly={contextOnly}
-        contextSettings={{
-          overrides: provider.modelOverrides,
-          disabled: false,
-          onChange: (modelId, value) => {
-            const updated = withContextWindowOverride({ providers: { [name]: provider } }, name, modelId, value);
-            onChange(updated.providers?.[name] ?? {});
-          },
-        }}
-      />
+      {!contextOnly && modelContexts}
 
     </div>
   );
@@ -1204,9 +1217,9 @@ export function ModelDetail({
         </div>
       </div>
 
-      <section>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <SectionTitle>{t("models.modelSpecs")}</SectionTitle>
+      <details className="settings-model-advanced">
+        <summary>{t("models.modelSpecs")}</summary>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 12 }}>
           <button
             type="button"
             onClick={toggleCostEditing}
@@ -1261,7 +1274,7 @@ export function ModelDetail({
             </div>
           )}
         </div>
-      </section>
+      </details>
 
       <section style={{ borderTop: "1px solid var(--border)", paddingTop: 4 }}>
         <button
@@ -1425,8 +1438,23 @@ export function ProvidersReadStates({ loading, loadError, providerCount, t, onRe
   return <>{children}</>;
 }
 
-export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount, enabledModels, addProviderRequest = 0 }: {
+export type ModelConnection = { id: string; label: string; kind: "provider" | "oauth" | "apikey"; modelCount?: number | null; draft?: boolean };
+export interface ModelConnectionCatalog {
+  oauthProviders: OAuthProvider[];
+  apiKeyProviders: ApiKeyProvider[];
+  loading: boolean;
+  error: string | null;
+}
+
+export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount, onBack, enabledModels, addProviderRequest = 0, selectedProvider, selectedManaged, onOpenConnection, onConnections, onCatalogChange, onReveal }: {
   onClose: () => void; embedded?: boolean; cwd?: string | null; onOpenAccount?: () => void;
+  onBack?: () => void;
+  onReveal?: () => void;
+  selectedProvider?: string | null;
+  selectedManaged?: { kind: "oauth" | "apikey"; id: string; label: string } | null;
+  onOpenConnection?: (connection: ModelConnection) => void;
+  onConnections?: (connections: ModelConnection[]) => void;
+  onCatalogChange?: (catalog: ModelConnectionCatalog) => void;
   addProviderRequest?: number;
   /** The page's one shared controller — the table and this editor must never
  * hold two views of pi's enabledModels, or a Save's resync would re-enable
@@ -1438,19 +1466,29 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
   // `enabledModels` lives in pi's settings, not models.json, so these switches
   // apply immediately instead of waiting for this panel's Save button.
   const [config, setConfig] = useState<ModelsJson>({ providers: {} });
+  const [baseline, setBaseline] = useState<ModelsJson>({ providers: {} });
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   // Set when models.json could not be read. Saving stays disabled: the draft
   // would not contain the file's providers, and a save replaces the whole file.
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
+  const [pendingResync, setPendingResync] = useState<(() => Promise<boolean>) | null>(null);
   const [selection, setSelection] = useState<Selection | null>(readRememberedSelection);
+  const [visitedDetails, setVisitedDetails] = useState<Selection[]>([]);
+  useEffect(() => {
+    if (!selection) return;
+    setVisitedDetails((previous) => previous.some((entry) => JSON.stringify(entry) === JSON.stringify(selection)) ? previous : [...previous, selection]);
+  }, [selection]);
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   /** Set once the provider lists have answered; until then an overrides-only entry may be a managed provider's. */
   const [authListed, setAuthListed] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   /** Provider ids as models.json has them on disk, and where renames moved them. */
   const savedProvidersRef = useRef<Set<string>>(new Set());
   const addedProvidersRef = useRef<Set<string>>(new Set());
@@ -1463,21 +1501,24 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
    * from an unrelated edit without guessing.
    */
   const savedModelIdsRef = useRef<Map<string, (string | null)[]>>(new Map());
-  /**
-   * The provider name field while it differs from the provider's id. Save
-   * applies it like every other visible edit; Rename applies it right away.
-   */
+  /** An internal ID proposal; only the explicit Apply ID change action stages it. */
   const [providerNameDraft, setProviderNameDraft] = useState<{ provider: string; name: string } | null>(null);
 
   const refreshAuthProviders = useCallback(() => {
+    setAuthLoading(true);
+    setAuthError(null);
     fetch("/api/auth/providers")
-      .then((r) => r.json())
-      .then((d: { oauthProviders?: OAuthProvider[]; apiKeyProviders?: ApiKeyProvider[] }) => {
-        if (Array.isArray(d.oauthProviders)) setOauthProviders(d.oauthProviders);
-        if (Array.isArray(d.apiKeyProviders)) setApiKeyProviders(d.apiKeyProviders);
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
       })
-      .catch(() => {})
-      .finally(() => setAuthListed(true));
+      .then((d: { oauthProviders?: OAuthProvider[]; apiKeyProviders?: ApiKeyProvider[] }) => {
+        if (!Array.isArray(d.oauthProviders) || !Array.isArray(d.apiKeyProviders)) throw new Error("Invalid provider catalog");
+        setOauthProviders(d.oauthProviders);
+        setApiKeyProviders(d.apiKeyProviders);
+      })
+      .catch(() => setAuthError("settings.accountReadFailed"))
+      .finally(() => { setAuthListed(true); setAuthLoading(false); });
   }, []);
 
   useEffect(() => {
@@ -1494,6 +1535,10 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
         if (!active) return;
         const normalized = d.providers ? d : { ...d, providers: {} };
         setConfig(normalized);
+        setBaseline(normalized);
+        setVisitedDetails([]);
+        renamesRef.current.clear();
+        setProviderNameDraft(null);
         savedProvidersRef.current = new Set(Object.keys(normalized.providers ?? {}));
         addedProvidersRef.current.clear();
         savedModelIdsRef.current = savedModelIds(normalized);
@@ -1509,6 +1554,11 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
     refreshAuthProviders();
     return () => { active = false; };
   }, [refreshAuthProviders, reload]);
+
+  useEffect(() => {
+    window.addEventListener("pi-web:connections-changed", refreshAuthProviders);
+    return () => window.removeEventListener("pi-web:connections-changed", refreshAuthProviders);
+  }, [refreshAuthProviders]);
 
   useEffect(() => {
     if (selection) setLastSettingsSelection("models", JSON.stringify(selection));
@@ -1552,25 +1602,61 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
     return next;
   }, []);
 
-  const renameProvider = useCallback((oldName: string, newName: string) => {
-    if (applyProviderRename(config, oldName, newName)) setSaveError(null);
-    else setSaveError(t("models.providerNameTaken", { name: newName }));
-  }, [applyProviderRename, config, t]);
+  const checkRemoval = useCallback(async (refs: string[]) => {
+    if (!refs.length) return true;
+    try {
+      const references = await modelReferenceImpact(refs, cwd);
+      if (!references.length) return true;
+      setSaveError(t("models.referenceBlocked", { references: references.join("; ") }));
+    } catch (cause) { setSaveError(modelReferenceError(cause, t)); }
+    return false;
+  }, [cwd, t]);
 
-  const deleteProvider = useCallback((name: string) => {
-    addedProvidersRef.current.delete(name);
-    const next = deleteProviderEntry(config, {
-      savedProviders: savedProvidersRef.current,
-      renames: renamesRef.current,
-      slots: savedModelIdsRef.current,
-    }, name);
-    const remaining = Object.keys(next.providers ?? {});
-    setProviderNameDraft((prev) => prev?.provider === name ? null : prev);
-    setConfig(next);
-    setSelection(remaining.length > 0 ? { type: "provider", name: remaining[0] } : null);
-    // A phone goes back to the list the provider left, not to another provider's detail.
-    closeDetail();
-  }, [config, closeDetail]);
+  const checkProviderRemoval = useCallback(async (name: string) => {
+    try {
+      const references = await providerReferenceImpact(name, cwd);
+      if (!references.length) return true;
+      setSaveError(t("models.referenceBlocked", { references: references.join("; ") }));
+    } catch (cause) { setSaveError(modelReferenceError(cause, t)); }
+    return false;
+  }, [cwd, t]);
+
+  const renameProvider = useCallback(async (oldName: string, newName: string) => {
+    if (savingRef.current || oldName === newName) return;
+    if (Object.hasOwn(config.providers ?? {}, newName)) {
+      setSaveError(t("models.providerNameTaken", { name: newName }));
+      return;
+    }
+    const original = [...renamesRef.current].find(([, to]) => to === oldName)?.[0] ?? oldName;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      if (baseline.providers?.[original] && !await checkProviderRemoval(original)) return;
+      if (applyProviderRename(config, oldName, newName)) setSaveError(null);
+      else setSaveError(t("models.providerNameTaken", { name: newName }));
+    } finally { savingRef.current = false; setSaving(false); }
+  }, [config, baseline, checkProviderRemoval, applyProviderRename, t]);
+
+  const deleteProvider = useCallback(async (name: string) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      if (baseline.providers?.[name] && !await checkProviderRemoval(name)) return;
+      addedProvidersRef.current.delete(name);
+      const next = deleteProviderEntry(config, {
+        savedProviders: savedProvidersRef.current,
+        renames: renamesRef.current,
+        slots: savedModelIdsRef.current,
+      }, name);
+      setProviderNameDraft((prev) => prev?.provider === name ? null : prev);
+      setConfig(next);
+      const remaining = Object.keys(next.providers ?? {});
+      setSelection(embedded ? null : remaining.length > 0 ? { type: "provider", name: remaining[0] } : null);
+      if (embedded) onBack?.();
+      else closeDetail();
+    } finally { savingRef.current = false; setSaving(false); }
+  }, [config, closeDetail, baseline, checkProviderRemoval, embedded, onBack]);
 
   const addModel = useCallback((providerName: string) => {
     trackAddedModels(savedModelIdsRef.current, providerName, 1);
@@ -1648,8 +1734,15 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
     });
   }, []);
 
-  const removeModel = useCallback((providerName: string, index: number) => {
+  const removeModel = useCallback(async (providerName: string, index: number) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+    const savedId = savedModelIdsRef.current.get(providerName)?.[index];
+    if (savedId && !await checkRemoval([`${providerName}/${savedId}`])) return;
     savedModelIdsRef.current.get(providerName)?.splice(index, 1);
+    setVisitedDetails((previous) => previous.filter((entry) => entry.type !== "model" || entry.providerName !== providerName));
     setConfig((prev) => {
       const provider = prev.providers?.[providerName] ?? {};
       const models = [...(provider.models ?? [])];
@@ -1657,31 +1750,45 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
       return { ...prev, providers: { ...(prev.providers ?? {}), [providerName]: { ...provider, models: models.length ? models : undefined } } };
     });
     setSelection({ type: "provider", name: providerName });
-    closeDetail();
-  }, [closeDetail]);
+    if (!embedded) closeDetail();
+    } finally { savingRef.current = false; setSaving(false); }
+  }, [closeDetail, checkRemoval, embedded]);
 
   const handleSave = useCallback(async () => {
-    if (loadError) return;
+    if (loadError || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
+    if (pendingResync) {
+      try {
+        const synced = await pendingResync();
+        if (synced) { setPendingResync(null); setSaveError(null); setSavedOk(true); }
+      } finally { savingRef.current = false; setSaving(false); }
+      return;
+    }
     setSaveError(null);
     setSavedOk(false);
-    // A provider name typed but not applied with Rename is still a visible
-    // edit: move the provider before writing, like every other field.
-    let draft = config;
-    const pendingName = providerNameDraft?.name.trim();
-    if (providerNameDraft && pendingName && config.providers?.[providerNameDraft.provider]) {
-      const renamed = applyProviderRename(config, providerNameDraft.provider, pendingName);
-      if (!renamed) {
-        setSaveError(t("models.providerNameTaken", { name: pendingName }));
-        setSaving(false);
-        return;
-      }
-      draft = renamed;
-    }
+    // Display names never change provider identity. Keep spaces while typing,
+    // then omit a blank name so pi's non-empty optional field remains valid.
+    let draft: ModelsJson = { ...config, providers: Object.fromEntries(Object.entries(config.providers ?? {}).map(([id, entry]) => {
+      if (entry.name === undefined) return [id, entry];
+      const normalized: ProviderEntry = { ...entry, name: entry.name.trim() };
+      if (!normalized.name) delete normalized.name;
+      return [id, normalized];
+    })) };
     try {
       draft = normalizeContextWindowOverrides(draft);
       checkProviderEntries(draft);
       checkImageMaxBytes(draft);
+      const remainingRefs = new Set(Object.entries(draft.providers ?? {}).flatMap(([provider, entry]) => (entry.models ?? []).map((model) => `${provider}/${model.id}`)));
+      const removedRefs = Object.entries(baseline.providers ?? {}).flatMap(([provider, entry]) => (entry.models ?? []).map((model) => `${provider}/${model.id}`)).filter((ref) => !remainingRefs.has(ref));
+      for (const name of Object.keys(baseline.providers ?? {})) {
+        if (!draft.providers?.[name] && !await checkProviderRemoval(name)) return;
+      }
+      if (!await checkRemoval(removedRefs)) return;
+      const currentResponse = await fetch("/api/models-config");
+      const current = await currentResponse.json();
+      if (!currentResponse.ok || current.error) throw new Error(current.error ?? `HTTP ${currentResponse.status}`);
+      if (!modelsConfigEqual(current.providers ? current : { ...current, providers: {} }, baseline)) throw new Error(t("settings.draftConflict", { name: "models.json" }));
       const res = await fetch("/api/models-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1690,6 +1797,8 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
       const d = await res.json() as { success?: boolean; error?: string };
       if (!res.ok || d.error) setSaveError(d.error ?? `HTTP ${res.status}`);
       else {
+        setConfig(draft);
+        setBaseline(draft);
         setSavedOk(true);
         setTimeout(() => setSavedOk(false), 2000);
         // models.json just changed under the switches: providers may have been
@@ -1701,7 +1810,15 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
         addedProvidersRef.current.clear();
         savedModelIdsRef.current = savedModelIds(draft);
         renamesRef.current.clear();
-        enabledModels.resync(renames, modelRenames);
+        const sync = () => enabledModels.resync(renames, modelRenames);
+        // Metadata-only edits cannot invalidate enabled-model references.
+        // Reload their view without writing settings.json.
+        if (modelIdentitiesEqual(baseline, draft)) enabledModels.refresh();
+        else if (!await sync()) {
+          setPendingResync(() => sync);
+          setSavedOk(false);
+          setSaveError(t("models.resyncPending"));
+        }
       }
     } catch (e) {
       if (e instanceof ProviderEntryError) {
@@ -1711,9 +1828,42 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
       } else if (e instanceof ContextWindowError) setSaveError(t("models.contextInvalid", { model: e.model }));
       else setSaveError(e instanceof ImageMaxBytesError ? t("models.imageMaxBytesInvalid", { model: e.model }) : String(e));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  }, [applyProviderRename, config, enabledModels, loadError, providerNameDraft, t]);
+  }, [config, enabledModels, loadError, t, baseline, checkRemoval, checkProviderRemoval, pendingResync]);
+
+  const connectionsCallback = useRef(onConnections);
+  useEffect(() => { connectionsCallback.current = onConnections; });
+  const connectionSignature = JSON.stringify([
+    ...oauthProviders.filter((p) => p.loggedIn).map((p) => ({ id: p.id, label: p.name, kind: "oauth" })),
+    ...apiKeyProviders.filter((p) => p.configured).map((p) => ({ id: p.id, label: p.displayName, kind: "apikey", modelCount: Number.isFinite(p.modelCount) ? p.modelCount : null })),
+    ...Object.entries(config.providers ?? {}).filter(([, entry]) => !isOverridesOnly(entry)).map(([id, entry]) => ({ id, label: entry.name ?? id, kind: "provider", modelCount: entry.models?.length ?? 0, draft: JSON.stringify(entry) !== JSON.stringify(baseline.providers?.[id]) })),
+  ]);
+  useEffect(() => { connectionsCallback.current?.(JSON.parse(connectionSignature)); }, [connectionSignature]);
+  const catalogCallback = useRef(onCatalogChange);
+  useEffect(() => { catalogCallback.current = onCatalogChange; });
+  const catalogSignature = JSON.stringify({ oauthProviders, apiKeyProviders, loading: loading || authLoading, error: loadError ? "models.connectionsReadFailed" : authError });
+  useEffect(() => { catalogCallback.current?.(JSON.parse(catalogSignature)); }, [catalogSignature]);
+  useEffect(() => {
+    if (selectedProvider) setSelection({ type: "provider", name: selectedProvider });
+  }, [selectedProvider]);
+  const managedKind = selectedManaged?.kind;
+  const managedId = selectedManaged?.id;
+  useEffect(() => {
+    if (managedKind && managedId) setSelection({ type: managedKind, providerId: managedId });
+  }, [managedKind, managedId]);
+  const dirtyProviders = new Set([...Object.keys(config.providers ?? {}), ...Object.keys(baseline.providers ?? {})]);
+  const dirtyCount = [...dirtyProviders].filter((key) => JSON.stringify(config.providers?.[key]) !== JSON.stringify(baseline.providers?.[key])).length;
+  const managed = useSettingsDraft({ label: t("models.connectionDraftGroup"), reveal: () => { onReveal?.(); openDetail(); }, count: (loading ? 0 : dirtyCount) + (pendingResync ? 1 : 0), busy: saving, canSave: !loadError, canDiscard: dirtyCount > 0, saveLabel: pendingResync ? t("i18n.retry") : undefined,
+    save: () => void handleSave(), discard: () => {
+      if (savingRef.current) return;
+      setConfig(baseline); setProviderNameDraft(null);
+      if (!pendingResync) setSaveError(null);
+      setReload((previous) => previous + 1);
+      savedProvidersRef.current = new Set(Object.keys(baseline.providers ?? {}));
+      savedModelIdsRef.current = savedModelIds(baseline); renamesRef.current.clear(); addedProvidersRef.current.clear();
+    } });
 
   const providers = Object.entries(config.providers ?? {}).filter(([id, entry]) => {
     if (!isOverridesOnly(entry)) return true;
@@ -1729,10 +1879,14 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
   const activeApiKey = apiKeyProviders.filter((p) => p.configured);
 
   // Resolve current detail
-  const detailContent = (() => {
+  const renderDetail = (selection: Selection | null) => {
     if (!selection) return null;
     if (selection.type === "oauth" || selection.type === "apikey") {
-      return <EnabledModelsSection
+      const label = (selection.type === "oauth" ? oauthProviders.find((entry) => entry.id === selection.providerId)?.name : apiKeyProviders.find((entry) => entry.id === selection.providerId)?.displayName) ?? selection.providerId;
+      const back = () => onOpenConnection ? onOpenConnection({ kind: selection.type, id: selection.providerId, label }) : onBack?.();
+      return <div>
+        {embedded && <><ConfigButton variant="ghost" data-provider-back="managed" onClick={back}>← {label}</ConfigButton><ConfigDetailHeader><ConfigDetailHeaderInfo><ConfigDetailTitle>{label} · {t("common.models")}</ConfigDetailTitle></ConfigDetailHeaderInfo></ConfigDetailHeader></>}
+        <EnabledModelsSection
         key={selection.providerId}
         providerId={selection.providerId}
         controller={enabledModels}
@@ -1743,7 +1897,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
           onChange: (modelId, value) => setConfig((previous) =>
             withContextWindowOverride(previous, selection.providerId, modelId, value)),
         }}
-      />;
+      /></div>;
     }
     if (selection.type === "provider") {
       const provider = config.providers?.[selection.name];
@@ -1755,11 +1909,14 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
           name={selection.name}
           editingName={providerNameDraft?.provider === selection.name ? providerNameDraft.name : selection.name}
           provider={provider}
+          definitionSaved={JSON.stringify(provider) === JSON.stringify(baseline.providers?.[selection.name])}
           onChange={(p) => updateProvider(selection.name, p)}
           onEditingNameChange={(n) => setProviderNameDraft(n === selection.name ? null : { provider: selection.name, name: n })}
           onRename={(n) => renameProvider(selection.name, n)}
           onDelete={() => deleteProvider(selection.name)}
           onAddModels={(models) => addDiscoveredModels(selection.name, models)}
+          onBack={embedded ? onBack : undefined}
+          onManageModels={embedded ? () => providerPageRef.current?.querySelector("[data-connection-models]")?.scrollIntoView({ block: "nearest" }) : undefined}
           enabledModels={enabledModels}
           contextOnly={embedded}
         />
@@ -1778,21 +1935,13 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
         onDelete={() => removeModel(selection.providerName, selection.index)}
       />
     );
-  })();
+  };
+  const detailContent = embedded && selection ? [...visitedDetails, ...(selection && !visitedDetails.some((entry) => JSON.stringify(entry) === JSON.stringify(selection)) ? [selection] : [])]
+    .map((entry) => <div key={`${reload}:${JSON.stringify(entry)}`} data-provider-detail="" data-active={JSON.stringify(entry) === JSON.stringify(selection)} hidden={JSON.stringify(entry) !== JSON.stringify(selection)}>{renderDetail(entry)}</div>) : renderDetail(selection);
 
-  // The Provider subpage (polyforge#258 T3): one flat editor, no second
-  // sidebar and no nested panel shell. Its provider and model choices are
-  // page selectors; the footer below is this subpage's own form footer.
+  // Connections are selected by the host. This editor only navigates within
+  // the current provider; standalone mode below owns its own provider tree.
   if (embedded) {
-    const options: Array<{ value: string; label: string; selection: Selection }> = [];
-    for (const provider of activeOAuth) options.push({ value: `oauth:${provider.id}`, label: `${provider.name} · OAuth`, selection: { type: "oauth", providerId: provider.id } });
-    for (const provider of activeApiKey) options.push({ value: `apikey:${provider.id}`, label: `${provider.displayName} · API key`, selection: { type: "apikey", providerId: provider.id } });
-    for (const [providerName] of providers) options.push({ value: `provider:${providerName}`, label: providerName, selection: { type: "provider", name: providerName } });
-    // A selected model still names its provider in the picker: the model
-    // choice has its own select beside it.
-    const selectionKey = (current: Selection | null) => !current ? ""
-      : current.type === "oauth" || current.type === "apikey" ? `${current.type}:${current.providerId}`
-        : current.type === "provider" ? `provider:${current.name}` : `provider:${current.providerName}`;
     const customProvider = (selection?.type === "provider" || selection?.type === "model")
       ? (selection.type === "provider" ? selection.name : selection.providerName) : null;
     const customEntry = customProvider ? config.providers?.[customProvider] : undefined;
@@ -1801,7 +1950,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
       <ProvidersReadStates
         loading={loading}
         loadError={loadError}
-        providerCount={options.length}
+        providerCount={selection?.type === "oauth" || selection?.type === "apikey" ? 1 : providers.length + activeOAuth.length + activeApiKey.length}
         t={t}
         onRetry={retry}
         onAdd={addProvider}
@@ -1810,54 +1959,34 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
       </ProvidersReadStates>
     );
     return (
-      <div ref={providerPageRef} className="config-panel-root is-embedded" data-models-page="providers" data-provider-page="flat">
+      <div ref={providerPageRef} inert={saving} className="config-panel-root is-embedded settings-provider-editor" data-models-page="providers" data-provider-page="flat" data-current-provider={customProvider}>
         <div className="config-panel-surface">
-          <div className="models-provider-picker">
-            <label className="models-provider-picker-field">
-              <span>{t("models.providerLabel")}</span>
-              <select aria-label={t("models.providerLabel")} disabled={loading} value={selectionKey(selection)}
-                onChange={(event) => {
-                  const next = options.find((option) => option.value === event.target.value)?.selection ?? null;
-                  setSelection(next);
-                  if (next) openDetail();
-                }}>
-                <option value="" disabled>{t("i18n.selectProviderModel")}</option>
-                {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
-            <ConfigButton disabled={loading || loadError !== null} onClick={addProvider}>{t("i18n.addProvider")}</ConfigButton>
-            {onOpenAccount && <ConfigButton onClick={onOpenAccount}>{t("settings.tabAccount")}</ConfigButton>}
-            {customEntry && (
-              <label className="models-provider-picker-field">
-                <span>{t("i18n.model")}</span>
-                <select aria-label={t("i18n.model")} value={selection?.type === "model" ? String(selection.index) : ""}
-                  onChange={(event) => {
-                    if (!customProvider) return;
-                    if (event.target.value === "__provider__") {
-                      setSelection({ type: "provider", name: customProvider });
-                      openDetail();
-                      return;
-                    }
-                    if (event.target.value === "__new__") { addModel(customProvider); openDetail(); return; }
-                    setSelection({ type: "model", providerName: customProvider, index: Number(event.target.value) });
-                    openDetail();
-                  }}>
-                  <option value="" disabled>{t("i18n.selectProviderModel")}</option>
-                  <option value="__provider__">{t("models.providerSettings")}</option>
-                  {(customEntry.models ?? []).map((model, index) =>
-                    <option key={index} value={index}>{modelSidebarLabel(model) || t("i18n.newModel")}</option>)}
-                  <option value="__new__">+ {t("i18n.model")}</option>
-                </select>
-              </label>
-            )}
-          </div>
+          <fieldset disabled={saving} className="settings-provider-lock">
+          {selection?.type === "model" && customProvider && <div className="settings-purpose-actions">
+              <ConfigButton data-provider-back="model" variant="ghost" onClick={() => setSelection({ type: "provider", name: customProvider })}>
+                ← {customEntry?.name ?? customProvider}
+              </ConfigButton>
+          </div>}
           <ConfigDetail>
             <ConfigDetailStack className="is-fill">
               {body}
+              {selection?.type === "provider" && customEntry && customProvider && <section className="settings-provider-models" data-connection-models="">
+                <div className="settings-purpose-actions"><h3>{t("flow.connectionModels")}</h3>
+                  <ConfigButton onClick={() => addModel(customProvider)}>{t("flow.addModel")}</ConfigButton>
+                </div>
+                {(customEntry.models ?? []).map((model, index) => <button type="button" className="settings-provider-model-row" key={index} data-connection-model={model.id}
+                  onClick={() => setSelection({ type: "model", providerName: customProvider, index })}>
+                  <span>{modelSidebarLabel(model) || t("i18n.newModel")}</span><code>{model.id}</code><span aria-hidden="true">→</span>
+                </button>)}
+                {!customEntry.models?.length && <p className="settings-general-description">{t("flow.noConnectionModels")}</p>}
+              </section>}
             </ConfigDetailStack>
           </ConfigDetail>
+          <p className="settings-general-description">{t("models.configConcurrency")}</p>
           <div data-provider-footer="">
-            <ConfigFooter status={(loadError || saveError) ? (
+            {managed ? <p role={loadError || saveError ? "alert" : "status"} className={loadError || saveError ? "config-add-source-error" : "settings-general-description"}>
+              {loadError ? t("models.configUnreadable", { error: loadError }) : saveError ?? t(savedOk ? "i18n.saved" : saving ? "i18n.saving" : "models.applyHelp")}
+            </p> : <ConfigFooter status={(loadError || saveError) ? (
               <span style={{ color: "#f87171" }}>
                 {loadError ? t("models.configUnreadable", { error: loadError }) : saveError}
               </span>
@@ -1870,15 +1999,16 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
               >
                  <span>{savedOk ? t("i18n.saved") : saving ? t("i18n.saving") : t("i18n.save")}</span>
               </ConfigButton>
-            </ConfigFooter>
+            </ConfigFooter>}
           </div>
+          </fieldset>
         </div>
       </div>
     );
   }
 
   return (
-    <>
+    <fieldset disabled={saving} className="settings-provider-lock">
     <ConfigPanelShell embedded={embedded} title={t("common.models")} subtitle="~/.pi/agent/models.json" closeLabel={t("i18n.close")} onClose={onClose}>
 
         <EnabledModelsBanner controller={enabledModels} />
@@ -1949,7 +2079,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
                         <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
                       </svg>
                       <ConfigSidebarText className="is-grow">
-                        {pName}
+                        {pData.name ?? pName}
                       </ConfigSidebarText>
                       {scopeBadge(pName)}
                     </ConfigSidebarItem>
@@ -2021,6 +2151,6 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAcco
           </ConfigButton>
         </ConfigFooter>
     </ConfigPanelShell>
-    </>
+    </fieldset>
   );
 }

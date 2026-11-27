@@ -98,7 +98,7 @@ test("the settings rail contains the unified model page", () => {
   assert.ok(Array.isArray(SETTINGS_TABS), "SETTINGS_TABS is not exported");
   assert.deepEqual(
     SETTINGS_TABS.map((tab) => tab.id),
-    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge"],
+    ["general", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge"],
   );
   assert.deepEqual(SETTINGS_TABS.filter((tab) => tab.legacy).map((tab) => tab.id), []);
   assert.deepEqual(SETTINGS_SECTION_VALUES, SETTINGS_TABS.map((tab) => tab.id));
@@ -217,13 +217,15 @@ test("the leave prompt asks only when a tab holds an unsaved draft", () => {
   assert.equal(mayLeaveSection({}, "general", "skills", confirm, "q"), true, "a clean tab asked");
   assert.equal(asked.length, 0);
   reply = false;
-  assert.equal(mayLeaveSection({ agents: true }, "agents", "skills", confirm, "q"), false, "a refused prompt still left");
-  assert.equal(asked.length, 1);
+  assert.equal(mayLeaveSection({ agents: true }, "agents", "skills", confirm, "q"), true, "internal navigation retains drafts without a prompt");
+  assert.equal(asked.length, 0);
   reply = true;
   assert.equal(mayLeaveSection({ agents: true }, "agents", "skills", confirm, "q"), true, "an accepted prompt did not leave");
   assert.equal(mayLeaveSection({ agents: true }, "models", "skills", confirm, "q"), true);
-  assert.equal(asked.length, 3, "another tab's draft still asked");
+  assert.equal(asked.length, 0, "another tab's draft is retained without asking");
   // Closing (next = null) asks for any tab's draft, whatever is shown.
   assert.equal(mayLeaveSection({ models: true }, "general", null, confirm, "q"), true);
-  assert.equal(asked.length, 4, "closing with a draft elsewhere asked nothing");
+  assert.equal(asked.length, 1, "closing with a draft elsewhere asked nothing");
+  reply = false;
+  assert.equal(mayLeaveSection({ models: true }, "general", null, confirm, "q"), false, "a refused close must keep every draft");
 });

@@ -1,15 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { modelReferenceImpact } from "@/lib/model-reference-impact";
+import { useSettingsDraft } from "./SettingsDrafts";
 import { useI18n } from "@/hooks/useI18n";
-import { ConfigButton, ConfigEmptyState, ConfigErrorNotice, ConfigSkeleton } from "./SettingsUi";
+import { ConfigButton, ConfigDetailHeader, ConfigDetailHeaderInfo, ConfigDetailTitle, ConfigDetailActions, ConfigEmptyState, ConfigErrorNotice, ConfigSkeleton } from "./SettingsUi";
 
 /**
  * The models page's Claude section (85a3-3): the editor of claude's own
  * native modelPicker custom names, and the home of the retired
- * self-stored customModels' one-time migration. Entering the section fires
- * the protected migration POST once (Q2: the page's reads stay
- * side-effect-free) — an empty native target migrates at once, a non-empty
+ * self-stored customModels' one-time migration. Entering reads only the
+ * current list. An explicit check/migrate action fires the protected POST:
+ * an empty native target migrates at once, a non-empty
  * one answers the merge preview below (the native rows stay, only the
  * missing names append, nothing written until「合并」), and illegal data or an
  * unknown claude version shows its reason with nothing written. The editor
@@ -61,7 +63,7 @@ export function ClaudeCustomReadStates({ loading, readError, t, onRetry, onAdd }
   return null;
 }
 
-export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
+export function ClaudeCustomModels({ onRefresh, cwd = null, onReveal }: { onReveal?: () => void; onRefresh?: () => void; cwd?: string | null }) {
   const { t } = useI18n();
   const [names, setNames] = useState<string[] | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
@@ -95,34 +97,34 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
     }
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await fetch("/api/claude-models-migration", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        });
-        const data = await response.json();
-        if (cancelled) return;
-        if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
-        setShadowed(data.shadowed === true);
-        if (data.status === "preview") {
-          setPreview({ native: data.native, missing: data.missing, digest: data.digest, shadowed: data.shadowed === true });
-        } else if (data.status === "blocked" || data.status === "deferred") {
-          setNotice(typeof data.reason === "string" ? data.reason : String(data.status));
-        } else if (data.status === "done" && data.changed === true) {
-          // An automatic migration on entry changed the picker: the page's own
-          // claude rows (fetched beside this POST) must re-read (AC2's 列表刷新).
-          refreshRef.current?.();
-        }
+  useEffect(() => { void load(); }, [load]);
+
+  const checkMigration = useCallback(async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/claude-models-migration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
+      setShadowed(data.shadowed === true);
+      setPreview(data.status === "preview"
+        ? { native: data.native, missing: data.missing, digest: data.digest, shadowed: data.shadowed === true }
+        : null);
+      if (data.status === "blocked" || data.status === "deferred") {
+        setNotice(typeof data.reason === "string" ? data.reason : String(data.status));
+      } else if (data.status === "done" && data.changed === true) {
         await load();
-      } catch (cause) {
-        if (!cancelled) setNotice(cause instanceof Error ? cause.message : String(cause));
+        refreshRef.current?.();
       }
-    })();
-    return () => { cancelled = true; };
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
   }, [load]);
 
   const confirmMerge = useCallback(async () => {
@@ -162,6 +164,11 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
     setBusy(true);
     setError(null);
     try {
+      const removed = (names ?? []).filter((name) => !next.includes(name));
+      if (removed.length) {
+        const references = await modelReferenceImpact(removed, cwd, undefined, "claude");
+        if (references.length) throw new Error(t("models.referenceBlocked", { references: references.join("; ") }));
+      }
       const response = await fetch("/api/harness/claude/model", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -171,23 +178,29 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
       if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
       setNames(next);
       onRefresh?.();
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
     } finally {
       setBusy(false);
     }
-  }, [onRefresh]);
+  }, [onRefresh, names, cwd, t]);
 
-  const add = useCallback(() => {
+  const add = useCallback(async () => {
     const name = input.trim();
     if (name === "" || names === null || names.includes(name)) return;
-    void writeNames([...names, name]);
-    setInput("");
+    if (await writeNames([...names, name])) setInput("");
   }, [input, names, writeNames]);
+  const managed = useSettingsDraft({ label: t("models.claudeCustomHeading"), reveal: onReveal, count: input.trim() ? 1 : 0, busy,
+    canSave: names !== null && Boolean(input.trim()) && !names.includes(input.trim()), save: () => void add(), discard: () => setInput("") });
 
   return (
     <div data-claude-custom-models className="settings-claude-models">
-      <h4 className="settings-general-heading">{t("models.claudeCustomHeading")}</h4>
+      <ConfigDetailHeader>
+        <ConfigDetailHeaderInfo><ConfigDetailTitle>{t("models.claudeCustomHeading")}</ConfigDetailTitle></ConfigDetailHeaderInfo>
+        <ConfigDetailActions><ConfigButton disabled={busy} onClick={() => void checkMigration()}>{t("models.claudeCustomCheckMigration")}</ConfigButton></ConfigDetailActions>
+      </ConfigDetailHeader>
       {notice !== null && (
         <p role="note" className="settings-general-description">
           {t("models.claudeCustomBlocked")}
@@ -213,7 +226,7 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
           </div>
         </div>
       )}
-      {(names === null || names.length === 0) ? (
+      {(readError !== null || names === null || names.length === 0) ? (
         <ClaudeCustomReadStates
           loading={names === null && readError === null}
           readError={readError}
@@ -250,9 +263,9 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
         disabled={busy || names === null}
         onChange={(event) => setInput(event.target.value)}
       />
-      <ConfigButton onClick={add} disabled={busy || input.trim() === "" || names === null}>
+      {!managed && <ConfigButton onClick={add} disabled={busy || input.trim() === "" || names === null}>
         {t("models.claudeCustomAdd")}
-      </ConfigButton>
+      </ConfigButton>}
       </div>
       {error !== null && <p role="alert" className="config-add-source-error">{error}</p>}
     </div>

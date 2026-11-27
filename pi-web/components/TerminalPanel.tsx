@@ -30,17 +30,18 @@ interface Props {
   onRestart: () => void;
   onClosed: () => void;
   onCloseError: () => void;
+  onExited?: (exitCode: number | null) => void;
 }
 
-export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError }: Props) {
+export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, onExited }: Props) {
   const { t } = useI18n();
   const { id, cwd, restored } = tab;
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const startRef = useRef<Promise<void>>(Promise.resolve());
   const writerRef = useRef<ReturnType<typeof createTerminalWriter> | null>(null);
-  const callbacksRef = useRef({ onClosed, onCloseError });
-  callbacksRef.current = { onClosed, onCloseError };
+  const callbacksRef = useRef({ onClosed, onCloseError, onExited });
+  callbacksRef.current = { onClosed, onCloseError, onExited };
   const [status, setStatus] = useState<"connecting" | "ready" | "exited" | "error">("connecting");
   const [error, setError] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -198,8 +199,10 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError }
       onStatus: setStatus,
       onError: setError,
       onExited: (exitCode) => {
+        if (disposed) return;
         setExitCode(exitCode);
         setStatus("exited");
+        callbacksRef.current.onExited?.(exitCode);
       },
     });
     startRef.current = stream.started();

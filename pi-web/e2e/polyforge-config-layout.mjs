@@ -937,12 +937,13 @@ try {
       "a Host row still has its own Save button");
     assert.equal(writes.length, 0, "typing into a Host field wrote before the footer's save");
     // build finding u11#5: the footer's word is the ticket's 「保存（n 项改动）」.
-    await footer.getByRole("button", { name: "Save (2 change(s))", exact: true }).click();
+    const summary = dialog.locator("[data-settings-drafts]");
+    await summary.getByRole("button", { name: "Save", exact: true }).click();
     // The writes are one request per key, so the assertion waits for the footer
     // to settle (its Save button gone) and then for the write set to stop
     // growing — never a single read of a set a later write still joins
     // (polyforge#259 T4, review #4).
-    await footer.getByRole("button", { name: /Save \(/, exact: false }).waitFor({ state: "detached", timeout: NAV_MS });
+    await summary.waitFor({ state: "detached", timeout: NAV_MS });
     const deadline = Date.now() + NAV_MS;
     let settled = writes.length;
     while (Date.now() < deadline) {

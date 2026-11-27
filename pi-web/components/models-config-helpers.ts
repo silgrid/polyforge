@@ -1,3 +1,21 @@
+/** Compare JSON data after schema parsing, which may reorder object keys. Array order remains significant. */
+export function modelsConfigEqual(left: unknown, right: unknown): boolean {
+  const ordered = (_key: string, value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))
+    : value;
+  return JSON.stringify(left, ordered) === JSON.stringify(right, ordered);
+}
+
+/** Only identity changes need enabledModels repair; metadata edits reload the catalog. */
+export function modelIdentitiesEqual(
+  left: { providers?: Record<string, { models?: { id: string }[] }> },
+  right: { providers?: Record<string, { models?: { id: string }[] }> },
+): boolean {
+  const identities = (config: typeof left) => Object.fromEntries(Object.entries(config.providers ?? {})
+    .map(([id, entry]) => [id, (entry.models ?? []).map((model) => model.id).sort()]));
+  return modelsConfigEqual(identities(left), identities(right));
+}
+
 export interface CompatEntry {
   compat?: Record<string, unknown>;
 }

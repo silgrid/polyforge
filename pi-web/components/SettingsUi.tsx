@@ -1,5 +1,6 @@
 "use client";
 
+import { useSettingsDraft } from "./SettingsDrafts";
 import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef } from "react";
 import type { ButtonHTMLAttributes, ClipboardEvent, CSSProperties, HTMLAttributes, ReactNode, Ref } from "react";
 
@@ -819,9 +820,10 @@ export function ConfigSaveFooter({ status, dirty, saving, discardLabel, saveLabe
   onDiscard: () => void;
   onSave: () => void;
 }) {
+  const coordinated = useSettingsDraft({ count: dirty, busy: saving, save: onSave, discard: onDiscard });
   return (
     <ConfigFooter status={status}>
-      {dirty > 0 && (
+      {dirty > 0 && !coordinated && (
         <>
           <ConfigButton size="small" disabled={saving} onClick={onDiscard}>{discardLabel}</ConfigButton>
           <ConfigButton variant="primary" disabled={saving} onClick={onSave}>

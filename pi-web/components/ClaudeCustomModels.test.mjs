@@ -9,7 +9,8 @@ import { createJiti } from "jiti";
 
 // Behavioural coverage of the models page's Claude section (85a3-3), on the
 // react-hook shim (hooks/__fixtures__/react-hook-shim.mjs): entering the
-// section fires the protected migration POST once — a preview shows the
+// section reads the list; an explicit check fires the protected migration
+// POST — a preview shows the
 // merge (the native rows kept, the missing names appended, nothing written
 // until「合并」, a cancel writes nothing), a done answer reloads the list,
 // and a blocked/deferred reason is visible text. The editor writes every
@@ -25,6 +26,10 @@ const stubsPath = path.join(fs.mkdtempSync("/tmp/pf178-clcm-stub-"), "stubs.mjs"
 fs.writeFileSync(stubsPath, `const t = (key) => key;
 const i18n = { t, locale: "en" };
 export function useI18n() { return i18n; }
+export function useSettingsDraft() { return false; }
+let references = [];
+export function setReferences(next) { references = next; }
+export async function modelReferenceImpact() { return references; }
 `);
 const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
@@ -32,9 +37,12 @@ const jiti = createJiti(import.meta.url, {
     react: shimPath,
     "react/jsx-runtime": jsxRuntimePath,
     "@/hooks/useI18n": stubsPath,
+    "@/lib/model-reference-impact": stubsPath,
+    "./SettingsDrafts": stubsPath,
   },
 });
 const { renderHook } = await import(pathToFileURL(shimPath).href);
+const { setReferences } = await jiti.import(stubsPath);
 const { ClaudeCustomModels } = await jiti.import("./ClaudeCustomModels.tsx");
 
 /** The element tree as the JSX an automatic runtime emits, function components expanded in place. */
@@ -82,6 +90,7 @@ function setup() {
   const refreshes = [];
   const hook = renderHook(ClaudeCustomModels, { onRefresh: () => refreshes.push(refreshes.length) });
   const answer = async (index, body, status = 200) => {
+    await settle();
     const request = requests[index];
     assert.ok(request && !request.settled, `request ${index} is open (${requests.length} made)`);
     request.settled = true;
@@ -109,14 +118,16 @@ const PREVIEW = {
   shadowed: false,
 };
 
-test("entering the section fires the migration POST once; a preview lists the kept native rows and the missing names, and「合并」confirms", async () => {
+test("explicit migration check previews kept native rows and missing names; merge confirms", async () => {
   const state = setup();
   try {
-    await state.answer(0, PREVIEW);
-    await state.answer(1, modelPayload(["native-keep"]));
+    await state.answer(0, modelPayload(["native-keep"]));
+    findButton(state.hook, "models.claudeCustomCheckMigration").onClick();
+    await state.answer(1, PREVIEW);
     assert.equal(state.requests.length, 2, "the mount fired the POST and the list read");
-    assert.equal(state.requests[0].url, "/api/claude-models-migration");
-    assert.deepEqual(state.requestBody(0), {}, "the first POST carries no confirm");
+    assert.equal(state.requests[0].url, "/api/harness/claude/model");
+    assert.equal(state.requests[1].url, "/api/claude-models-migration");
+    assert.deepEqual(state.requestBody(1), {}, "the first POST carries no confirm");
     const banner = byAttr(state.hook, "data-claude-migration-preview");
     assert.equal(banner.length, 1);
     const text = textOf(state.hook).join("\n");
@@ -145,8 +156,9 @@ test("entering the section fires the migration POST once; a preview lists the ke
 test("a cancel dismisses the preview without any write", async () => {
   const state = setup();
   try {
-    await state.answer(0, PREVIEW);
-    await state.answer(1, modelPayload(["native-keep"]));
+    await state.answer(0, modelPayload(["native-keep"]));
+    findButton(state.hook, "models.claudeCustomCheckMigration").onClick();
+    await state.answer(1, PREVIEW);
     const cancel = findButton(state.hook, "common.cancel");
     assert.ok(cancel, "the cancel button is on screen");
     cancel.onClick();
@@ -159,29 +171,32 @@ test("a cancel dismisses the preview without any write", async () => {
   }
 });
 
-test("a done migration reloads the list; the editor writes the full next list per add and remove, and a refusal is visible", async () => {
+test("the editor writes the full next list per add and remove, and a refusal is visible", async () => {
   const state = setup();
   try {
-    await state.answer(0, { status: "done", changed: true, shadowed: false });
-    await state.answer(1, modelPayload(["claude-a", "claude-b"]));
+    findButton(state.hook, "models.claudeCustomCheckMigration").onClick();
+    await state.answer(1, { status: "done", changed: false, shadowed: false });
+    await state.answer(0, modelPayload(["claude-a", "claude-b"]));
     assert.ok(textOf(state.hook).join("\n").includes("claude-a"));
-    // An automatic migration on entry refreshed the page's own claude rows.
-    assert.equal(state.refreshes.length, 1, "an automatic migration did not refresh the page");
+    // An unchanged explicit migration check needs no catalog refresh.
+    assert.equal(state.refreshes.length, 0, "an unchanged migration needs no refresh");
     // Remove claude-a: the PUT carries the full next list.
     const remove = removeButtonOf(state.hook, "claude-a");
     assert.ok(remove, "the remove button is on screen");
     remove.onClick();
+    await settle();
     await state.answer(2, { harness: "claude", concept: "model", result: { status: "written", summary: "modelPicker.options = claude-b" } }, 200);
     assert.equal(state.requests[2].init.method, "PUT");
     assert.equal(state.requests[2].url, "/api/harness/claude/model");
     assert.deepEqual(state.requestBody(2), { customModels: ["claude-b"] });
     // A successful write owns its state: no extra read, only the page refresh.
     assert.equal(state.requests.length, 3, "the edit re-read the list it already knows");
-    assert.equal(state.refreshes.length, 2, "the edit did not refresh the page (the entry's automatic migration already counted one)");
+    assert.equal(state.refreshes.length, 1, "the edit refreshes the page");
     // A refused write keeps the list and shows the reason.
     const refused = removeButtonOf(state.hook, "claude-b");
     assert.ok(refused, "the second remove button is on screen");
     refused.onClick();
+    await settle();
     await state.answer(3, { error: "write-refused", message: "claude 2.1.200 is below the registered minimum 2.1.242 for modelPicker" }, 400);
     assert.ok(textOf(state.hook).join("\n").includes("below the registered minimum"), "the refusal reason is missing");
     assert.ok(textOf(state.hook).join("\n").includes("claude-b"), "a refused remove dropped the row");
@@ -200,11 +215,27 @@ test("a done migration reloads the list; the editor writes the full next list pe
   }
 });
 
+test("referenced Claude model removal stays visible and sends no PUT (#285)", async () => {
+  const state = setup();
+  try {
+    await state.answer(0, modelPayload(["claude-a"]));
+    findButton(state.hook, "models.claudeCustomCheckMigration").onClick();
+    await state.answer(1, { status: "done", changed: false });
+    setReferences(["default · claude:claude-a", "Host · fast · claude:claude-a:high"]);
+    removeButtonOf(state.hook, "claude-a").onClick();
+    await settle(); state.hook.flush();
+    assert.equal(state.requests.length, 2, "a referenced removal must stop before PUT");
+    assert.ok(textOf(state.hook).includes("models.referenceBlocked"));
+    assert.ok(textOf(state.hook).join("\n").includes("claude-a"));
+  } finally { setReferences([]); state.restore(); }
+});
+
 test("a 409 conflict replaces the banner with the fresh preview — no error, the next「合并」carries the new digest (r2#1)", async () => {
   const state = setup();
   try {
-    await state.answer(0, PREVIEW);
-    await state.answer(1, modelPayload(["native-keep"]));
+    await state.answer(0, modelPayload(["native-keep"]));
+    findButton(state.hook, "models.claudeCustomCheckMigration").onClick();
+    await state.answer(1, PREVIEW);
     const merge = findButton(state.hook, "models.claudeCustomMerge");
     merge.onClick();
     // The source or target changed while the user looked: the confirm answers
@@ -235,8 +266,9 @@ test("a 409 conflict replaces the banner with the fresh preview — no error, th
 test("the editor lists only the user layer's own names — a managed picker never enters the PUT list (r1#1)", async () => {
   const state = setup();
   try {
-    await state.answer(0, { status: "done", changed: false, shadowed: true });
-    await state.answer(1, modelPayload(["managed-only", "user-own"], ["user-own"]));
+    await state.answer(0, modelPayload(["managed-only", "user-own"], ["user-own"]));
+    findButton(state.hook, "models.claudeCustomCheckMigration").onClick();
+    await state.answer(1, { status: "done", changed: false, shadowed: true });
     const text = textOf(state.hook).join("\n");
     assert.ok(text.includes("user-own"), "the user layer's name is missing from the editor");
     assert.ok(!text.includes("managed-only"), "a managed name entered the editor's list");
@@ -262,8 +294,9 @@ test("the editor lists only the user layer's own names — a managed picker neve
 test("a blocked migration keeps its reason visible, and the managed-shadowed note shows「已保存、未生效」", async () => {
   const state = setup();
   try {
-    await state.answer(0, { status: "blocked", reason: "the retired customModels entry is not an array", shadowed: true });
-    await state.answer(1, modelPayload([]));
+    await state.answer(0, modelPayload([]));
+    findButton(state.hook, "models.claudeCustomCheckMigration").onClick();
+    await state.answer(1, { status: "blocked", reason: "the retired customModels entry is not an array", shadowed: true });
     const text = textOf(state.hook).join("\n");
     assert.ok(text.includes("models.claudeCustomBlocked"), "the blockage prefix is missing");
     assert.ok(text.includes("the retired customModels entry is not an array"), "the blockage reason is missing");
@@ -311,7 +344,40 @@ test("the real section's first read is its skeleton", async () => {
     const text = textOf(state.hook).join("\n");
     assert.ok(text.includes("models.claudeCustomLoading"), "the loading label is missing");
     assert.ok(!text.includes("models.claudeCustomEmpty"), "a pending read is the empty state");
+    assert.equal(state.requests.length, 1);
+    assert.equal(state.requests[0].url, "/api/harness/claude/model");
+    assert.equal(state.requests[0].init?.method ?? "GET", "GET", "mount performs only a read");
   } finally {
     state.restore();
   }
+});
+
+test("migration failure leaves the independently loaded list editable and check can retry", async () => {
+  const state = setup();
+  try {
+    await state.answer(0, modelPayload(["kept"]));
+    findButton(state.hook, "models.claudeCustomCheckMigration").onClick();
+    await state.answer(1, { error: "migration offline" }, 500);
+    assert.ok(textOf(state.hook).join(" ").includes("migration offline"));
+    assert.equal(byAttr(state.hook, "data-claude-models-loading").length, 0);
+    assert.ok(removeButtonOf(state.hook, "kept"));
+    findButton(state.hook, "models.claudeCustomCheckMigration").onClick();
+    await state.answer(2, { status: "done", changed: true });
+    await state.answer(3, modelPayload(["kept", "migrated"]));
+    assert.ok(removeButtonOf(state.hook, "migrated"));
+    assert.equal(state.refreshes.length, 1);
+  } finally { state.restore(); }
+});
+
+test("failed list read ends loading and its retry succeeds without migration POST", async () => {
+  const state = setup();
+  try {
+    await state.answer(0, { error: "read offline" }, 500);
+    assert.equal(byAttr(state.hook, "data-claude-models-loading").length, 0);
+    assert.equal(byAttr(state.hook, "data-claude-models-retry").length, 1);
+    findButton(state.hook, "i18n.retry").onClick();
+    await state.answer(1, modelPayload(["recovered"]));
+    assert.ok(removeButtonOf(state.hook, "recovered"));
+    assert.ok(state.requests.every((r) => !r.init?.method));
+  } finally { state.restore(); }
 });

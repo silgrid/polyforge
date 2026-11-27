@@ -62,6 +62,7 @@ export function HarnessGeneralSettings({
           </ConfigSidebarList>
         </ConfigSidebar>
         <ConfigDetail>
+          <header className="settings-content-heading"><div><h2>{t(GENERAL_PANES.find((item) => item.id === pane)!.labelKey)}</h2><p>{t("settings.generalIntro")}</p></div></header>
           {pane === "conversation" && (
             <div data-general-pane="conversation" className="settings-general-pane-host">
               <GeneralSettings

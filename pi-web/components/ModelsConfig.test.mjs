@@ -11,6 +11,8 @@ const {
   hasModelCostDraftValue,
   modelCostToDraft,
   modelSidebarLabel,
+  modelsConfigEqual,
+  modelIdentitiesEqual,
   parseCompleteModelCost,
   providerMatchesSearch,
   renameProviderEntry,
@@ -21,6 +23,41 @@ const {
   trackAddedModels,
   updateHeaderRow,
 } = await jiti.import("./models-config-helpers.ts");
+
+test("schema key reordering after a display-name save is not a conflict, but changed fields and model order are", async () => {
+  const { validateModelsConfigPayload } = await jiti.import("../lib/models-config-store.ts");
+  const baseline = { providers: { acceptance: {
+    baseUrl: "https://fixture.invalid/v1", apiKey: "!printf fixture-only", headers: { "X-Test": "TEST" },
+    models: [{ id: "m1" }, { id: "m2" }], extra: { retained: true }, name: "团队网关",
+  } } };
+  const parsed = validateModelsConfigPayload(baseline);
+  assert.equal(parsed.ok, true);
+  assert.notEqual(JSON.stringify(parsed.data), JSON.stringify(baseline), "the native schema reorders name before other fields");
+  assert.equal(modelsConfigEqual(parsed.data, baseline), true);
+  for (const update of [
+    (entry) => { entry.name = "Other"; },
+    (entry) => { entry.apiKey = "DIFFERENT_KEY"; },
+    (entry) => { entry.headers["X-Test"] = "CHANGED"; },
+    (entry) => { entry.extra.retained = false; },
+    (entry) => { entry.models.reverse(); },
+  ]) {
+    const changed = structuredClone(parsed.data);
+    update(changed.providers.acceptance);
+    assert.equal(modelsConfigEqual(changed, baseline), false);
+  }
+});
+
+test("metadata-only edits do not repair model scope; provider/model identity changes still do", () => {
+  const original = { providers: { gateway: { name: "Before", baseUrl: "https://before.invalid", models: [{ id: "a" }, { id: "b" }] } } };
+  assert.equal(modelIdentitiesEqual(original, { providers: { gateway: { ...original.providers.gateway, name: "After", baseUrl: "https://after.invalid", apiKey: "fixture" } } }), true);
+  assert.equal(modelIdentitiesEqual(original, { providers: { gateway: { models: [{ id: "b" }, { id: "a" }] } } }), true);
+  for (const changed of [
+    { providers: { renamed: original.providers.gateway } },
+    { providers: { gateway: { models: [{ id: "a" }] } } },
+    { providers: { gateway: { models: [{ id: "a" }, { id: "c" }] } } },
+    { providers: { ...original.providers, added: {} } },
+  ]) assert.equal(modelIdentitiesEqual(original, changed), false);
+});
 
 test("disabling the developer role writes an explicit false override", () => {
   assert.deepEqual(

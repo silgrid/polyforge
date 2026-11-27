@@ -4143,7 +4143,7 @@ export function AppShell() {
         onComplete={handleOnboardingComplete}
         onSkip={handleOnboardingSkip}
         onClose={handleOnboardingDismiss}
-        onOpenAccount={() => openSettingsSection("account")}
+        onOpenAccount={() => openSettingsSection("models")}
         onOpenModels={() => { openSettingsSection("models"); setSettingsAddProvider(true); }}
         onWorkspaceChange={handleCwdChange}
       />

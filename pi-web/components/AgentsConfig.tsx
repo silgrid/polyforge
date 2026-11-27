@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { SettingsDraftRegistration } from "./SettingsDrafts";
 import { useI18n } from "@/hooks/useI18n";
 import { dirtyCount } from "@/lib/settings-dirty";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -308,6 +309,7 @@ export function AgentsConfig({
   const [profiles, setProfiles] = useState<SubagentProfile[]>([]);
   const [modelOptions, setModelOptions] = useState<ModelsData["modelList"]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsRetry, setModelsRetry] = useState(0);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(() => getLastSettingsSelection("agents", cwd) ?? AGENT_SETTINGS_SELECTION);
   const [draft, setDraft] = useState<EditableProfile>(EMPTY_PROFILE);
@@ -315,6 +317,7 @@ export function AgentsConfig({
   // against it (polyforge#259 T4 AC1).
   const [baseDraft, setBaseDraft] = useState<EditableProfile>(EMPTY_PROFILE);
   const [mode, setMode] = useState<EditorMode>("view");
+  const [heldDrafts, setHeldDrafts] = useState<Record<string, { draft: EditableProfile; base: EditableProfile; mode: EditorMode; scope: SubagentWritableScope }>>({});
   const [targetScope, setTargetScope] = useState<SubagentWritableScope>("global");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -423,9 +426,20 @@ export function AgentsConfig({
       }
     })();
     return () => controller.abort();
-  }, [cwd, trustKey]);
+  }, [cwd, trustKey, modelsRetry]);
 
+  const holdDraft = () => {
+    if (mode === "view" || dirtyCount(baseDraft as unknown as Record<string, unknown>, draft as unknown as Record<string, unknown>) === 0) return;
+    setHeldDrafts((previous) => ({ ...previous, [selectedKey ?? "new"]: { draft, base: baseDraft, mode, scope: targetScope } }));
+  };
+  const dropHeld = (key: string) => setHeldDrafts((previous) => { const next = { ...previous }; delete next[key]; return next; });
   const selectProfile = (profile: SubagentProfile) => {
+    if (selectedKey === profileKey(profile)) return;
+    holdDraft();
+    const held = heldDrafts[profileKey(profile)];
+    if (held) {
+      setSelectedKey(profileKey(profile)); setDraft(held.draft); setBaseDraft(held.base); setMode(held.mode); setTargetScope(held.scope); dropHeld(profileKey(profile)); setError(null); return;
+    }
     setSelectedKey(profileKey(profile));
     setDraft(editableProfile(profile));
     setBaseDraft(editableProfile(profile));
@@ -435,12 +449,16 @@ export function AgentsConfig({
   };
 
   const selectSettings = () => {
+    holdDraft();
     setSelectedKey(AGENT_SETTINGS_SELECTION);
     setMode("view");
     setError(null);
   };
 
   const beginCreate = () => {
+    holdDraft();
+    const held = heldDrafts.new;
+    if (held) { setSelectedKey(null); setDraft(held.draft); setBaseDraft(held.base); setMode(held.mode); setTargetScope(held.scope); dropHeld("new"); return; }
     let name = "custom-agent";
     let suffix = 2;
     while (profiles.some((profile) => profile.name === name)) name = `custom-agent-${suffix++}`;
@@ -454,6 +472,7 @@ export function AgentsConfig({
 
   const beginDuplicate = () => {
     if (!selected) return;
+    holdDraft();
     const name = duplicateProfileName(selected.name, profiles);
     setSelectedKey(null);
     setDraft({
@@ -540,8 +559,8 @@ export function AgentsConfig({
   // Settings asks before it drops an unsaved draft (T4 AC1): the footer's count
   // is that fact, reported to the panel that owns the tab bar.
   useEffect(() => {
-    onUnsavedChange?.(dirty > 0);
-  }, [dirty, onUnsavedChange]);
+    onUnsavedChange?.((editing && dirty > 0) || Object.keys(heldDrafts).length > 0);
+  }, [dirty, editing, heldDrafts, onUnsavedChange]);
 
   const update = <K extends keyof EditableProfile>(key: K, value: EditableProfile[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -822,15 +841,18 @@ export function AgentsConfig({
                           onChange={(provider, modelId) => update("model", `${provider}/${modelId}`)}
                           onClear={() => update("model", undefined)}
                           emptyLabel={modelsLoading ? t("agents.modelsLoading") : t("agents.inherit")}
-                          selectedLabel={draft.model && !selectedModelAvailable
-                            ? t("agents.modelUnavailable", { model: draft.model })
+                          selectedLabel={draft.model && (modelsLoading || modelsError || !selectedModelAvailable)
+                            ? t(modelsLoading ? "agents.modelUnconfirmed" : modelsError ? "agents.modelListReadFailed" : "agents.modelNotListed", { model: draft.model })
                             : draft.model !== draftModelBase ? draft.model : undefined}
                           disabled={disabled || modelsLoading || (modelOptions.length === 0 && !draft.model)}
                           ariaLabel={t("agents.model")}
                           variant="field"
                           placement="auto"
                         />
-                        {modelsError && <span style={{ color: "#ef4444", fontSize: 10 }}>{modelsError}</span>}
+                        {modelsError && <span role="alert" style={{ color: "var(--text-muted)", fontSize: 10 }}>
+                          {t("agents.modelsReadFailed")} {modelsError}
+                          <ConfigButton size="small" disabled={modelsLoading} onClick={() => setModelsRetry((value) => value + 1)}>{t("i18n.retry")}</ConfigButton>
+                        </span>}
                       </div>
                     </Field>
                     <Field label={t("agents.thinking")}>
@@ -854,6 +876,18 @@ export function AgentsConfig({
       </ConfigSplitView>
       {/* One footer save for the whole draft: the count is the fields it would
           write, and a clean profile offers no button (polyforge#259 T4 AC1). */}
+      {Object.entries(heldDrafts).map(([key, held]) => <SettingsDraftRegistration key={key}
+        label={`${t("common.agents")} · ${held.draft.name}`} count={dirtyCount(held.base as unknown as Record<string, unknown>, held.draft as unknown as Record<string, unknown>)} busy={saving}
+        discard={() => dropHeld(key)} save={() => {
+          setSaving(true); setError(null);
+          void fetch("/api/subagents/profiles", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cwd, scope: held.scope, profile: held.draft }) })
+            .then(async (response) => {
+              const answer = await response.json();
+              if (!response.ok || answer.error || !answer.profile) throw new Error(answer.error ?? `HTTP ${response.status}`);
+              dropHeld(key);
+              setProfiles((previous) => [...previous.filter((profile) => profileKey(profile) !== profileKey(answer.profile)), answer.profile]);
+            }).catch((cause) => setError(String(cause))).finally(() => setSaving(false));
+        }} />)}
       <ConfigSaveFooter
         status={(settingsError || error)
           ? <span role="alert" style={{ color: "#ef4444" }}>{settingsError || error}</span>
