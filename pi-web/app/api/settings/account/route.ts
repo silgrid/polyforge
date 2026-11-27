@@ -16,6 +16,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
+import { isClaudeGatewayUrl } from "@/lib/claude-api-config";
 import { claudeConfigDir } from "@/lib/claude-config-dir";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { claudeSessionStatus, piStepStatus } from "@/lib/harness/account";
@@ -31,21 +32,25 @@ export const runtime = "nodejs";
  * only (the card's 凭据类型与来源 beside the auth status). */
 const INTERACTIVE_CREDENTIAL_KEYS = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"] as const;
 
-function interactiveEnvCredentials(configDir: string): Record<string, boolean> {
-  const out: Record<string, boolean> = {};
+function interactiveEnvCredentials(configDir: string): { envCredentials: Record<string, boolean | null>; envCredentialsState: "observed" | "absent" | "read-failed" } {
+  const out: Record<string, boolean | null> = {};
   for (const key of INTERACTIVE_CREDENTIAL_KEYS) out[key] = false;
+  const unknown = () => ({ envCredentials: Object.fromEntries(INTERACTIVE_CREDENTIAL_KEYS.map((key) => [key, null])), envCredentialsState: "read-failed" as const });
   try {
     const parsed: unknown = JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return out;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return unknown();
     const env = (parsed as Record<string, unknown>).env;
-    if (typeof env !== "object" || env === null || Array.isArray(env)) return out;
+    if (env !== undefined && (typeof env !== "object" || env === null || Array.isArray(env))) return unknown();
     for (const key of INTERACTIVE_CREDENTIAL_KEYS) {
-      out[key] = typeof (env as Record<string, unknown>)[key] === "string" && ((env as Record<string, unknown>)[key] as string) !== "";
+      const value = (env as Record<string, unknown> | undefined)?.[key];
+      if (value !== undefined && typeof value !== "string") return unknown();
+      out[key] = typeof value === "string" && value !== "";
     }
-  } catch {
-    // absent or torn: all unset, never an error
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { envCredentials: out, envCredentialsState: "absent" };
+    return unknown();
   }
-  return out;
+  return { envCredentials: out, envCredentialsState: "observed" };
 }
 
 /**
@@ -82,8 +87,15 @@ export async function GET(req: Request) {
   if (!isApiRequestAllowed(req)) {
     return NextResponse.json({ error: "request-denied", message: "Untrusted API request" }, { status: 403 });
   }
+  const scope = new URL(req.url).searchParams.get("scope") ?? "full";
+  if (!["full", "interactive", "cells"].includes(scope)) {
+    return NextResponse.json({ error: "invalid-scope" }, { status: 400 });
+  }
   const configDir = claudeConfigDir();
-  const [claude, doctor] = await Promise.all([claudeSessionStatus(), readDoctorCells()]);
+  const [claude, doctor] = await Promise.all([
+    scope === "cells" ? null : claudeSessionStatus(),
+    scope === "interactive" ? Promise.resolve({ cells: null, error: null }) : readDoctorCells(),
+  ]);
   const cells: AccountCellRow[] = [];
   if (doctor.cells) {
     const caps = capabilityFacts();
@@ -91,21 +103,22 @@ export async function GET(req: Request) {
     // Cell answers once with the Cell it shares)
     const sources = new Set<string>();
     for (const cell of doctor.cells) {
-      for (const facts of Object.values(cell.harnesses ?? {})) {
-        if (typeof facts?.source === "string" && facts.source !== "") sources.add(facts.source);
-      }
+      const facts = cell.harnesses?.pi;
+      const source = facts?.source ?? cell.source;
+      if (!cell.probeError && typeof source === "string" && source !== "") sources.add(source);
     }
     const checks = new Map<string, PiStepCheck>();
     for (const source of sources) {
       const check = await piStepStatus(source);
-      checks.set(source, { sourceDir: source, ...check });
+      checks.set(source, { sourceDir: source, ...check, checkedAt: new Date().toISOString(), basis: check.provider ? "pi-auth-check-no-refresh" : "provider-selection" });
     }
     for (const cell of doctor.cells) {
       cells.push(buildAccountCellRow(cell, caps, checks));
     }
   }
   return NextResponse.json({
-    claude: { ...claude, envCredentials: interactiveEnvCredentials(configDir), consoleProfile: consoleProfileFact() },
+    scope,
+    claude: claude === null ? null : { ...claude, ...interactiveEnvCredentials(configDir), consoleProfile: consoleProfileFact(), externalEnvCredentialKeys: INTERACTIVE_CREDENTIAL_KEYS.filter((key) => Boolean(process.env[key])) },
     cells,
     doctorError: doctor.error,
   });
@@ -159,11 +172,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "json-invalid", message: "the body is not valid JSON" }, { status: 400 });
   }
   const bad = (message: string) => NextResponse.json({ error: "invalid-request", message, code: "invalid-request" }, { status: 400 });
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return bad("Expected a JSON object");
   const kind = typeof body.kind === "string" ? body.kind : "";
   const shape = WRITE_KIND_KEYS[kind];
   if (!shape) return bad("kind must be one of oauth-token, api-key, gateway");
   if (!Array.isArray(body.targets) || body.targets.length === 0 || !body.targets.every((t) => typeof t === "string" && t !== "")) {
-    return bad("targets must name the interactive session and/or the Cells to write (default: every Cell)");
+    return bad("targets must explicitly name at least one interactive session or Cell");
   }
   const configDir = claudeConfigDir();
   let value: string | null = null;
@@ -187,14 +201,19 @@ export async function POST(req: Request) {
       return bad("a gateway credential needs its base URL");
     }
   }
+  if (shape.baseUrlKey) {
+    if (!isClaudeGatewayUrl(baseUrl)) return bad("a gateway address must be an absolute HTTP or HTTPS URL");
+    baseUrl = baseUrl.trim();
+  }
   // the Cell targets resolve server-side from a fresh doctor read — the
   // client names profiles only, never paths. Every target is validated
   // before any write: an unknown name, or a Cell that cannot be resolved
   // because the doctor read failed, refuses the whole request.
-  const doctor = await readDoctorCells();
+  const writeTargets = [...new Set(body.targets as string[])];
+  const doctor = writeTargets.some((target) => target !== "interactive")
+    ? await readDoctorCells() : { cells: null, error: null };
   const byProfile = new Map<string, DoctorCellFacts>();
   for (const cell of doctor.cells ?? []) byProfile.set(cell.profile, cell);
-  const writeTargets = body.targets as string[];
   for (const target of writeTargets) {
     if (target === "interactive") continue;
     if (!byProfile.has(target)) {

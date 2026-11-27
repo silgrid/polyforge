@@ -79,12 +79,15 @@ export function buildAccountCellRow(
       keychainHint: !credentialsFollow,
       source: facts?.source ?? cell.source ?? null,
       sourceKind: facts?.sourceKind ?? cell.sourceKind ?? null,
+      provider: null, checkedAt: null, checkBasis: "not-checked" as const,
+      observation: facts ? "observed" as const : "not-read" as const,
+      modelUsable: null,
     };
     if (probeError) {
       harnesses[id] = {
         ...base,
         configRoot: null, credential: null, status: "unknown", authType: null, checkReason: null,
-        credentialKinds: null, credentialsFile: null, usable: false, reason: probeError,
+        credentialKinds: null, credentialsFile: null, usable: executionDisabled ? false : null, observation: "read-failed", reason: probeError,
       };
       continue;
     }
@@ -93,12 +96,12 @@ export function buildAccountCellRow(
       const kinds = facts?.settingsEnv ? claudeCredentialKinds(facts.settingsEnv) : null;
       const credentialsFile = facts?.credentialsFile === "present" || facts?.credentialsFile === "absent" ? facts.credentialsFile : null;
       const hasCredential = credential === "set" || credentialsFile === "present";
-      const usable = executionDisabled === null && hasCredential;
+      const usable = executionDisabled === null ? null : false;
       harnesses[id] = {
         ...base,
         configRoot: facts?.configRoot ?? null,
         credential,
-        status: hasCredential ? "ready" : "not_ready",
+        status: "unknown",
         authType: null,
         checkReason: null,
         credentialKinds: kinds,
@@ -107,14 +110,16 @@ export function buildAccountCellRow(
         reason: executionDisabled !== null
           ? executionDisabled
           : hasCredential
-            ? null
-            : "no credential in the claude-config env block",
+            ? "credential configuration observed; authentication and model access not checked"
+            : credential === null
+              ? "credential configuration not read"
+              : "no credential in the claude-config env block; external authentication not checked",
       };
       continue;
     }
     const credential = facts?.credential === "set" || facts?.credential === "unset" ? facts.credential : null;
-    const check = piCheckOf(cell, facts, piChecks);
-    const ready = check?.status === "ready" || (check === null && credential === "set");
+    const check = id === "pi" ? piCheckOf(cell, facts, piChecks) : null;
+    const ready = check?.status === "ready";
     const checkReason = check?.reason ?? null;
     harnesses[id] = {
       ...base,
@@ -125,12 +130,16 @@ export function buildAccountCellRow(
       checkReason,
       credentialKinds: null,
       credentialsFile: null,
-      usable: executionDisabled === null && ready,
+      provider: check?.provider ?? null,
+      checkedAt: check?.checkedAt ?? null,
+      checkBasis: check?.basis ?? "not-checked",
+      observation: check ? (check.status === "unknown" ? "read-failed" : "observed") : "not-read",
+      usable: executionDisabled !== null ? false : check?.status === "not_ready" ? false : null,
       reason: executionDisabled !== null
         ? executionDisabled
         : ready
           ? null
-          : checkReason ?? "no credential in the step agent dir",
+          : checkReason ?? "authentication not checked",
     };
   }
   return { profile: cell.profile, executionDisabled, probeError, harnessOrder: order, harnesses };

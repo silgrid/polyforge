@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { SettingsDraftRegistration, useSettingsDraftManaged } from "./SettingsDrafts";
 import { useI18n } from "@/hooks/useI18n";
 import type { TranslationParams } from "@/lib/i18n/types";
 import type { PolyforgeDetectStatus } from "@/lib/polyforge-detect";
@@ -157,6 +158,8 @@ function entryDot(tone: EntryTone): { active?: boolean; color?: string } {
 }
 
 interface Props {
+  taskChainsRequest?: number;
+  onBackToModels?: () => void;
   cwd: string | null;
   /** True while the section is the settings dialog's active section. */
   active: boolean;
@@ -473,7 +476,7 @@ function DisclosureToggle({ open, controls, onToggle, marker, children }: {
   );
 }
 
-export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
+export function PolyforgeConfig({ cwd, active, onOpenPlugins, taskChainsRequest = 0, onBackToModels }: Props) {
   const { t } = useI18n();
   const [detect, setDetect] = useState<PolyforgeDetectStatus | null>(null);
   const [detectError, setDetectError] = useState<Failure | null>(null);
@@ -525,6 +528,13 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
   // A lifecycle result renders in the pane it came from (a profile, or "add").
   const [cellMessage, setCellMessage] = useState<{ pane: string; tone: "ok" | "error"; text: string; details?: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [chainMode, setChainMode] = useState(taskChainsRequest > 0);
+  const [chainProfile, setChainProfile] = useState<string | null>(null);
+  useEffect(() => {
+    if (!taskChainsRequest) return;
+    setChainMode(true);
+    setChainProfile(null);
+  }, [taskChainsRequest]);
   const [selection, setSelection] = useState<PaneSelection>({ kind: "host" });
   const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set(["host"]));
   const select = useCallback((next: PaneSelection) => {
@@ -744,7 +754,7 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
   const profiles = [POLYFORGE_DEFAULT_PROFILE, ...(cells ?? []).map((cell) => cell.profile).filter((profile) => profile !== POLYFORGE_DEFAULT_PROFILE)];
   // A selected Cell that left the registry falls back to the Host.
   const shown: PaneSelection = selection.kind === "cell" && !profiles.includes(selection.profile) ? { kind: "host" } : selection;
-  const shownKey = paneKey(shown);
+  const shownKey = chainMode && (!chainProfile || !profiles.includes(chainProfile)) ? "chain-picker" : paneKey(shown);
   const stateLabel = (state: PolyforgeCellListState) => t(`polyforge.cells.state.${state}`);
   // The Host entry's dot and badge: the machine detection, in one word.
   const hostTone: EntryTone = !detect
@@ -998,10 +1008,14 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
     const removed = profile !== POLYFORGE_DEFAULT_PROFILE && cellOf(profile)?.state === "removed";
     return (
       <>
-        {renderCellHead(profile)}
+        <div hidden={chainMode}>{renderCellHead(profile)}</div>
         {!removed && (
           <CellSettings
             profile={profile}
+            workflowOnly={chainMode}
+            targetRequest={taskChainsRequest}
+            onReveal={() => { setChainMode(true); setChainProfile(profile); select({ kind: "cell", profile }); }}
+            onRevealConfig={() => { setChainMode(false); select({ kind: "cell", profile }); }}
             cwd={cwd}
             active={active}
             epoch={configEpoch}
@@ -1030,7 +1044,7 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
     <ConfigPanelShell embedded title={t("polyforge.title")} onClose={() => {}}>
       <ConfigDetailNavigationContext.Provider value={null}>
       <ConfigSplitView>
-        <ConfigSidebar>
+        {!chainMode && <ConfigSidebar>
           <ConfigSidebarList>
             <div className="config-sidebar-group">
               <ConfigSidebarItem active={shownKey === "host"} data-pf-host-entry onClick={() => select({ kind: "host" })}>
@@ -1056,7 +1070,7 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
                     active={shownKey === `cell:${profile}`}
                     data-pf-cell-entry={profile}
                     data-pf-cell-state={state ?? undefined}
-                    onClick={() => select({ kind: "cell", profile })}
+                    onClick={() => { setChainProfile(profile); select({ kind: "cell", profile }); }}
                   >
                     <ConfigStatusDot {...entryDot(tone)} />
                     <ConfigSidebarText className="is-grow">{profile}</ConfigSidebarText>
@@ -1069,10 +1083,20 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
           <ConfigListAction active={shownKey === "add"} data-pf-add-entry onClick={() => select({ kind: "add" })}>
             {t("polyforge.cells.add")}
           </ConfigListAction>
-        </ConfigSidebar>
+        </ConfigSidebar>}
 
         <ConfigDetail>
           <ConfigDetailStack className="settings-polyforge">
+            {chainMode && <section data-task-chain-entry="">
+              <div className="settings-purpose-actions"><ConfigButton variant="ghost" onClick={onBackToModels}>← {t("common.models")}</ConfigButton><ConfigButton variant="ghost" onClick={() => setChainMode(false)}>{t("polish.allTaskSettings")}</ConfigButton></div>
+              <h2>{t("polish.automaticTasks")}</h2><p>{t("polish.taskTargetHint")}</p>
+              <label className="polyforge-workflow-project"><span>{t("polish.taskEnvironment")}</span><select data-task-cell-picker="" value={shownKey === "chain-picker" ? "" : chainProfile ?? ""} onChange={(event) => { setChainProfile(event.target.value); select({ kind: "cell", profile: event.target.value }); }}>
+                <option value="" disabled>{t("polish.chooseCell")}</option>
+                {profiles.map((profile) => <option key={profile} value={profile} disabled={cellOf(profile)?.state === "removed"}>{profile}</option>)}
+              </select></label>
+              {(cellsError || (cellsRead && !cellsSupported)) && <ConfigSidebarGroupStatus note={cellsRead && !cellsSupported ? t("polyforge.cells.upgrade") : null} error={cellsError?.text ?? null} />}
+              <ConfigButton size="small" variant="ghost" onClick={() => void runCellsRead()}>{t("settings.accountRefresh")}</ConfigButton>
+            </section>}
             {pane("host", renderHostPane)}
             {profiles.map((profile) => pane(`cell:${profile}`, () => renderCellPane(profile)))}
             {pane("add", () => (
@@ -1089,7 +1113,7 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
       </ConfigSplitView>
       </ConfigDetailNavigationContext.Provider>
 
-      <ConfigFooter
+      {!chainMode && <ConfigFooter
         status={
           <ConfigFooterStatus
             summary={actionError?.text ?? actionMessage ?? (detect ? t("polyforge.settings.detected") : t("polyforge.loading"))}
@@ -1103,7 +1127,7 @@ export function PolyforgeConfig({ cwd, active, onOpenPlugins }: Props) {
         <ConfigButton size="small" disabled={!detect} onClick={() => { void runDetect(true); void runCellsRead(); setInstallRefresh((n) => n + 1); }}>
           {t("polyforge.settings.redetect")}
         </ConfigButton>
-      </ConfigFooter>
+      </ConfigFooter>}
     </ConfigPanelShell>
   );
 }
@@ -1125,7 +1149,11 @@ type PendingWrite = { item: PolyforgeConfigItem; action: "set" | "unset"; value?
  * (their one home is the Host pane); what pf lists differently per Cell
  * (a named Cell's [model] source) is its only content difference.
  */
-function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, tierCatalog }: {
+function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, tierCatalog, onReveal, onRevealConfig, workflowOnly = false, targetRequest = 0 }: {
+  onRevealConfig?: () => void;
+  workflowOnly?: boolean;
+  targetRequest?: number;
+  onReveal?: () => void;
   profile: string;
   cwd: string | null;
   active: boolean;
@@ -1147,6 +1175,8 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
   const [rowFeedback, setRowFeedback] = useState<Record<string, RowFeedback>>({});
   const [config, setConfig] = useState<PolyforgeConfigRead | null>(null);
   const [configError, setConfigError] = useState<Failure | null>(null);
+  const cellSnapshots = useRef<Record<string, { hash: string | null; values: Record<string, unknown>; value: unknown }>>({});
+  const rebaseCellDrafts = useRef(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [modelEdits, setModelEdits] = useState<Record<string, string[]>>({});
   const [modelAdds, setModelAdds] = useState<Record<string, string>>({});
@@ -1174,6 +1204,15 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
       const response = await fetch(`/api/polyforge/config?cwd=${encodeURIComponent(cwd ?? "")}&profile=${encodeURIComponent(profile)}`);
       const data = await response.json().catch(() => null) as (PolyforgeConfigRead & { error?: string }) | null;
       if (!response.ok || !data || data.error) throw responseError(data, response.status);
+      if (rebaseCellDrafts.current) {
+        rebaseCellDrafts.current = false;
+        for (const [key, snapshot] of Object.entries(cellSnapshots.current)) {
+          if (JSON.stringify(data.items.find((item) => item.key === key)?.value) === JSON.stringify(snapshot.value)) {
+            snapshot.hash = data.file?.sha256 ?? null;
+            snapshot.values = expectedValues(data.items);
+          }
+        }
+      }
       setConfig(data);
       setConfigError(null);
     } catch (error) {
@@ -1183,8 +1222,11 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
 
   // A cwd change is a NEW snapshot: drafts and row feedback never carry over
   // from another cwd's read.
+  const loadedConfigScope = useRef<string | null>(null);
   useEffect(() => {
-    if (!active) return;
+    const scope = JSON.stringify([profile, cwd]);
+    if (!active || loadedConfigScope.current === scope) return;
+    loadedConfigScope.current = scope;
     setDrafts({});
     setModelEdits({});
     setModelAdds({});
@@ -1192,7 +1234,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
     setConfirming(null);
     setNotices({});
     void runConfigRead();
-  }, [active, cwd, runConfigRead]);
+  }, [active, cwd, profile, runConfigRead]);
 
   // A history rollback on the Host pane wrote some Cell's file: re-read.
   const seenEpoch = useRef(epoch);
@@ -1213,7 +1255,8 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
     setWriteBusy(key);
     setRowFeedback({});
     try {
-      const expectState = { file_sha256: config.file?.sha256 ?? null, values: expectedValues(config.items) };
+      const snapshot = cellSnapshots.current[key];
+      const expectState = snapshot ? { file_sha256: snapshot.hash, values: snapshot.values } : { file_sha256: config.file?.sha256 ?? null, values: expectedValues(config.items) };
       const response = await fetch("/api/polyforge/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1241,6 +1284,8 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
       setRowFeedback({ [feedbackId]: { message: data.message ?? t("polyforge.settings.configSaved"), tone: "default" } });
       const entry = data.entry;
       if (CONNECTION_KEYS.includes(key) && entry) setNotices((current) => ({ ...current, [key]: entry }));
+      delete cellSnapshots.current[key];
+      rebaseCellDrafts.current = true;
       await runConfigRead();
       onWritten();
       if (parseWorkspaceWriteKey(key) !== null) setWorkflowEpoch((epoch) => epoch + 1);
@@ -1390,7 +1435,16 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
       ? config.reason ?? t("polyforge.settings.configUnavailable")
       : null;
 
+  const holdCellDraft = (item: PolyforgeConfigItem) => {
+    if (!config || cellSnapshots.current[item.key]) return;
+    cellSnapshots.current[item.key] = { hash: config.file?.sha256 ?? null, values: expectedValues(config.items), value: item.value };
+  };
+  const changeCellDraft = (item: PolyforgeConfigItem, value: string) => {
+    holdCellDraft(item);
+    setDrafts((current) => ({ ...current, [item.key]: value }));
+  };
   const addModel = (item: PolyforgeConfigItem) => {
+    holdCellDraft(item);
     const addition = (modelAdds[item.key] ?? "").trim();
     if (!addition) return;
     setModelEdits((current) => {
@@ -1401,6 +1455,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
   };
 
   const removeModel = (item: PolyforgeConfigItem, model: string) => {
+    holdCellDraft(item);
     setModelEdits((current) => ({
       ...current,
       [item.key]: (current[item.key] ?? modelListValue(item.value)).filter((entry) => entry !== model),
@@ -1430,7 +1485,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
               type="text"
               aria-label={`${t("polyforge.settings.workspaceProjects")} · ${workspacePath}`}
               value={drafts[item.key] ?? workspaceProjects(item.value).join(", ")}
-              onChange={(event) => setDrafts((current) => ({ ...current, [item.key]: event.target.value }))}
+              onChange={(event) => changeCellDraft(item, event.target.value)}
             />
             <ConfigButton size="small" disabled={writeBusy !== null} onClick={() => void writeMapping(workspacePath, "set", drafts[item.key] ?? workspaceProjects(item.value).join(","), item.key)}>
               {t("polyforge.settings.configSave")}
@@ -1482,7 +1537,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
               reason={tierCatalog.reason}
               disabled={writeBusy !== null}
               value={modelAdds[item.key] ?? ""}
-              onChange={(next) => setModelAdds((current) => ({ ...current, [item.key]: next }))}
+              onChange={(next) => { holdCellDraft(item); setModelAdds((current) => ({ ...current, [item.key]: next })); }}
               selectLabel={t("polyforge.settings.configAddModel")}
               inputLabel={item.key}
               placeholder={t("polyforge.settings.configAddModel")}
@@ -1513,7 +1568,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
             min={item.schema?.min}
             max={item.schema?.max}
             step={item.schema?.kind === "int" ? 1 : undefined}
-            onChange={(event) => setDrafts((current) => ({ ...current, [item.key]: event.target.value }))}
+            onChange={(event) => changeCellDraft(item, event.target.value)}
           />
           <ConfigButton size="small" disabled={writeBusy !== null} onClick={() => void save(item)}>
             {t("polyforge.settings.configSave")}
@@ -1667,9 +1722,33 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
   };
 
   const machineScope = t("polyforge.settings.configMachineScope", { file });
+  const changedKeys = [...new Set([...Object.keys(drafts), ...Object.keys(modelEdits), ...Object.keys(modelAdds).filter((key) => modelAdds[key].trim())])].filter((key) => {
+    const item = config?.items.find((entry) => entry.key === key);
+    if (!item) return false;
+    if (modelAdds[key]?.trim()) return true;
+    if (key in modelEdits) return JSON.stringify(modelEdits[key]) !== JSON.stringify(modelListValue(item.value));
+    const original = parseWorkspaceWriteKey(key) !== null ? workspaceProjects(item.value).join(", ") : key === "api_key" ? "" : String(itemValue(item));
+    return drafts[key] !== original;
+  });
   return (
     <>
-      <div className="polyforge-config-panel">
+      {changedKeys.map((key) => {
+        const item = config?.items.find((entry) => entry.key === key);
+        if (!item) return null;
+        return <SettingsDraftRegistration key={key} label={`${profile} · ${key}`} reveal={onRevealConfig ?? onReveal} count={1} busy={writeBusy !== null || confirming !== null}
+          discard={() => {
+            setDrafts((current) => { const next = { ...current }; delete next[key]; return next; });
+            setModelEdits((current) => { const next = { ...current }; delete next[key]; return next; });
+            setModelAdds((current) => { const next = { ...current }; delete next[key]; return next; });
+            delete cellSnapshots.current[key];
+          }} save={() => {
+            if (!config?.capable || IDENTITY_KEYS.includes(key)) return;
+            const workspace = parseWorkspaceWriteKey(key);
+            if (workspace !== null) void writeMapping(workspace, "set", drafts[key] ?? workspaceProjects(item.value).join(","), key);
+            else void save(item);
+          }} />;
+      })}
+      <div className="polyforge-config-panel" hidden={workflowOnly}>
         <ConfigSectionTitle>{t("polyforge.settings.configTitle")}</ConfigSectionTitle>
         {/* its own class — one ellipsised line with the full text in the title at desktop, whole and balanced on phones. */}
         <p className="config-machine-scope-hint" title={machineScope}>{machineScope}</p>
@@ -1845,6 +1924,9 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
           cards: the step chains per project of this Cell's mapped
           workspaces. */}
       <WorkflowCard
+        explicitTarget={workflowOnly}
+        targetRequest={targetRequest}
+        onReveal={onReveal}
         cwd={cwd}
         profile={profile}
         active={active}
@@ -2201,7 +2283,10 @@ type WorkflowRowFeedback = RowFeedback;
  * disabled, with pf's reason as visible text, while the running daemon cannot
  * check the step keys. `pf submit --models` is only noted, never edited.
  */
-export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloadClassLabel, onWritten, tierCatalog }: {
+export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloadClassLabel, onWritten, tierCatalog, onReveal, explicitTarget = false, targetRequest = 0 }: {
+  explicitTarget?: boolean;
+  targetRequest?: number;
+  onReveal?: () => void;
   cwd: string | null;
   /** the pane's Cell — its mapping's workspaces, its --profile. */
   profile: string;
@@ -2216,6 +2301,7 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
 }) {
   const { t } = useI18n();
   const { disclosure, setRegion } = usePolyforgeDisclosure();
+  const managed = useSettingsDraftManaged();
   // The last good read: a failed refresh never clears it.
   const [read, setRead] = useState<PolyforgeWorkflowsRead | null>(null);
   const [readError, setReadError] = useState<Failure | null>(null);
@@ -2224,6 +2310,10 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
   const [refreshing, setRefreshing] = useState(false);
   const readSeqRef = useRef(0);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  const [selectedWorkspace, setSelectedWorkspace] = useState<string | null>(null);
+  useEffect(() => { if (targetRequest) { setSelectedProject(null); setSelectedWorkspace(null); } }, [targetRequest]);
+  const rebaseAfterWrite = useRef(false);
+  const chainSnapshots = useRef<Record<string, { workspace: string; project: string; row: string; hash: string | null; base: string[] }>>({});
   const [chainEdits, setChainEdits] = useState<Record<string, string[]>>({});
   const [chainAdds, setChainAdds] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<Record<string, WorkflowRowFeedback>>({});
@@ -2239,11 +2329,26 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
         setRefreshing(false);
         // Good = at least one workspace answered with a reachable daemon; a
         // single failed workspace is its own line inside the card.
+        if (response.ok && body.capable && !body.error && body.workspaces?.length === 0) {
+          setRead(body);
+          setReadError(null);
+          return;
+        }
         const good = response.ok && body.capable && workflowUnion(body).sources.some((entry) => entry.workflows?.daemon_reachable === true);
         if (!good) {
           // Keep the list on screen; the error sits above it.
           setReadError(failureLine(t, responseError({ error: body.reason ?? body.error, code: body.code }, response.status)));
           return;
+        }
+        if (rebaseAfterWrite.current) {
+          rebaseAfterWrite.current = false;
+          const freshUnion = workflowUnion(body);
+          for (const snapshot of Object.values(chainSnapshots.current)) {
+            const freshOwner = freshUnion.sources.find((entry) => entry.workspace === snapshot.workspace && entry.workflows?.projects.includes(snapshot.project));
+            if (!freshOwner || freshOwner.workspace !== snapshot.workspace) continue;
+            const freshModels = freshOwner.declared?.steps[snapshot.project]?.[snapshot.row]?.models ?? [];
+            if (JSON.stringify(freshModels) === JSON.stringify(snapshot.base)) snapshot.hash = freshOwner.declared?.yaml.sha256 ?? null;
+          }
         }
         setRead(body);
         setReadError(body.reason ? failureLine(t, responseError({ error: body.reason, code: body.code }, response.status)) : null);
@@ -2255,13 +2360,16 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
       });
   }, [cwd, profile, t]);
 
+  const loadedWorkflowScope = useRef<string | null>(null);
   useEffect(() => {
-    if (!active) return;
+    const scope = JSON.stringify([profile, cwd]);
+    if (!active || loadedWorkflowScope.current === scope) return;
+    loadedWorkflowScope.current = scope;
     setChainEdits({});
     setChainAdds({});
     setFeedback({});
     runRead();
-  }, [active, runRead]);
+  }, [active, cwd, profile, runRead]);
 
   // A mapping write changed the Cell's workspaces: one fresh read (never a timer).
   const seenRefresh = useRef(refreshKey);
@@ -2276,8 +2384,10 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
   const union = workflowUnion(read);
   const projects = union.projects.map((entry) => entry.project);
   const ownProjects = (read?.workflows?.projects ?? []).filter((name) => projects.includes(name));
-  const project = selectedProject !== null && projects.includes(selectedProject) ? selectedProject : defaultProject([...ownProjects, ...projects]);
-  const owner = projectOwner(union, project);
+  const targets = union.sources.flatMap((entry) => (entry.workflows?.projects ?? []).map((project) => ({ project, workspace: entry.workspace })));
+  const explicitOwner = union.sources.find((entry) => entry.workspace === selectedWorkspace && selectedProject !== null && entry.workflows?.projects.includes(selectedProject)) ?? null;
+  const project = explicitTarget ? (explicitOwner ? selectedProject : null) : selectedProject !== null && projects.includes(selectedProject) ? selectedProject : defaultProject([...ownProjects, ...projects]);
+  const owner = explicitTarget ? explicitOwner : projectOwner(union, project);
   // With no project at all the first readable workspace still shows its
   // bundle facts (no rows, no write).
   const workflows = owner?.workflows ?? union.sources[0]?.workflows ?? null;
@@ -2292,10 +2402,17 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
   const marker = Object.values(feedback).some((entry) => entry.tone === "error")
     ? t("polyforge.settings.configErrorMarker")
     : draftIds.length > 0 ? t("polyforge.settings.configDraftMarker") : null;
-  const foldOpen = marker !== null || disclosure.workflow;
+  const foldOpen = explicitTarget || marker !== null || disclosure.workflow;
 
-  const write = useCallback(async (rowId: string, key: string, action: "set" | "unset", value?: unknown) => {
-    if (!project || !owner) return;
+  const write = useCallback(async (rowId: string, key: string, action: "set" | "unset", value?: unknown, origin?: { workspace: string; project: string; hash: string | null }) => {
+    const target = origin ?? (project && owner ? { workspace: owner.workspace, project, hash: owner.declared?.yaml.sha256 ?? null } : null);
+    if (!target) return;
+    const currentOwner = workflowUnion(read).sources.find((entry) => entry.workspace === target.workspace && entry.workflows?.projects.includes(target.project));
+    if (!currentOwner || currentOwner.workspace !== target.workspace || !currentOwner.workflows?.write_capable || !currentOwner.declared) {
+      setReadError(failureLine(t, new Error(t("polyforge.settings.workflowCapabilityHint"))));
+      return;
+    }
+    const existingDraft = chainSnapshots.current[JSON.stringify([target.workspace, target.project, rowId])];
     setWriting(key);
     setFeedback({});
     try {
@@ -2308,16 +2425,19 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
           ...(action === "set" ? { value } : {}),
           // The owning workspace's --cwd and yaml CAS, never the settings cwd;
           // pf resolves it in this Cell's mapping.
-          cwd: owner.workspace,
+          cwd: target.workspace,
           profile,
-          expect_state: { file_sha256: owner.declared?.yaml.sha256 ?? null, values: {} },
+          expect_state: { file_sha256: existingDraft ? existingDraft.hash : target.hash, values: {} },
         }),
       });
       const data = await response.json().catch(() => ({})) as { error?: string; message?: string };
       if (!response.ok || data.error) throw responseError(data, response.status);
       setFeedback({ [rowId]: { message: data.message ?? t("polyforge.settings.configSaved"), tone: "default" } });
-      setChainEdits((current) => { const next = { ...current }; delete next[rowId]; return next; });
-      setChainAdds((current) => { const next = { ...current }; delete next[rowId]; return next; });
+      const landedKey = JSON.stringify([target.workspace, target.project, rowId]);
+      delete chainSnapshots.current[landedKey];
+      setChainEdits((current) => { const next = { ...current }; delete next[landedKey]; return next; });
+      setChainAdds((current) => { const next = { ...current }; delete next[landedKey]; return next; });
+      rebaseAfterWrite.current = true;
       runRead();
       onWritten();
     } catch (error) {
@@ -2325,10 +2445,15 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
     } finally {
       setWriting(null);
     }
-  }, [onWritten, owner, profile, project, runRead, t]);
+  }, [onWritten, owner, profile, project, read, runRead, t]);
 
-  const chainOf = (row: WorkflowRow) => chainEdits[row.id] ?? row.declaredModels ?? [];
-  const editChain = (row: WorkflowRow, next: string[]) => setChainEdits((current) => ({ ...current, [row.id]: next }));
+  const draftKey = (rowId: string) => JSON.stringify([owner?.workspace ?? "", project, rowId]);
+  const chainOf = (row: WorkflowRow) => chainEdits[draftKey(row.id)] ?? row.declaredModels ?? [];
+  const holdChain = (row: WorkflowRow) => {
+    if (!owner || !project || chainSnapshots.current[draftKey(row.id)]) return;
+    chainSnapshots.current[draftKey(row.id)] = { workspace: owner.workspace, project, row: row.id, hash: owner.declared?.yaml.sha256 ?? null, base: row.declaredModels ?? [] };
+  };
+  const editChain = (row: WorkflowRow, next: string[]) => { holdChain(row); setChainEdits((current) => ({ ...current, [draftKey(row.id)]: next })); };
   const disabled = !writeCapable || writing !== null;
 
   const renderChips = (models: string[]) => models.length > 0 ? (
@@ -2341,7 +2466,7 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
     const chain = chainOf(row);
     const key = stepWriteKey(project ?? "", row.id);
     const save = () => {
-      const pending = (chainAdds[row.id] ?? "").trim();
+      const pending = (chainAdds[draftKey(row.id)] ?? "").trim();
       const value = pending ? addCandidate(chain, pending) : chain;
       const invalid = stepValueError(key, value);
       if (invalid) { setFeedback({ [row.id]: { message: invalid, tone: "error" } }); return; }
@@ -2370,8 +2495,8 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
             groups={tierCatalog.groups}
             reason={tierCatalog.reason}
             disabled={disabled}
-            value={chainAdds[row.id] ?? ""}
-            onChange={(next) => setChainAdds((current) => ({ ...current, [row.id]: next }))}
+            value={chainAdds[draftKey(row.id)] ?? ""}
+            onChange={(next) => { holdChain(row); setChainAdds((current) => ({ ...current, [draftKey(row.id)]: next })); }}
             selectLabel={t("polyforge.candidatePicker.choose")}
             inputLabel={`${t("polyforge.settings.workflowChainAdd")} · ${row.id}`}
             placeholder={t("polyforge.settings.workflowChainAdd")}
@@ -2379,13 +2504,13 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
               onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  editChain(row, addCandidate(chain, chainAdds[row.id] ?? ""));
-                  setChainAdds((current) => ({ ...current, [row.id]: "" }));
+                  editChain(row, addCandidate(chain, chainAdds[draftKey(row.id)] ?? ""));
+                  setChainAdds((current) => ({ ...current, [draftKey(row.id)]: "" }));
                 }
               },
             }}
           />
-          <ConfigButton size="small" disabled={disabled} onClick={save}>{t("polyforge.settings.configSave")}</ConfigButton>
+          {!managed && <ConfigButton size="small" disabled={disabled} onClick={save}>{t("polyforge.settings.configSave")}</ConfigButton>}
           <ConfigButton size="small" disabled={disabled || !row.declared} onClick={() => void write(row.id, key, "unset")}>
             {t("polyforge.settings.workflowChainClear")}
           </ConfigButton>
@@ -2396,6 +2521,24 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
 
   return (
     <section className="polyforge-config-card polyforge-workflow-card" aria-label={t("polyforge.settings.workflowTitle")}>
+      {[...new Set(draftIds)].map((id) => {
+        const snapshot = chainSnapshots.current[id];
+        if (!snapshot) return null;
+        return <SettingsDraftRegistration key={id} label={`${profile} · ${snapshot.project}/${snapshot.row} · ${shortenPath(snapshot.workspace)}`} reveal={() => { onReveal?.(); setSelectedProject(snapshot.project); setSelectedWorkspace(snapshot.workspace); }} count={1} busy={writing !== null} canSave={Boolean(union.sources.find((entry) => entry.workspace === snapshot.workspace && entry.workflows?.projects.includes(snapshot.project))?.workflows?.write_capable)}
+          discard={() => {
+            setChainEdits((current) => { const next = { ...current }; delete next[id]; return next; });
+            setChainAdds((current) => { const next = { ...current }; delete next[id]; return next; });
+            delete chainSnapshots.current[id];
+          }}
+          save={() => {
+            const key = stepWriteKey(snapshot.project, snapshot.row);
+            const chain = chainEdits[id] ?? snapshot.base;
+            const value = chainAdds[id]?.trim() ? addCandidate(chain, chainAdds[id]) : chain;
+            const invalid = stepValueError(key, value);
+            if (invalid) { setReadError(failureLine(t, new Error(invalid))); return; }
+            void write(snapshot.row, key, "set", value, snapshot);
+          }} />;
+      })}
       <div className="polyforge-workflow-head">
         <p className="polyforge-config-card-title">{t("polyforge.settings.workflowTitle")}</p>
         {/* The ↻: one fresh read per click; disabled, aria-busy
@@ -2425,6 +2568,8 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
         </p>
       )}
       <FailureNotice failure={readError} t={t} />
+      {refreshing && !read && <p role="status">{t("i18n.loading")}</p>}
+      {read && !refreshing && !readError && union.sources.length === 0 && <p data-task-no-workspace="">{t("polyforge.cells.noWorkspace")}</p>}
       {workflows && !workflows.write_capable && (
         <p className="config-scope-switch-reason">
           {t("polyforge.settings.workflowCapabilityHint")}{workflows.write_reason ? ` (${workflows.write_reason})` : ""}
@@ -2437,7 +2582,7 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
           {t("polyforge.settings.workflowWorkspaceFailed")}: {entry.yamlPath} — {entry.reason}
         </p>
       ))}
-      {union.sources.length > 0 && (
+      {!explicitTarget && union.sources.length > 0 && (
         <ul className="polyforge-workflow-sources">
           {union.sources.map((entry) => (
             <li key={entry.workspace} className="polyforge-workflow-source">
@@ -2452,26 +2597,30 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
         <>
           <label className="polyforge-workflow-project">
             <span>{t("polyforge.settings.workflowProject")}</span>
-            <select value={project ?? ""} onChange={(event) => setSelectedProject(event.target.value)} disabled={projects.length === 0}>
-              {projects.map((name) => <option key={name} value={name}>{name}</option>)}
+            <select aria-label={t("polish.taskProject")} value={explicitTarget ? (owner && project ? JSON.stringify([owner.workspace, project]) : "") : project ?? ""} onChange={(event) => {
+              if (explicitTarget) { const [workspace, project] = JSON.parse(event.target.value) as [string, string]; setSelectedWorkspace(workspace); setSelectedProject(project); }
+              else setSelectedProject(event.target.value);
+            }} disabled={projects.length === 0}>
+              {explicitTarget && <option value="" disabled>{t("polish.chooseProject")}</option>}
+              {explicitTarget ? targets.map((target) => <option key={JSON.stringify([target.workspace, target.project])} value={JSON.stringify([target.workspace, target.project])}>{target.project} · {target.workspace}</option>) : projects.map((name) => <option key={name} value={name}>{name}</option>)}
             </select>
           </label>
           {/* this is a full sentence, not a short scope-switch
               reason, so it keeps its own class without the shared 320px cap. */}
-          <p className="polyforge-workflow-submit-note">{t("polyforge.settings.workflowSubmitNote")}</p>
+          <details className="settings-model-advanced"><summary>{t("i18n.detailsLabel")}</summary><p className="polyforge-workflow-submit-note">{t("polyforge.settings.workflowSubmitNote")}</p></details>
           {workflows.bundle_errors.map((entry) => (
             <p key={entry.bundle} className="config-scope-switch-reason is-error">
               {t("polyforge.settings.workflowBundleError")}: {entry.bundle} — {entry.reason}
             </p>
           ))}
-          <DisclosureToggle
+          {!explicitTarget && <DisclosureToggle
             open={foldOpen}
             controls={editorId}
             onToggle={() => { if (marker === null) setRegion("workflow", !disclosure.workflow); }}
             marker={marker}
           >
             {t("polyforge.settings.workflowEditToggle")}
-          </DisclosureToggle>
+          </DisclosureToggle>}
           <ul id={editorId} className="polyforge-workflow-list">
             {rows.map((row) => (
               <li key={row.id} className="polyforge-workflow-row">

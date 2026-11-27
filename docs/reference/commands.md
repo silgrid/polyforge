@@ -1868,7 +1868,9 @@ the phase is `<stage>/failed` with the reason — never a credential):
    toward `<data-dir>/release/current`; the two are independent and
    neither calls the other.
 5. **done** — the record lands `phase: done` with the mode, the default
-   Cell's name and server, `userReady`/`keyReady` (true only after the
+   Cell's name and server, `project` (`workstation` after a successful local
+   identity transaction, or the optional external project),
+   `userReady`/`keyReady` (true only after the
    facts are verified — `keyReady` says issued-and-written, never
    authenticated) and `imageManaged`.
 

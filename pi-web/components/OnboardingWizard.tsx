@@ -1,23 +1,10 @@
 "use client";
 
-// The first-open onboarding wizard (polyforge#167, 91-onboarding): four
-// steps — AIHub connection, account, workspace, first ticket — each
-// skippable, each reading the state the page it reuses already owns. The
-// wizard copies no configuration logic: the AIHub step shows #162's
-// first-boot connection result (and, in the team mode, adds a Cell through
-// the existing `POST /api/polyforge/cells`, the key on stdin), the account
-// step deep-links to Settings › 账号 and reads the login status through
-// #142's `GET /api/settings/account`, the workspace step goes through the
-// existing `/api/cwd/validate` selection, and the first ticket reuses
-// `PolyforgeFileTicketDialog` with `lane="develop"` (Q5).
-//
-// Server state and every write come from the parent (AppShell): a step
-// completes through `onComplete`, skips through `onSkip` (the step stays
-// 「未完成」), closing dismisses through `onClose`. The rendered view is
-// therefore a pure function of `view` + `cwd`, which is what the unit test
-// observes.
-import { useEffect, useId, useState } from "react";
+// First-open setup: configuration writes stay on the existing account,
+// workspace, Cell and ticket paths; AppShell owns persisted step state.
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { focusModalPanel } from "@/lib/stacked-dialog";
 import {
   ONBOARDING_STEPS,
   followingOnboardingStep,
@@ -29,14 +16,12 @@ import { PolyforgeFileTicketDialog } from "./PolyforgeFileTicketDialog";
 
 export interface OnboardingWizardProps {
   view: OnboardingView;
-  /** The workspace the page already has selected, when there is one. */
   cwd: string | null;
   onComplete: (step: OnboardingStep) => void;
-  /** A skip records nothing: the step stays 「未完成」. */
   onSkip: (step: OnboardingStep) => void;
   onClose: () => void;
-  /** Settings › 账号's deep link (the account step's read is the page's). */
   onOpenAccount: () => void;
+  onOpenModels: () => void;
   onWorkspaceChange: (cwd: string) => void;
 }
 
@@ -46,41 +31,34 @@ const STEP_LABEL_KEYS: Record<OnboardingStep, string> = {
   workspace: "onboarding.stepWorkspace",
   ticket: "onboarding.stepTicket",
 };
+const STEP_HINT_KEYS: Record<OnboardingStep, string> = {
+  aihub: "onboarding.aihubHint",
+  account: "onboarding.accountHint",
+  workspace: "onboarding.workspaceHint",
+  ticket: "onboarding.ticketHint",
+};
 
-interface ProjectsRead {
-  projects?: { project?: unknown }[];
+function StepFrame({ step, children, actions, onSkip, busy = false }: {
+  step: OnboardingStep; children: ReactNode; actions: ReactNode; onSkip: () => void; busy?: boolean;
+}) {
+  const { t } = useI18n();
+  return <section className="onboarding-step-panel" data-onboarding-step-panel={step}>
+    <div className="onboarding-content">
+      <header className="onboarding-step-heading">
+        <h2 tabIndex={-1}>{t(STEP_LABEL_KEYS[step])}</h2>
+        <p>{t(STEP_HINT_KEYS[step])}</p>
+      </header>
+      {children}
+    </div>
+    <footer className="onboarding-footer">
+      <button type="button" className="onboarding-skip" onClick={onSkip} disabled={busy}>{t("onboarding.skip")}</button>
+      <div className="onboarding-actions">{actions}</div>
+    </footer>
+  </section>;
 }
 
-interface AccountRead {
-  claude?: { loggedIn?: boolean | null } | null;
-}
-
-interface CellAddResponse {
-  ok?: boolean;
-  error?: string;
-}
-
-function connectionModeKey(connection: OnboardingConnection | null): string {
-  return connection?.mode === "external" ? "onboarding.aihubTeam" : "onboarding.aihubLocal";
-}
-
-function readyLabel(t: (key: string) => string, ready: boolean): string {
-  return ready ? t("onboarding.aihubReady") : t("onboarding.aihubNotReadyState");
-}
-
-/**
- * The AIHub step: #162's first-boot connection result, plus the team mode's
- * `pf cell add` form (the key is a password input, posted to the existing
- * route — never an argv).
- */
-function AihubStep({
-  connection,
-  onComplete,
-  onSkip,
-}: {
-  connection: OnboardingConnection | null;
-  onComplete: () => void;
-  onSkip: () => void;
+function AihubStep({ connection, onComplete, onSkip }: {
+  connection: OnboardingConnection | null; onComplete: () => void; onSkip: () => void;
 }) {
   const { t } = useI18n();
   const team = connection?.mode === "external";
@@ -89,313 +67,236 @@ function AihubStep({
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const ready = connection !== null && (connection.userReady || connection.keyReady);
-  const field = { background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 12, font: "inherit" } as const;
-
+  // The record is setup evidence, not a live health/authentication probe.
+  const ready = connection?.mode === "local" && connection.phase === "done"
+    && connection.userReady && connection.keyReady && Boolean(connection.defaultCell) && Boolean(connection.server);
+  const failed = connection?.phase?.endsWith("/failed") === true;
+  const status = !connection || !connection.mode ? "missing" : failed ? "failed" : team ? "external" : ready ? "ready" : "pending";
+  const titleKeys = {
+    missing: "onboarding.connectionMissing", failed: "onboarding.connectionFailed",
+    external: "onboarding.aihubTeam", ready: "onboarding.connectionReady", pending: "onboarding.connectionPending",
+  };
+  const hintKeys = {
+    missing: "onboarding.aihubMissing", failed: "onboarding.connectionFailedHint",
+    external: "onboarding.connectionExternalHint", ready: "onboarding.connectionReadyHint", pending: "onboarding.connectionPendingHint",
+  };
+  const formId = useId();
   const addCell = async () => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
       const response = await fetch("/api/polyforge/cells", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
+        method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ profile, server, apiKey }),
       });
-      const body = await response.json() as CellAddResponse;
-      if (!response.ok || body.ok !== true) {
-        setError(body.error ?? t("onboarding.aihubAddFailed"));
-        return;
-      }
+      const body = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || body.ok !== true) { setError(body.error ?? t("onboarding.aihubAddFailed")); return; }
       setApiKey("");
       onComplete();
-    } catch {
-      setError(t("onboarding.aihubAddFailed"));
-    } finally {
-      setBusy(false);
-    }
+    } catch { setError(t("onboarding.aihubAddFailed")); }
+    finally { setBusy(false); }
   };
-
-  return (
-    <div data-onboarding-step-panel="aihub" style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
-      <div data-onboarding-connection={connection?.mode ?? "absent"} style={{ color: "var(--text-muted)" }}>
-        {t(connectionModeKey(connection))}
+  return <StepFrame step="aihub" onSkip={onSkip} busy={busy} actions={team ? (
+    <button type="submit" form={formId} className="onboarding-primary" data-onboarding-cell-add
+      disabled={busy || !profile.trim() || !server.trim() || !apiKey} aria-busy={busy}>{t(busy ? "onboarding.working" : "onboarding.aihubAdd")}</button>
+  ) : (
+    <button type="button" className="onboarding-primary" onClick={onComplete} disabled={!ready} data-onboarding-primary="aihub">{t("onboarding.continue")} <span aria-hidden="true">→</span></button>
+  )}>
+    <div className="onboarding-connection" data-onboarding-connection={connection?.mode ?? "absent"} data-connection-status={status}>
+      <div className="onboarding-connection-heading">
+        <span className="onboarding-status-icon" aria-hidden="true">{ready ? "✓" : failed ? "!" : "◎"}</span>
+        <div role="status"><h3>{t(titleKeys[status])}</h3><p>{t(hintKeys[status])}</p></div>
       </div>
-      {connection === null ? (
-        <p role="status" style={{ margin: 0, color: "var(--text-muted)" }}>{t("onboarding.aihubMissing")}</p>
-      ) : (
-        <dl data-onboarding-connection-facts style={{ margin: 0, display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 12px" }}>
-          <dt>{t("onboarding.aihubPhase")}</dt><dd data-fact="phase">{connection.phase ?? "—"}</dd>
-          <dt>{t("onboarding.aihubDefaultCell")}</dt><dd data-fact="defaultCell">{connection.defaultCell ?? "—"}</dd>
-          {team && <><dt>{t("onboarding.aihubServer")}</dt><dd data-fact="server">{connection.server ?? "—"}</dd></>}
-          <dt>{t("onboarding.aihubUserReady")}</dt><dd data-fact="userReady">{readyLabel(t, connection.userReady)}</dd>
-          <dt>{t("onboarding.aihubKeyReady")}</dt><dd data-fact="keyReady">{readyLabel(t, connection.keyReady)}</dd>
-        </dl>
-      )}
-      {team && (
-        <fieldset data-onboarding-team-form style={{ border: "1px solid var(--border)", borderRadius: 6, display: "flex", flexDirection: "column", gap: 6, margin: 0, padding: 8 }}>
-          <legend style={{ fontSize: 11, color: "var(--text-dim)" }}>{t("onboarding.aihubAddCell")}</legend>
-          <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {t("onboarding.aihubProfile")}
-            <input value={profile} onChange={(event) => setProfile(event.target.value)} data-onboarding-cell-profile style={field} />
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {t("onboarding.aihubServer")}
-            <input value={server} onChange={(event) => setServer(event.target.value)} data-onboarding-cell-server style={field} />
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {t("onboarding.aihubApiKey")}
-            <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} data-onboarding-cell-key style={field} />
-          </label>
-          {error && <div role="alert" style={{ color: "#dc2626", overflowWrap: "anywhere" }}>{error}</div>}
-          <button type="button" onClick={() => void addCell()} data-onboarding-cell-add disabled={busy || profile === "" || server === "" || apiKey === ""}
-            style={{ alignSelf: "flex-start", background: "var(--accent)", color: "var(--bg-panel)", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 12 }}>
-            {t("onboarding.aihubAdd")}
-          </button>
-        </fieldset>
-      )}
-      {!team && (
-        <button type="button" onClick={onComplete} disabled={!ready} data-onboarding-primary="aihub"
-          style={{ alignSelf: "flex-start", background: "var(--accent)", color: "var(--bg-panel)", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 12, opacity: ready ? 1 : 0.5 }}>
-          {t("onboarding.continue")}
-        </button>
-      )}
-      <button type="button" onClick={onSkip} style={{ alignSelf: "flex-start", background: "none", color: "var(--text-muted)", border: "none", fontSize: 11, cursor: "pointer" }}>
-        {t("onboarding.skip")}
-      </button>
+      {connection && <dl className="onboarding-summary">
+        <div><dt>{t("onboarding.project")}</dt><dd data-fact="project">{connection.project ?? t("onboarding.notProvided")}</dd></div>
+        <div><dt>{t("onboarding.aihubServer")}</dt><dd data-fact="server">{connection.server ?? t(connection.mode === "local" ? "onboarding.aihubLocal" : "onboarding.notProvided")}</dd></div>
+      </dl>}
     </div>
-  );
+    {team && <form id={formId} onSubmit={(event) => { event.preventDefault(); void addCell(); }} className="onboarding-form" data-onboarding-team-form>
+      <h3>{t("onboarding.aihubAddCell")}</h3>
+      <label>{t("onboarding.aihubProfile")}<input value={profile} onChange={(event) => setProfile(event.target.value)} data-onboarding-cell-profile disabled={busy} /></label>
+      <label>{t("onboarding.aihubServer")}<input value={server} onChange={(event) => setServer(event.target.value)} data-onboarding-cell-server disabled={busy} /></label>
+      <label>{t("onboarding.aihubApiKey")}<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} data-onboarding-cell-key disabled={busy} /></label>
+      {error && <p role="alert" className="onboarding-error">{error}</p>}
+    </form>}
+    {connection && <details className="onboarding-details">
+      <summary>{t("onboarding.technicalDetails")}</summary>
+      <dl data-onboarding-connection-facts>
+        <dt>{t("onboarding.aihubPhase")}</dt><dd data-fact="phase">{connection.phase ?? "—"}</dd>
+        <dt>{t("onboarding.aihubDefaultCell")}</dt><dd data-fact="defaultCell">{connection.defaultCell ?? "—"}</dd>
+        <dt>{t("onboarding.aihubUserReady")}</dt><dd data-fact="userReady">{t(connection.userReady ? "onboarding.aihubReady" : "onboarding.aihubNotReadyState")}</dd>
+        <dt>{t("onboarding.aihubKeyReady")}</dt><dd data-fact="keyReady">{t(connection.keyReady ? "onboarding.aihubReady" : "onboarding.aihubNotReadyState")}</dd>
+      </dl>
+    </details>}
+  </StepFrame>;
 }
 
-/** The account step: the deep link and #142's read-back login status (Q4 —
- *  only a signed-in answer completes the step). */
-function AccountStep({ onComplete, onSkip, onOpenAccount }: { onComplete: () => void; onSkip: () => void; onOpenAccount: () => void }) {
+function AccountStep({ onComplete, onSkip, onOpenAccount, onOpenModels }: { onComplete: () => void; onSkip: () => void; onOpenAccount: () => void; onOpenModels: () => void }) {
   const { t } = useI18n();
   const [state, setState] = useState<"idle" | "loading" | "logged-in" | "logged-out" | "failed">("idle");
-
   const check = async () => {
     if (state === "loading") return;
     setState("loading");
     try {
-      const response = await fetch("/api/settings/account");
-      const body = await response.json() as AccountRead;
-      if (!response.ok) {
-        setState("failed");
-        return;
-      }
-      if (body.claude?.loggedIn === true) {
-        setState("logged-in");
-        onComplete();
-        return;
-      }
-      setState("logged-out");
-    } catch {
-      setState("failed");
-    }
+      // Both existing reads return status/model metadata only, never keys.
+      // getAvailable() behind models/enabled includes custom models.json sources.
+      const read = async (url: string) => {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("account-read");
+        return response.json();
+      };
+      const [account, models] = await Promise.allSettled([read("/api/settings/account"), read("/api/models/enabled")]);
+      const signedIn = account.status === "fulfilled" && account.value.claude?.loggedIn === true;
+      const piAvailable = models.status === "fulfilled" && !models.value.error && !models.value.modelError
+        && Array.isArray(models.value.providers) && models.value.providers.some((provider: { models?: { ref?: unknown }[] }) =>
+          Array.isArray(provider.models) && provider.models.some((model) => typeof model.ref === "string" && model.ref.length > 0));
+      if (signedIn || piAvailable) { setState("logged-in"); onComplete(); return; }
+      setState(account.status === "rejected" || models.status === "rejected" || (models.status === "fulfilled" && (models.value.error || models.value.modelError)) ? "failed" : "logged-out");
+    } catch { setState("failed"); }
   };
-
-  const status = state === "logged-in"
-    ? t("onboarding.accountLoggedIn")
-    : state === "logged-out"
-      ? t("onboarding.accountLoggedOut")
-      : state === "failed"
-        ? t("onboarding.accountCheckFailed")
-        : "";
-  return (
-    <div data-onboarding-step-panel="account" style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
-      <p style={{ margin: 0, color: "var(--text-muted)" }}>{t("onboarding.accountHint")}</p>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button type="button" onClick={onOpenAccount} data-onboarding-account-link
-          style={{ background: "none", color: "var(--accent)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 12px", fontSize: 12 }}>
-          {t("onboarding.accountOpen")}
-        </button>
-        <button type="button" onClick={() => void check()} disabled={state === "loading"} data-onboarding-account-check
-          style={{ background: "var(--accent)", color: "var(--bg-panel)", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 12 }}>
-          {t("onboarding.accountCheck")}
-        </button>
-      </div>
-      {status && <div role="status" data-onboarding-account-status={state}>{status}</div>}
-      <button type="button" onClick={onSkip} style={{ alignSelf: "flex-start", background: "none", color: "var(--text-muted)", border: "none", fontSize: 11, cursor: "pointer" }}>
-        {t("onboarding.skip")}
-      </button>
+  return <StepFrame step="account" onSkip={onSkip} busy={state === "loading"} actions={
+    <button type="button" className="onboarding-primary" onClick={() => void check()} disabled={state === "loading"} aria-busy={state === "loading"} data-onboarding-account-check>{t(state === "loading" ? "onboarding.working" : "onboarding.accountCheck")}</button>
+  }>
+    <div className="onboarding-card">
+      <h3>{t("onboarding.accountTitle")}</h3>
+      <p>{t("onboarding.accountReturn")}</p>
+      <button type="button" className="onboarding-secondary" onClick={onOpenAccount} data-onboarding-account-link>{t("onboarding.accountOpen")} <span aria-hidden="true">↗</span></button>
     </div>
-  );
+    <div className="onboarding-card">
+      <h3>{t("onboarding.customTitle")}</h3><p>{t("providers.customSubtitle")}</p>
+      <button type="button" className="onboarding-secondary" onClick={onOpenModels} data-onboarding-models-link>{t("onboarding.customOpen")} <span aria-hidden="true">↗</span></button>
+    </div>
+    {state !== "idle" && state !== "loading" && <p role="status" data-onboarding-account-status={state} className="onboarding-notice">
+      {t(state === "logged-in" ? "onboarding.accountLoggedIn" : state === "failed" ? "onboarding.accountCheckFailed" : "onboarding.accountLoggedOut")}
+    </p>}
+  </StepFrame>;
 }
 
-/** The workspace step: the page's current workspace, selectable through the
- *  existing `/api/cwd/validate` selection. */
 function WorkspaceStep({ cwd, onComplete, onSkip, onWorkspaceChange }: { cwd: string | null; onComplete: () => void; onSkip: () => void; onWorkspaceChange: (cwd: string) => void }) {
   const { t } = useI18n();
   const [path, setPath] = useState(cwd ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const field = { background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 12, font: "inherit" } as const;
-
+  const formId = useId();
   const use = async () => {
-    if (busy || path.trim() === "") return;
-    setBusy(true);
-    setError(null);
+    if (busy || !path.trim()) return;
+    setBusy(true); setError(null);
     try {
       const response = await fetch("/api/cwd/validate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cwd: path.trim() }),
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: path.trim() }),
       });
       const body = await response.json() as { cwd?: string; error?: string };
-      if (!response.ok || !body.cwd) {
-        setError(body.error ?? t("onboarding.workspaceFailed"));
-        return;
-      }
-      onWorkspaceChange(body.cwd);
-      onComplete();
-    } catch {
-      setError(t("onboarding.workspaceFailed"));
-    } finally {
-      setBusy(false);
-    }
+      if (!response.ok || !body.cwd) { setError(body.error ?? t("onboarding.workspaceFailed")); return; }
+      onWorkspaceChange(body.cwd); onComplete();
+    } catch { setError(t("onboarding.workspaceFailed")); }
+    finally { setBusy(false); }
   };
-
-  return (
-    <div data-onboarding-step-panel="workspace" style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
-      <p style={{ margin: 0, color: "var(--text-muted)" }}>{t("onboarding.workspaceCurrent")}: <code>{cwd ?? "—"}</code></p>
-      <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {t("onboarding.workspacePath")}
-        <input value={path} onChange={(event) => setPath(event.target.value)} data-onboarding-workspace-path style={field} />
-      </label>
-      {error && <div role="alert" style={{ color: "#dc2626", overflowWrap: "anywhere" }}>{error}</div>}
-      <button type="button" onClick={() => void use()} disabled={busy || path.trim() === ""} data-onboarding-workspace-use
-        style={{ alignSelf: "flex-start", background: "var(--accent)", color: "var(--bg-panel)", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 12 }}>
-        {t("onboarding.workspaceUse")}
-      </button>
-      <button type="button" onClick={onSkip} style={{ alignSelf: "flex-start", background: "none", color: "var(--text-muted)", border: "none", fontSize: 11, cursor: "pointer" }}>
-        {t("onboarding.skip")}
-      </button>
-    </div>
-  );
+  return <StepFrame step="workspace" onSkip={onSkip} busy={busy} actions={
+    <button type="submit" form={formId} className="onboarding-primary" disabled={busy || !path.trim()} aria-busy={busy} data-onboarding-workspace-use>{t(busy ? "onboarding.working" : "onboarding.workspaceUse")}</button>
+  }>
+    <div className="onboarding-card"><span className="onboarding-eyebrow">{t("onboarding.workspaceCurrent")}</span><code>{cwd ?? t("onboarding.notProvided")}</code></div>
+    <form id={formId} className="onboarding-form" onSubmit={(event) => { event.preventDefault(); void use(); }}>
+      <label>{t("onboarding.workspacePath")}<input value={path} onChange={(event) => setPath(event.target.value)} data-onboarding-workspace-path disabled={busy} /></label>
+      <p>{t("onboarding.workspaceHelp")}</p>
+      {error && <p role="alert" className="onboarding-error">{error}</p>}
+    </form>
+  </StepFrame>;
 }
 
-/** The first-ticket step: the existing dialog in its message-less,
- *  `develop`-lane form (Q5). */
-function TicketStep({ onComplete, onSkip, onClose }: { onComplete: () => void; onSkip: () => void; onClose: () => void }) {
+function TicketStep({ onComplete, onSkip, onBusyChange }: { onComplete: () => void; onSkip: () => void; onBusyChange: (busy: boolean) => void }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState<string[]>([]);
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/polyforge/projects", { signal: controller.signal })
-      .then(async (response) => {
-        const body = await response.json() as ProjectsRead;
-        const names = (body.projects ?? [])
-          .map((row) => row.project)
-          .filter((name): name is string => typeof name === "string" && name !== "");
-        setProjects(names);
-      })
-      .catch((error) => { if (!(error instanceof DOMException && error.name === "AbortError")) setProjects([]); });
+    fetch("/api/polyforge/projects", { signal: controller.signal }).then(async (response) => {
+      const body = await response.json() as { projects?: { project?: unknown }[] };
+      setProjects(response.ok ? (body.projects ?? []).map((row) => row.project).filter((name): name is string => typeof name === "string" && name !== "") : []);
+    }).catch(() => { if (!controller.signal.aborted) setProjects([]); });
     return () => controller.abort();
   }, []);
-  return (
-    <div data-onboarding-step-panel="ticket" style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
-      <p style={{ margin: 0, color: "var(--text-muted)" }}>{t("onboarding.ticketHint")}</p>
-      <button type="button" onClick={() => setOpen(true)} data-onboarding-ticket-open
-        style={{ alignSelf: "flex-start", background: "var(--accent)", color: "var(--bg-panel)", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 12 }}>
-        {t("onboarding.ticketOpen")}
-      </button>
-      <button type="button" onClick={onSkip} style={{ alignSelf: "flex-start", background: "none", color: "var(--text-muted)", border: "none", fontSize: 11, cursor: "pointer" }}>
-        {t("onboarding.skip")}
-      </button>
-      {open && (
-        <PolyforgeFileTicketDialog
-          projects={projects}
-          lane="develop"
-          onClose={() => setOpen(false)}
-          onCreated={() => { setOpen(false); onComplete(); onClose(); }}
-        />
-      )}
-    </div>
-  );
+  if (open) return <section className="onboarding-step-panel" data-onboarding-step-panel="ticket">
+    <PolyforgeFileTicketDialog projects={projects} lane="develop" embedded onBusyChange={onBusyChange} onClose={() => setOpen(false)} onCreated={onComplete} />
+  </section>;
+  return <StepFrame step="ticket" onSkip={onSkip} actions={
+    <button type="button" className="onboarding-primary" onClick={() => setOpen(true)} data-onboarding-ticket-open>{t("onboarding.ticketOpen")} <span aria-hidden="true">→</span></button>
+  }>
+    <div className="onboarding-card"><span className="onboarding-eyebrow">{t("onboarding.ticketEyebrow")}</span><h3>{t("onboarding.ticketTitle")}</h3><p>{t("onboarding.ticketHelp")}</p></div>
+  </StepFrame>;
 }
 
-export function OnboardingWizard({
-  view,
-  cwd,
-  onComplete,
-  onSkip,
-  onClose,
-  onOpenAccount,
-  onWorkspaceChange,
-}: OnboardingWizardProps) {
+export function OnboardingWizard({ view, cwd, onComplete, onSkip, onClose, onOpenAccount, onOpenModels, onWorkspaceChange }: OnboardingWizardProps) {
   const { t } = useI18n();
   const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   const [panel, setPanel] = useState<OnboardingStep>(view.nextStep);
-  const currentIndex = ONBOARDING_STEPS.indexOf(view.nextStep);
-
-  // The parent's view is the one source: a completed step moves the panel to
-  // the new first unfinished one, never backwards.
+  const [ticketBusy, setTicketBusy] = useState(false);
+  const ticketBusyRef = useRef(false);
+  const updateTicketBusy = (busy: boolean) => { ticketBusyRef.current = busy; setTicketBusy(busy); };
+  const currentIndex = ONBOARDING_STEPS.indexOf(panel);
+  useEffect(() => { setPanel(view.nextStep); }, [view.nextStep]);
+  useLayoutEffect(() => focusModalPanel(document, dialogRef.current), []);
   useEffect(() => {
-    setPanel(view.nextStep);
-  }, [view.nextStep]);
-
+    // Only the top visible dialog owns keys. Settings can open above this
+    // wizard and return focus to its account link without dismissing setup.
+    const handleKey = (event: KeyboardEvent) => {
+      const dialogs = [...document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]')].filter((element) => element.getClientRects().length > 0);
+      if (dialogs.at(-1) !== dialogRef.current) return;
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        if (event.isComposing || event.keyCode === 229) return;
+        event.preventDefault();
+        if (ticketBusyRef.current) return;
+        const cancelTicket = dialogRef.current?.querySelector<HTMLButtonElement>("[data-onboarding-ticket-cancel]");
+        if (cancelTicket) cancelTicket.click();
+        else closeRef.current();
+      }
+      if (event.key === "Tab") {
+        const controls = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]')].filter((element) => element.getClientRects().length > 0);
+        const first = controls[0]; const last = controls.at(-1);
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialogRef.current)) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    document.addEventListener("keydown", handleKey, true);
+    return () => document.removeEventListener("keydown", handleKey, true);
+  }, []);
+  useEffect(() => { dialogRef.current?.querySelector<HTMLElement>(".onboarding-content h2, [data-onboarding-ticket-form]")?.focus(); }, [panel]);
   const advance = (step: OnboardingStep) => {
     const next = followingOnboardingStep(step);
-    if (next === null) onClose();
-    else setPanel(next);
+    if (next === null) onClose(); else setPanel(next);
   };
-  const complete = (step: OnboardingStep) => {
-    onComplete(step);
-    advance(step);
-  };
-  const skip = (step: OnboardingStep) => {
-    onSkip(step);
-    advance(step);
-  };
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      data-onboarding-wizard
-      data-onboarding-current={view.nextStep}
-      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0, 0, 0, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
-    >
-      <div style={{ width: "min(560px, 100%)", maxHeight: "100%", overflowY: "auto", background: "var(--bg-panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-          <div>
-            <div id={titleId} style={{ fontSize: 15, fontWeight: 600 }}>{t("onboarding.title")}</div>
-            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{t("onboarding.description")}</div>
-          </div>
-          <div style={{ fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap" }}>
-            {t("onboarding.stepOf", { current: String(currentIndex + 1), total: String(ONBOARDING_STEPS.length) })}
-          </div>
-          <button type="button" onClick={onClose} aria-label={t("onboarding.close")} title={t("onboarding.close")} data-onboarding-close
-            style={{ background: "none", border: "none", color: "var(--text-dim)", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>×</button>
-        </div>
-
-        <ol data-onboarding-steps style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-          {ONBOARDING_STEPS.map((step, index) => {
+  const complete = (step: OnboardingStep) => { onComplete(step); advance(step); };
+  const skip = (step: OnboardingStep) => { onSkip(step); advance(step); };
+  return <div className="onboarding-backdrop">
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+      className="onboarding-dialog" data-onboarding-wizard data-onboarding-current={view.nextStep}>
+      <header className="onboarding-header">
+        <div><span className="onboarding-eyebrow">Pi Web</span><h1 id={titleId}>{t("onboarding.title")}</h1></div>
+        <button type="button" onClick={onClose} disabled={ticketBusy} aria-label={t("onboarding.close")} className="onboarding-close" data-onboarding-close>×</button>
+      </header>
+      <div className="onboarding-layout">
+        <nav className="onboarding-nav" aria-label={t("onboarding.progress")}>
+          <p className="onboarding-step-count">{t("onboarding.stepOf", { current: String(currentIndex + 1), total: String(ONBOARDING_STEPS.length) })}</p>
+          <ol data-onboarding-steps>{ONBOARDING_STEPS.map((step, index) => {
             const completeStep = view.steps[step] === "complete";
-            const active = panel === step;
-            return (
-              <li key={step} data-onboarding-step={step} data-onboarding-status={view.steps[step]}>
-                <button type="button" onClick={() => setPanel(step)} disabled={!completeStep && step !== view.nextStep}
-                  aria-current={active ? "step" : undefined}
-                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, background: active ? "var(--bg-hover)" : "none", border: "none", borderRadius: 4, padding: "4px 6px", color: "var(--text)", textAlign: "left", cursor: "pointer", fontSize: 12 }}>
-                  <span aria-hidden="true" style={{ width: 16, color: completeStep ? "var(--accent)" : "var(--text-dim)" }}>{completeStep ? "✓" : String(index + 1)}</span>
-                  <span style={{ flex: 1 }}>{t(STEP_LABEL_KEYS[step])}</span>
-                  <span data-onboarding-status-text={view.steps[step]} style={{ fontSize: 10, color: completeStep ? "var(--accent)" : "var(--text-dim)" }}>
-                    {completeStep ? t("onboarding.statusComplete") : t("onboarding.statusIncomplete")}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-
+            return <li key={step} data-onboarding-step={step} data-onboarding-status={view.steps[step]}>
+              <button type="button" onClick={() => setPanel(step)} disabled={ticketBusy || (!completeStep && step !== view.nextStep && step !== panel)} aria-current={panel === step ? "step" : undefined}>
+                <span className="onboarding-step-number" aria-hidden="true">{completeStep ? "✓" : index + 1}</span>
+                <span className="onboarding-step-label">{t(STEP_LABEL_KEYS[step])}<small data-onboarding-status-text={view.steps[step]}>{t(completeStep ? "onboarding.statusComplete" : "onboarding.statusIncomplete")}</small></span>
+              </button>
+            </li>;
+          })}</ol>
+          <p className="onboarding-resume-hint">{t("onboarding.description")}</p>
+        </nav>
         {panel === "aihub" && <AihubStep connection={view.connection} onComplete={() => complete("aihub")} onSkip={() => skip("aihub")} />}
-        {panel === "account" && <AccountStep onComplete={() => complete("account")} onSkip={() => skip("account")} onOpenAccount={onOpenAccount} />}
+        {panel === "account" && <AccountStep onComplete={() => complete("account")} onSkip={() => skip("account")} onOpenAccount={onOpenAccount} onOpenModels={onOpenModels} />}
         {panel === "workspace" && <WorkspaceStep cwd={cwd} onComplete={() => complete("workspace")} onSkip={() => skip("workspace")} onWorkspaceChange={onWorkspaceChange} />}
-        {panel === "ticket" && <TicketStep onComplete={() => complete("ticket")} onSkip={() => skip("ticket")} onClose={onClose} />}
+        {panel === "ticket" && <TicketStep onComplete={() => complete("ticket")} onSkip={() => skip("ticket")} onBusyChange={updateTicketBusy} />}
       </div>
     </div>
-  );
+  </div>;
 }

@@ -22,7 +22,7 @@ import { AgentsConfig } from "./AgentsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { PolyforgeConfig } from "./PolyforgeConfig";
 import { McpConfig } from "./McpConfig";
-import { AccountSettings } from "./AccountSettings";
+import { SettingsDraftProvider, SettingsDraftScope } from "./SettingsDrafts";
 
 interface Props {
   cwd: string | null;
@@ -30,6 +30,8 @@ interface Props {
   initialSection: SettingsSection;
   /** A phone opens on the list of sections instead of `initialSection` (the plain Settings button). */
   openAtHome?: boolean;
+  /** Open the existing pi Providers add flow from onboarding. */
+  initialAddProvider?: boolean;
   onClose: () => void;
   onSessionReloaded: () => void;
   quoteSelectionEnabled: boolean;
@@ -59,7 +61,6 @@ export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: {
   };
 
   if (section === "general") return <svg {...common}><path d="M20 7h-9M14 17H5" /><circle cx="7" cy="7" r="3" /><circle cx="17" cy="17" r="3" /></svg>;
-  if (section === "account") return <svg {...common}><circle cx="12" cy="8" r="4" /><path d="M4 20c1.5-3.5 4.5-5.5 8-5.5s6.5 2 8 5.5" /></svg>;
   if (section === "models") return <svg {...common}><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3" /></svg>;
   if (section === "permission") return <svg {...common}><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5l8-3Z" /><path d="m9 12 2 2 4-4" /></svg>;
   if (section === "skills") return <svg {...common}><path d="m12 2-10 5 10 5 10-5-10-5Z" /><path d="m2 12 10 5 10-5M2 17l10 5 10-5" /></svg>;
@@ -157,6 +158,7 @@ export function SettingsPanel({
   sessionId,
   initialSection,
   openAtHome = false,
+  initialAddProvider = false,
   onClose: closeSettings,
   onSessionReloaded,
   quoteSelectionEnabled,
@@ -168,12 +170,14 @@ export function SettingsPanel({
 }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<SettingsSection>(initialSection);
+  const [taskChainsRequest, setTaskChainsRequest] = useState(0);
+  const [addProviderRequest] = useState(initialAddProvider ? 1 : 0);
   const [mountedSections, setMountedSections] = useState<ReadonlySet<SettingsSection>>(
     () => new Set([section]),
   );
   // The rail is one fact in lib/settings-navigation.ts (SETTINGS_TABS): the
-  // nine sections, each with its translated label (polyforge#257 r2#9: the
-  // retired legacy-marked pages left no consumer of a `legacy` flag).
+  // eight sections, each with its translated label; account connections live
+  // within Models. The retired pages have no parallel navigation path.
   const sections: { id: SettingsSection; label: string; requiresProject: boolean }[] = SETTINGS_TABS
     .map((item) => ({
       id: item.id,
@@ -193,10 +197,12 @@ export function SettingsPanel({
     shownPhoneLevelRef.current = phone.level;
     if (isPhone && from !== phone.level) animatePhoneLevelChange(mainRef.current, headerRef.current, from, phone.level);
   }, [isPhone, phone.level]);
-  // Each tab with a draft (the model page since T3, the sub-agent form since
-  // polyforge#259 T4) reports it: closing Settings or moving to another tab asks
-  // before the draft is dropped.
+  // Visited sections keep their drafts. Closing Settings guards every registered
+  // editor; internal navigation is not a save or discard.
   const [unsavedSections, setUnsavedSections] = useState<Record<string, boolean>>({});
+  const reportDrafts = useCallback((dirty: boolean) => {
+    setUnsavedSections((current) => current.drafts === dirty ? current : { ...current, drafts: dirty });
+  }, []);
   const reportUnsaved = useCallback((id: SettingsSection, dirty: boolean) => {
     setUnsavedSections((current) => (current[id] === dirty ? current : { ...current, [id]: dirty }));
   }, []);
@@ -251,7 +257,7 @@ export function SettingsPanel({
   }, [cwd, sectionRequiresProject]);
 
   const activateSection = (nextSection: SettingsSection) => {
-    // Leaving the tab being edited with unsaved changes asks first (T4 AC1).
+    // Navigation preserves the mounted editors and their registered drafts.
     if (!mayLeaveSection(unsavedSections, section, nextSection, (question) => window.confirm(question), t("settings.unsavedLeave"))) return;
     setMountedSections((current) => new Set(current).add(nextSection));
     setSection(nextSection);
@@ -271,7 +277,7 @@ export function SettingsPanel({
       data-settings-section={id}
       className="settings-section-host"
     >
-      {content}
+      <SettingsDraftScope.Provider value={{ section: id, label: sections.find((item) => item.id === id)?.label ?? id }}>{content}</SettingsDraftScope.Provider>
     </div>
   ) : null;
 
@@ -320,11 +326,12 @@ export function SettingsPanel({
             }))}
             active={section}
             projectRequiredLabel={t("settings.projectRequired")}
-            onSelect={activateSection}
+            onSelect={isPhone && phone.level === "home" ? openSectionFromHome : activateSection}
           />
           <button type="button" onClick={onClose} title={t("i18n.close")} aria-label={t("i18n.close")} className="config-close-button settings-dialog-close">×</button>
         </div>
 
+        <SettingsDraftProvider onDirtyChange={reportDrafts} onNavigate={(id) => activateSection(id as SettingsSection)}>
         <main ref={mainRef} className="settings-dialog-main">
           {isPhone && phone.level === "home" && (
             <nav aria-label={t("settings.title")} className="settings-phone-home">
@@ -362,8 +369,7 @@ export function SettingsPanel({
               placeholder is 85a3's; the permission page is 85a4's, mounted
               above (its Claude part is where a stored old `claude` navigation
               value lands). */}
-          {sectionHost("account", <AccountSettings onOpenModels={() => activateSection("models")} />)}
-          {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} onOpenAccount={() => activateSection("account")} onUnsavedChange={(dirty) => reportUnsaved("models", dirty)} />)}
+          {sectionHost("models", <HarnessModelSettings cwd={cwd} addProviderRequest={addProviderRequest} onClose={onClose} onOpenPolyforge={() => { setTaskChainsRequest((value) => value + 1); activateSection("polyforge"); }} onUnsavedChange={(dirty) => reportUnsaved("models", dirty)} />)}
           {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}
@@ -374,9 +380,10 @@ export function SettingsPanel({
           {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} />)}
           {/* No project needed: the global mcp.json is listed alone, and a project adds its group. */}
           {sectionHost("mcp", <McpConfig embedded key={cwd ?? ""} cwd={cwd} trust={projectTrust} onTrustProject={onOpenTrustDialog} onProjectTrustChanged={onProjectTrustChanged} onClose={onClose} />)}
-          {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} active={section === "polyforge"} onOpenPlugins={() => activateSection("plugins")} />)}
+          {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} taskChainsRequest={taskChainsRequest} onBackToModels={() => activateSection("models")} active={section === "polyforge"} onOpenPlugins={() => activateSection("plugins")} />)}
           </ConfigDetailNavigationContext.Provider>
         </main>
+        </SettingsDraftProvider>
       </div>
     </div>
   );

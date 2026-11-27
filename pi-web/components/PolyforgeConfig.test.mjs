@@ -114,7 +114,8 @@ test("the panel hosts the section without a project and re-detects on every open
   const { settingsSectionRequiresProject, SETTINGS_TABS } = await import("../lib/settings-navigation.ts");
   assert.equal(SETTINGS_TABS.find((entry) => entry.id === "polyforge")?.labelKey, "polyforge.title");
   assert.equal(settingsSectionRequiresProject("polyforge"), false);
-  assert.match(panelSource, /<PolyforgeConfig cwd=\{cwd\} active=\{section === "polyforge"\} onOpenPlugins=\{\(\) => activateSection\("plugins"\)\} \/>/);
+  assert.match(panelSource, /<PolyforgeConfig cwd=\{cwd\}[^\n]*active=\{section === "polyforge"\} onOpenPlugins=\{\(\) => activateSection\("plugins"\)\} \/>/);
+  assert.match(panelSource, /taskChainsRequest=\{taskChainsRequest\}/, "advanced task navigation carries an explicit picker request");
   // Not cwd-gated: the section host renders without a selected project.
   const hostLine = panelSource.slice(panelSource.indexOf('sectionHost("polyforge"'));
   assert.doesNotMatch(hostLine.split("\n")[0], /cwd &&/, "the polyforge section host is not project-gated");
@@ -537,7 +538,7 @@ test("the confirmed page order and the default-collapsed read-outs", async () =>
       "polyforge-config-card polyforge-config-install",
     ]],
     [defaultPane, [
-      "<div className=\"polyforge-config-panel\">",
+      "<div className=\"polyforge-config-panel\" hidden={workflowOnly}>",
       "polyforge-config-card polyforge-config-cli",
       "{cards && (() => {",
       "void reload()",
@@ -674,9 +675,10 @@ test("pf submit --models is a note only and writes go through the one config rou
     assert.doesNotMatch(label[1], /submit|--models/, "no control edits pf submit --models");
   }
   assert.match(workflowCard, /fetch\("\/api\/polyforge\/config", \{/);
-  assert.match(workflowCard, /expect_state: \{ file_sha256: owner\.declared\?\.yaml\.sha256 \?\? null, values: \{\} \}/, "the owning workspace's yaml CAS");
-  assert.match(workflowCard, /cwd: owner\.workspace,/, "the owning workspace's --cwd, never the settings cwd");
-  assert.match(workflowCard, /cwd: owner\.workspace,\s*\n\s*profile,/, "written in the pane's Cell");
+  assert.match(workflowCard, /expect_state: \{ file_sha256: existingDraft \? existingDraft\.hash : target\.hash, values: \{\} \}/, "the owning workspace's captured draft hash takes precedence over a later read");
+  assert.match(workflowCard, /workspace: owner\.workspace, project, hash: owner\.declared\?\.yaml\.sha256 \?\? null/, "a clean write still uses its owning workspace's yaml CAS");
+  assert.match(workflowCard, /cwd: target\.workspace,/, "the captured owning workspace's --cwd, never the settings cwd");
+  assert.match(workflowCard, /cwd: target\.workspace,\s*\n\s*profile,/, "written in the pane's Cell");
   assert.match(workflowCard, /stepWriteKey\(project \?\? "", row\.id\)/);
   assert.doesNotMatch(workflowCard, /attrDrafts|row\.attrs|workflowAttrBatch/, "no step-attr editor");
   assert.match(workflowCard, /void write\(row\.id, key, "unset"\)/, "clear = unset (falls back one level)");
@@ -697,7 +699,7 @@ test("below the capability floor the read facts stay and every write control is 
 });
 
 test("the card folds its write controls under the stored workflow region, locked open by a draft or error", () => {
-  assert.match(workflowCard, /const foldOpen = marker !== null \|\| disclosure\.workflow;/);
+  assert.match(workflowCard, /const foldOpen = explicitTarget \|\| marker !== null \|\| disclosure\.workflow;/);
   assert.match(workflowCard, /onToggle=\{\(\) => \{ if \(marker === null\) setRegion\("workflow", !disclosure\.workflow\); \}\}/);
   assert.match(workflowCard, /<div className="polyforge-workflow-editor" hidden=\{!foldOpen\}>/);
   assert.match(workflowCard, /usePolyforgeDisclosure\(\)/, "the #212 store, no third collapse idiom");
@@ -848,7 +850,7 @@ test("a saved connection key shows an inline notice with a one-click rollback th
 test("the workflow card unions every mapped workspace's projects, labels their yaml, degrades a failed workspace to one line", async () => {
   assert.match(workflowCard, /const union = workflowUnion\(read\);/);
   assert.match(workflowCard, /const projects = union\.projects\.map\(\(entry\) => entry\.project\);/);
-  assert.match(workflowCard, /const owner = projectOwner\(union, project\);/);
+  assert.match(workflowCard, /const owner = explicitTarget \? explicitOwner : projectOwner\(union, project\);/);
   assert.match(workflowCard, /workflowUnion\(body\)\.sources\.some\(\(entry\) => entry\.workflows\?\.daemon_reachable === true\)/, "one readable workspace is a good read");
   // One line per failed workspace, carrying its reason; its projects never enter the union.
   assert.match(workflowCard, /\{union\.failures\.map\(\(entry\) => \(\s*\n\s*<p key=\{entry\.workspace\} className="config-scope-switch-reason is-error">\s*\n\s*\{t\("polyforge\.settings\.workflowWorkspaceFailed"\)\}: \{entry\.yamlPath\} — \{entry\.reason\}/);
@@ -970,7 +972,7 @@ test(" (review s17#2): each key has one layered surface — the cli.toml card dr
 
 test("the page is master-detail — a Host entry, every Cell with its state, Add Cell; the detail shows the selected entry only", () => {
   // The shared split view: list, then detail, then the footer below both.
-  assert.match(source, /<ConfigSplitView>\s*\n\s*<ConfigSidebar>/);
+  assert.match(source, /<ConfigSplitView>\s*\n\s*\{!chainMode && <ConfigSidebar>/);
   const list = source.slice(source.indexOf("<ConfigSidebar>"), source.indexOf("</ConfigSidebar>"));
   const host = list.indexOf("data-pf-host-entry");
   const cells = list.indexOf("data-pf-cell-entry={profile}");
@@ -1072,6 +1074,7 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
       "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
       "@/hooks/useI18n": fixture("polyforge-tasks-stubs.mjs"),
       "./SettingsUi": fixture("polyforge-tasks-stubs.mjs"),
+      "./SettingsDrafts": fixture("polyforge-tasks-stubs.mjs"),
       "@/lib/polyforge-config-schema": modulePath("lib/polyforge-config-schema.ts"),
       "@/lib/step-tiers": modulePath("lib/step-tiers.ts"),
       "@/lib/polyforge-workflows-pure": modulePath("lib/polyforge-workflows-pure.ts"),

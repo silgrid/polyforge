@@ -46,7 +46,7 @@ const yamlA = join(wsA, ".polyforge.yaml");
 const yamlB = join(wsB, ".polyforge.yaml");
 const API_SENTINEL = "E2E-W22-API-KEY-SENTINEL";
 const sha = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
-const writeCli = (max) => writeFileSync(cliToml, `server = "http://127.0.0.1:1"\napi_key = "e2e-current-key"\nuser_id = "usr_root"\n\n[daemon]\nmax_concurrent_jobs = ${max}\n\n[workspace."${wsA}"]\nprojects = ["e2e"]\n\n[workspace."${wsB}"]\nprojects = ["e2e"]\n`);
+const writeCli = (max) => writeFileSync(cliToml, `server = "http://127.0.0.1:1"\napi_key = "e2e-current-key"\nuser_id = "usr_root"\n\n[daemon]\nmax_concurrent_jobs = ${max}\n\n[workspace."${wsA}"]\nprojects = ["e2e"]\n\n[workspace."${wsB}"]\nprojects = ["e2e-b"]\n`);
 writeCli(6);
 writeFileSync(yamlA, `steps:\n  e2e:\n    fix: { models: ["pi:zeta", "pi:alpha"] }\n`);
 writeFileSync(yamlB, `steps:\n  e2e:\n    fix: { models: ["pi:alpha"] }\n`);
@@ -195,7 +195,7 @@ const startDevServer = async () => {
   base = `http://127.0.0.1:${port}`;
   server = spawn(process.execPath, [join(root, "node_modules/next/dist/bin/next"), "dev", "-H", "127.0.0.1", "-p", String(port)], {
     cwd: root, stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PATH: `${stubDir}${delimiter}${process.env.PATH}`, HOME: home, PI_CODING_AGENT_DIR: agentDir,
+    env: { ...process.env, PF_BIN: join(stubDir, "pf"), PATH: `${stubDir}${delimiter}${process.env.PATH}`, HOME: home, PI_CODING_AGENT_DIR: agentDir,
       PI_WEB_PASSWORD: "", NEXT_TELEMETRY_DISABLED: "1" },
   });
   server.stdout.pipe(serverLog); server.stderr.pipe(serverLog);

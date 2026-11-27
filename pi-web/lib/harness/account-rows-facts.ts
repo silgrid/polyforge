@@ -33,6 +33,9 @@ export interface HarnessCapabilityFacts {
 
 /** One pi step-status check of a model-credential source dir. */
 export interface PiStepCheck {
+  provider?: string | null;
+  checkedAt?: string;
+  basis?: "pi-auth-check-no-refresh" | "provider-selection";
   sourceDir: string;
   status: "ready" | "not_ready" | "unknown";
   authType: string | null;
@@ -53,7 +56,12 @@ export interface AccountHarnessRow {
   keychainHint: boolean;
   credentialKinds: { oauthToken: boolean; apiKey: boolean; gateway: boolean } | null;
   credentialsFile: "present" | "absent" | null;
-  usable: boolean;
+  provider: string | null;
+  checkedAt: string | null;
+  checkBasis: "pi-auth-check-no-refresh" | "provider-selection" | "not-checked";
+  observation: "observed" | "not-read" | "read-failed";
+  modelUsable: boolean | null;
+  usable: boolean | null;
   reason: string | null;
 }
 

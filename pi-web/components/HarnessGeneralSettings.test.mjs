@@ -72,10 +72,10 @@ test("the moved GeneralSettings keeps the former General page's sections whole",
   assert.match(source, /claude-permissions/, "the hook-activity switch does not read the Pi Web preference route");
 });
 
-test("the tab rail the panes live under is the nine-plus-two model", () => {
+test("the tab rail has eight categories with account connections inside models", () => {
   // One fact, one place: the shell's section ids are SETTINGS_TABS' ids.
   assert.deepEqual(
     [...new Set(SETTINGS_TABS.map((tab) => tab.id))],
-    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge"],
+    ["general", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge"],
   );
 });

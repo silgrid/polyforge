@@ -1,5 +1,24 @@
 # Harness adapters（统一 harness 配置层 · #85 85a1）
 
+## Account observations and scoped reads (#285 cleanup)
+
+`GET /api/settings/account?scope=interactive` reads only Claude's interactive status and user-config facts; it does not run doctor or pi checks. `scope=cells` reads the Cell/credential-source observations without reading interactive login. The explicit aggregate `scope=full` (also the default) remains for consumers that need both, such as destructive-reference checks. Invalid scopes are refused. These are reads only, not model calls or credential refreshes.
+
+The interactive DTO's `envCredentials` contains boolean or null values for the existing four key names. `envCredentialsState` is `observed`, `absent` (missing file, confirmed unset user fields), or `read-failed` (unknown, including malformed JSON/schema/read failures). `externalEnvCredentialKeys` contains names only from the server process environment; it never returns values or claims which source wins.
+
+Cell harness rows carry `provider`, `checkedAt`, `checkBasis` (`pi-auth-check-no-refresh`, `provider-selection`, `not-checked`), and `observation` (`observed`, `not-read`, `read-failed`). The pi result describes that named provider only; a mismatched provider response becomes unknown. Credential presence/file existence alone never means Claude authentication or model-call success. `modelUsable` is currently null; `usable` is nullable and does not become true from current observations. Explicit execution disable or a failed pi provider check may be false; unobserved outcomes stay null. This projection does not grant runtime authorization.
+
+Credential writes retain their additive native contract. A current-dialog operation sends exactly `targets:["interactive"]` and does not call doctor. Task operations name explicit Cell targets; empty targets remain refused and each target reports its own outcome. Gateway addresses must be absolute HTTP(S) URLs with a host; the route validates both directly entered and copied interactive addresses before writing any target, and the native adapter applies the same guard. There is no mutually exclusive switch/delete-auth contract. The field mapping belongs here, not in ordinary UI:
+
+| Kind | Native user env fields updated |
+| --- | --- |
+| `api-key` | `ANTHROPIC_API_KEY` |
+| `gateway` | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` |
+| `oauth-token` | `CLAUDE_CODE_OAUTH_TOKEN` |
+
+Native configuration layers are documented below, and `buildClaudeEnv` retains external authentication variables. Their existence is observable, but this code does not establish a complete precedence contract among OAuth, env credentials, managed/project settings, Console profiles and keychains. The UI therefore says configure/change API configuration, warns about coexistence, and does not clear other keys or claim an effective-method switch. Setup-token generation remains an operator-environment terminal action; saving it to a task environment is a separate explicit action.
+
+
 ## 模型页写入补充（85a3-2）
 
 pi 的模型适配器新增 `modelsConfig` 与 `enabledModels` 两种互斥写请求：provider 定义和上下文编辑经原有 models.json schema 与文件写保护保存，聊天开关先由既有最小编辑引擎计算 patterns，再经适配器的共享版本闸门及 settings.json 锁写入。旧 /api/models-config 与 /api/models/enabled 路由均转交适配器，不形成绕过写闸门的入口。#178（85a3-3）为 claude 增加 `customModels` 写：官方 settings reference 的 `modelPicker.options`（v2.1.242 起键级下界；隔离 2.1.329 的 initialize 录制证明原生识别），整表替换模型名——留存条目保留自身 metadata 与位置、新名以 `{model}` 追加、坏形状经 `claudeModelPickerShapeRefusal` 拒写；Claude 按模型推理强度（modelSettings）仍只读——其原生行为无法零成本录制（initialize 不反映、非法值无校验回显），按裁定「核实不了就只读显示、不写」。

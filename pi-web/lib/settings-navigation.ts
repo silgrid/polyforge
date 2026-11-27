@@ -3,7 +3,6 @@
  */
 export const SETTINGS_TABS = [
   { id: "general", labelKey: "settings.general" },
-  { id: "account", labelKey: "settings.tabAccount" },
   { id: "models", labelKey: "common.models" },
   { id: "permission", labelKey: "settings.tabPermission" },
   { id: "skills", labelKey: "common.skills" },
@@ -15,7 +14,6 @@ export const SETTINGS_TABS = [
 
 export const SETTINGS_SECTION_VALUES = [
   "general",
-  "account",
   "models",
   "permission",
   "skills",
@@ -187,7 +185,7 @@ export function mayLeaveSection(
   confirm: (question: string) => boolean,
   question: string,
 ): boolean {
-  if (next === current) return true;
+  if (next !== null) return true;
   const dirty = Object.values(unsaved).some(Boolean);
   if (!dirty) return true;
   return confirm(question);

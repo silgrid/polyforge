@@ -15,6 +15,10 @@ export function useI18n() {
   return i18n;
 }
 
+export function SettingsDraftRegistration() { return null; }
+// The shim renders standalone WorkflowCard; managed footer ownership is covered in the browser.
+export function useSettingsDraftManaged() { return false; }
+
 export function MarkdownBody() {
   return null;
 }

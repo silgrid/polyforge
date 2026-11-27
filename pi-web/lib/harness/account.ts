@@ -187,11 +187,14 @@ export async function piStepStatus(
     return { status: "unknown", provider, authType: null, reason: "pi auth check answered no parsable status" };
   }
   const answer = parsed as Record<string, unknown>;
+  if (answer.provider !== undefined && answer.provider !== provider) {
+    return { status: "unknown", provider, authType: null, reason: "pi auth check provider mismatch" };
+  }
   if (answer.status === "ready") {
-    return { status: "ready", provider, authType: typeof answer.authType === "string" ? answer.authType : null, reason: null };
+    return { status: "ready", provider, authType: answer.authType === "oauth" || answer.authType === "api_key" ? answer.authType : null, reason: null };
   }
   if (answer.status === "not_ready") {
-    return { status: "not_ready", provider, authType: null, reason: typeof answer.reason === "string" ? answer.reason : "not ready" };
+    return { status: "not_ready", provider, authType: null, reason: typeof answer.reason === "string" && /^[a-z][a-z_]{0,79}$/.test(answer.reason) ? answer.reason : "not_ready" };
   }
   return { status: "unknown", provider, authType: null, reason: "pi auth check answered no parsable status" };
 }

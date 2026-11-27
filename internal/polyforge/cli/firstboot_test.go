@@ -211,7 +211,7 @@ func TestFirstBoot(t *testing.T) {
 		}
 		// the record: done, every fact named, no credential
 		rec := fbRecord(t, o)
-		if rec.Phase != "done" || rec.Mode != "local" || rec.DefaultCell != "default" ||
+		if rec.Phase != "done" || rec.Mode != "local" || rec.DefaultCell != "default" || rec.Project != "workstation" ||
 			rec.Server != firstBootLocalServer || !rec.UserReady || !rec.KeyReady || !rec.ImageManaged {
 			t.Fatalf("the record = %+v", rec)
 		}

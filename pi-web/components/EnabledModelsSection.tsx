@@ -54,7 +54,7 @@ export interface EnabledModelsController {
   resync: (
     renames: { from: string; to: string }[],
     modelRenames: { from: string; to: string }[],
-  ) => void;
+  ) => Promise<boolean>;
 }
 
 type MutationBody =
@@ -79,9 +79,7 @@ export function useEnabledModels(cwd?: string | null): EnabledModelsController {
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
-  const pendingRef = useRef<string | null>(null);
-  const queuedRef = useRef<{ key: string; body: MutationBody } | null>(null);
-  const mutateRef = useRef<((key: string, body: MutationBody) => void) | null>(null);
+  const mutationQueue = useRef<Promise<boolean>>(Promise.resolve(true));
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -106,43 +104,31 @@ export function useEnabledModels(cwd?: string | null): EnabledModelsController {
     return () => controller.abort();
   }, [cwd, reloadKey]);
 
-  const mutate = useCallback((key: string, body: MutationBody) => {
-    // A save can land while a switch is still in flight; queue it rather than
-    // dropping it, or the panel keeps describing the previous models.json.
-    if (pendingRef.current) {
-      queuedRef.current = { key, body };
-      return;
-    }
-    pendingRef.current = key;
-    setPending(key);
-    setFailure(null);
-    void (async () => {
+  const mutate = useCallback((key: string, body: MutationBody): Promise<boolean> => {
+    const task = mutationQueue.current.then(async () => {
+      setPending(key);
+      setFailure(null);
       try {
         const res = await fetch("/api/models/enabled", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          method: "PUT", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...body, ...(cwd ? { cwd } : {}) }),
         });
         const data = await res.json() as EnabledModelsView & { error?: string; reason?: string };
         if (!res.ok || data.error) {
           const messageKey = data.reason ? FAILURE_KEYS[data.reason] : undefined;
           setFailure(messageKey ? { messageKey } : { message: data.error ?? `HTTP ${res.status}` });
-          return;
+          return false;
         }
         setView(data);
+        return true;
       } catch (error) {
         setFailure({ message: error instanceof Error ? error.message : String(error) });
-      } finally {
-        pendingRef.current = null;
-        setPending(null);
-        const queued = queuedRef.current;
-        queuedRef.current = null;
-        if (queued) mutateRef.current?.(queued.key, queued.body);
-      }
-    })();
+        return false;
+      } finally { setPending(null); }
+    });
+    mutationQueue.current = task;
+    return task;
   }, [cwd]);
-
-  mutateRef.current = mutate;
 
   const setModels = useCallback((key: string, refs: string[], enabled: boolean) => {
     mutate(key, { op: "models", refs, enabled });
@@ -165,7 +151,7 @@ export function useEnabledModels(cwd?: string | null): EnabledModelsController {
     const fullyEnabled = (view?.providers ?? [])
       .filter((provider) => provider.models.length > 0 && provider.enabledCount === provider.models.length)
       .map((provider) => provider.id);
-    mutate("resync", { op: "resync", renames, modelRenames, fullyEnabled });
+    return mutate("resync", { op: "resync", renames, modelRenames, fullyEnabled });
   }, [mutate, view]);
 
   return {
@@ -416,7 +402,7 @@ export function EnabledModelsSection({
     return (
       <div className="enabled-models-section" data-enabled-context-only="">
         <div className="enabled-models-header">
-          <span className="enabled-models-title">{t("models.contextWindow")}</span>
+          <span className="enabled-models-title">{t("flow.connectionModels")}</span>
         </div>
         <div id={contextNoteId} className="enabled-models-note">{t("models.contextOverrideHelp")}</div>
         <div className="enabled-models-list">
@@ -430,14 +416,14 @@ export function EnabledModelsSection({
                   <span className="enabled-models-row-name">{model.name}</span>
                   <code className="enabled-models-row-id">{model.id}</code>
                 </span>
-                <ModelContextWindow
+                <details><summary>{t("models.contextWindow")}</summary><ModelContextWindow
                   modelName={model.name}
                   effective={model.contextWindow}
                   value={contextValue}
                   disabled={contextSettings.disabled}
                   describedBy={contextNoteId}
                   onChange={(value) => contextSettings.onChange(model.id, value)}
-                />
+                /></details>
               </div>
             );
           })}

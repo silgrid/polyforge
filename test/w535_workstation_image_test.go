@@ -163,7 +163,7 @@ func TestWorkstationImage(t *testing.T) {
 		// proof need (git for the daemon's clones, curl for the smoke's
 		// probes, ca-certificates for pulls, python3 for the in-image
 		// unittest proof of AC2).
-		for _, pkg := range []string{"podman", "crun", "catatonit", "git", "curl", "ca-certificates", "python3"} {
+		for _, pkg := range []string{"podman", "crun", "catatonit", "git", "gh", "curl", "ca-certificates", "python3"} {
 			if !regexp.MustCompile(`(^|[^a-z0-9+-])` + regexp.QuoteMeta(pkg) + `([^a-z0-9+-]|$)`).MatchString(norm) {
 				t.Fatalf("polyforge#161: the Containerfile must install %s — it is part of the measured minimal base", pkg)
 			}

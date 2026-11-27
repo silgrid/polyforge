@@ -9,7 +9,8 @@
 // sandbox details and the rules editor; pi's trust section). One read per
 // activation, never a poll; a save re-reads what it changed. A managed
 // layer's value displays read-only (Q3 B).
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSettingsDraft } from "./SettingsDrafts";
 import { useI18n } from "@/hooks/useI18n";
 import { ClaudePermissionSettings } from "./ClaudePermissionSettings";
 import { ClaudeCodeReport, type ClaudeReport } from "./ClaudeCodeReport";
@@ -91,6 +92,8 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
+  const rulesDirtyRef = useRef(false);
+  const [rulesBase, setRulesBase] = useState<{ allow: string; ask: string; deny: string } | null>(null);
   const [rulesDraft, setRulesDraft] = useState<{ allow: string; ask: string; deny: string } | null>(null);
   // The retired Claude page's read-only report (owner ruling: taken over):
   // one fetch of GET /api/claude on the page's mount, shown on the approval pane.
@@ -126,11 +129,12 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
       if (!Array.isArray(compareBody.results) || !piBody.data || !claudeBody.data) throw new Error("unexpected answer");
       setCompare(compareBody.results);
       setReads({ pi: piBody.data, claude: claudeBody.data });
-      setRulesDraft({
+      const nextRules = {
         allow: rulesToText(claudeBody.data.rules?.allow ?? []),
         ask: rulesToText(claudeBody.data.rules?.ask ?? []),
         deny: rulesToText(claudeBody.data.rules?.deny ?? []),
-      });
+      };
+      if (!rulesDirtyRef.current) { setRulesDraft(nextRules); setRulesBase(nextRules); }
       setLoadError(null);
     } catch (cause) {
       setLoadError(cause instanceof Error ? cause.message : String(cause));
@@ -154,7 +158,17 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
     }
   }, [readAll, t]);
 
-  const saveClaude = useCallback((body: Record<string, unknown>) => run(async () => { await putPermission("claude", body, cwd); }), [cwd, run]);
+  const saveClaude = useCallback((body: Record<string, unknown>) => run(async () => {
+    await putPermission("claude", body, cwd);
+    if (body.rules) rulesDirtyRef.current = false;
+  }), [cwd, run]);
+  const rulesDirty = rulesDraft && rulesBase ? (["allow", "ask", "deny"] as const).filter((key) => rulesDraft[key] !== rulesBase[key]).length : 0;
+  useEffect(() => { rulesDirtyRef.current = rulesDirty > 0; }, [rulesDirty]);
+  useSettingsDraft({ label: t("settings.permissionPaneRules"), reveal: () => setPane("rules"), count: rulesDirty, busy: saving,
+    discard: () => setRulesDraft(rulesBase), save: () => {
+      if (!rulesDraft || sourceIsReadOnly(reads.claude?.sources.rules ?? null)) return;
+      void saveClaude({ rules: { allow: rulesFromText(rulesDraft.allow), ask: rulesFromText(rulesDraft.ask), deny: rulesFromText(rulesDraft.deny) } });
+    } });
 
   const claudePayload = reads.claude;
   const piPayload = reads.pi;
@@ -186,6 +200,7 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
           </ConfigSidebarList>
         </ConfigSidebar>
         <ConfigDetail>
+          <header className="settings-content-heading"><div><h2>{t(PERMISSION_PANES.find((item) => item.id === pane)!.labelKey)}</h2><p>{t("settings.permissionIntro")}</p></div></header>
           <div data-permission-pane={pane} className="settings-general-pane-host">
             {loadError && <p role="alert" className="settings-general-error">{t("settings.permissionLoadError", { error: loadError })}</p>}
             {saveError && <p role="alert" className="settings-general-error">{t("settings.permissionSaveError", { error: saveError })}</p>}
@@ -227,8 +242,8 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
                     </p>
                   )}
                 </section>
-                <section className="settings-general-section" data-permission-zone="claude">
-                  <h3 className="settings-general-heading">Claude</h3>
+                <details className="settings-general-section settings-advanced-section" data-permission-zone="claude">
+                  <summary>{t("settings.claudeAdvanced")}</summary>
                   <p className="settings-general-description">{t("settings.permissionClaudeExtraModesDescription")}</p>
                   <div role="radiogroup" aria-label={t("settings.permissionClaudeExtraModes")} className="settings-agent-language-options">
                     {CLAUDE_APPROVAL_MODES.map((mode) => {
@@ -271,13 +286,13 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
                     />
                   </div>
                   <p className="settings-general-description">{t("settings.permissionDenyInsteadDescription")}</p>
-                </section>
+                </details>
                 <section className="settings-general-section" data-permission-zone="pi-web-channel">
                   <h3 className="settings-general-heading">{t("settings.permissionPiWebChannel")}</h3>
                   <p className="settings-general-description">{t("settings.permissionPiWebChannelDescription")}</p>
                   <ClaudePermissionSettings sessionId={sessionId} />
                 </section>
-                <ClaudeCodeReport report={claudeReport} error={claudeReportError} />
+                <details className="settings-general-section settings-advanced-section"><summary>{t("settings.claudeRuntimeReport")}</summary><ClaudeCodeReport report={claudeReport} error={claudeReportError} /></details>
               </>
             )}
 

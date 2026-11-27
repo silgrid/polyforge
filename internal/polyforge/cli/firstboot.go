@@ -250,6 +250,10 @@ func runFirstBoot(o firstBootOpts, stdout io.Writer) error {
 					return err
 				}
 				apiKey, userID = res.PlainKey, res.UserID
+				// Publish only after the identity transaction established the
+				// project, including on a resumed boot. The config mapping and
+				// onboarding connection must name the same local project.
+				st.Project = aihub.InitProjectName
 				identityDone = true
 				return nil
 			},

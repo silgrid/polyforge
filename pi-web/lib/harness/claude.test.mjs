@@ -182,6 +182,17 @@ fs.writeFileSync(path.join(writeDir, "settings.json"), JSON.stringify({
   permissions: { defaultMode: "default" },
 }));
 
+test("write auth: invalid gateway URLs cannot bypass the account route through the native adapter", async () => {
+  const file = path.join(writeDir, "settings.json");
+  const before = fs.readFileSync(file, "utf8");
+  for (const baseUrl of ["abc", "https://", "file:///tmp/key", "javascript:alert(1)"]) {
+    const result = await adapter.write("auth", { kind: "gateway", value: "CL-SENTINEL-INVALID-URL", baseUrl }, fixtureCtx({ claudeConfigDir: writeDir }));
+    assert.equal(result.status, "refused");
+    assert.equal(fs.readFileSync(file, "utf8"), before);
+    assert.ok(!JSON.stringify(result).includes("CL-SENTINEL"));
+  }
+});
+
 test("write auth: the credential lands in the env block, the file's other keys kept, the value never echoed", async () => {
   const result = await adapter.write("auth", { kind: "gateway", value: "CL-SENTINEL-WRITE-TOKEN", baseUrl: "https://gw.example" }, fixtureCtx({ claudeConfigDir: writeDir }));
   assert.equal(result.status, "written");

@@ -20,7 +20,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { AccountClaudeCard, AccountHarnessPane, AccountReadStatus, ClaudeCredentialForm, CredentialWriteResults } = await jiti.import("./AccountSettings.tsx");
+const { AccountSettings, hasClaudeCredential, AccountClaudeCard, AccountHarnessPane, AccountReadStatus, ClaudeCredentialForm, CredentialWriteResults } = await jiti.import("./AccountSettings.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 const h = React.createElement;
@@ -75,15 +75,31 @@ function renderPane(harness, caps = null) {
   })));
 }
 
-test("the claude pane shows the interactive card and both declared login commands (AC1/AC3)", () => {
-  const html = renderPane("claude", CAPS);
-  assert.match(html, /data-account-pane="claude"/);
-  assert.match(html, /data-claude-status="logged-in"/);
-  assert.match(html, /oauth_token/, "the auth method is missing");
-  assert.match(html, /CLAUDE_CODE_OAUTH_TOKEN/, "the credential key names are missing");
+test("Claude source addresses are not credentials; overview and detail share authentication facts", () => {
+  const addressOnly = { ...READ.claude, loggedIn: false, envCredentials: { ANTHROPIC_BASE_URL: true } };
+  assert.equal(hasClaudeCredential(addressOnly), false);
+  const html = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, { claude: addressOnly })));
+  assert.match(html, /Not signed in/);
+  assert.ok(!html.includes("Credential configured"));
+  for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]) {
+    const configured = { ...addressOnly, envCredentials: { [key]: true } };
+    assert.equal(hasClaudeCredential(configured), true);
+    assert.match(renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, { claude: configured }))), /Credential configured/);
+  }
+});
+
+test("ordinary Claude shows login and API entries without permanent task forms or setup-token actions", () => {
+  const html = renderToStaticMarkup(h(I18nProvider, null, h(AccountSettings, {
+    selectedHarness: "claude", accountState: { read: READ, loading: false, readError: null, capabilities: { claude: CAPS }, load: noop },
+  })));
+  assert.match(html, /data-claude-connection-home/);
+  assert.match(html, /data-claude-login-fact="">Signed in</);
   assert.match(html, /data-login-command="auth-login"/);
-  assert.match(html, /data-login-command="setup-token"/);
-  assert.match(html, /Log in with Claude \(OAuth\)/);
+  assert.match(html, /data-configure-claude-api/);
+  assert.ok(!html.includes('data-login-command="setup-token"'));
+  assert.ok(!html.includes('data-account-card="credential-form"'));
+  assert.ok(!html.includes('data-account-card="cells"'));
+  assert.ok(!html.includes("CLAUDE_CODE_OAUTH_TOKEN"), "native field names belong in troubleshooting/docs");
   assert.ok(!html.includes("sk-SENTINEL"), "a value rendered");
 });
 
@@ -99,9 +115,9 @@ test("the Cell rows carry every field of the ticket's list, per Cell (AC1)", () 
   // 状态 / 配置根 / 步骤能否使用：the beta claude row is usable through its
   // residual OAuth login (the daemon still uses it) although no env credential
   // is set — and the row says so
-  assert.match(beta, /data-account-field="config-root">\/h\/beta\/claude-config</);
+  assert.match(beta, /data-account-field="config-root"><details><summary>[^<]+<\/summary>\/h\/beta\/claude-config<\/details>/, "the real config root is preserved behind its details disclosure");
   assert.match(beta, /data-account-field="status">not set</);
-  assert.match(beta, /data-account-field="usable">yes</);
+  assert.match(beta, /data-account-field="usable">Not verified; no model call was made</);
   // the keychain hint (AC7): the beta row's capability says the credentials
   // do not follow the config root, so the row shows the hint
   assert.match(beta, /data-keychain-hint="true"/);
@@ -122,12 +138,13 @@ test("the pi pane shows its rows without the claude-only parts", () => {
   assert.match(html, /api_key/);
   // the beta pi row carries the unusable verdict and its reason
   const beta = html.slice(html.indexOf('data-account-cell="beta"'));
-  assert.match(beta, /data-account-field="usable">no</);
+  assert.match(beta, /data-account-field="usable">Not verified; no model call was made</);
+  assert.match(beta, /data-account-field="provider-check"/, "authentication checks identify their provider separately");
   assert.match(beta, /credentials_not_configured/);
   assert.ok(!html.includes("data-account-card=" + "credential-form"), "the pi pane has no claude form");
 });
 
-test("the credential form: three kinds, the gateway base URL, targets defaulting to every Cell, 沿用交互会话的值 (AC6)", () => {
+test("the credential form: three kinds, explicit targets and server-side reuse (AC6, #285)", () => {
   const bodies = [];
   const html = renderToStaticMarkup(h(I18nProvider, null, h(ClaudeCredentialForm, {
     cells: READ.cells,
@@ -138,12 +155,12 @@ test("the credential form: three kinds, the gateway base URL, targets defaulting
   }
   // the gateway kind names its base URL in its label (the field itself renders
   // only once the kind is chosen)
-  assert.match(html, /ANTHROPIC_BASE_URL/);
+  assert.doesNotMatch(html, /ANTHROPIC_BASE_URL/, "the native field mapping is documentation, not a task-form setting");
   assert.match(html, /data-account-field="use-interactive"/);
   assert.match(html, /copied server-side/);
-  // every target checkbox is on by default: interactive + both Cells
-  for (const target of ["interactive", "default", "beta"]) {
-    assert.match(html, new RegExp(`data-account-target="${target}" [^>]*checked`), `the ${target} target is not checked by default`);
+  assert.ok(!html.includes('data-account-target="interactive"'), "task targets cannot include the current-dialog reserved target");
+  for (const target of ["default", "beta"]) {
+    assert.doesNotMatch(html, new RegExp(`data-account-target="${target}" [^>]*checked`), `the ${target} target must be explicitly selected`);
   }
   assert.match(html, /next Cell build/, "the shared-default note is missing");
 });
@@ -248,6 +265,7 @@ test("account pending, success, empty, failure and refresh are distinct", async 
   const { renderHook } = await import(new URL("../hooks/__fixtures__/react-hook-shim.mjs", import.meta.url).href);
   const { useAccountRead } = await shim.import("./AccountSettings.tsx");
 
+  const accountUrl = "/api/settings/account?scope=full";
   const pending = [];
   globalThis.fetch = (url) => new Promise((resolve) => pending.push({ url, resolve }));
   const take = (url) => {
@@ -264,13 +282,13 @@ test("account pending, success, empty, failure and refresh are distinct", async 
     }
   };
   const answer = async (hook, body, harnesses = []) => {
-    take("/api/settings/account").resolve(ok(body));
+    take(accountUrl).resolve(ok(body));
     await settle(hook);
     take("/api/harness").resolve(ok({ harnesses }));
     await settle(hook);
   };
 
-  const hook = renderHook(useAccountRead, {});
+  const hook = renderHook(() => useAccountRead(true, "full"));
   assert.equal(hook.result.loading, true, "the first read starts pending");
   assert.equal(hook.result.read, null);
 
@@ -292,7 +310,7 @@ test("account pending, success, empty, failure and refresh are distinct", async 
   // failure: the pending state ends, an error is visible, the data is kept
   hook.result.load();
   await settle(hook);
-  take("/api/settings/account").resolve({ ok: false, status: 500, json: async () => ({}) });
+  take(accountUrl).resolve({ ok: false, status: 500, json: async () => ({}) });
   await settle(hook);
   assert.equal(hook.result.loading, false, "a failed read never stays pending");
   assert.equal(hook.result.readError, "settings.accountReadFailed");
@@ -303,7 +321,7 @@ test("account pending, success, empty, failure and refresh are distinct", async 
   await settle(hook);
   hook.result.load(); // request B, newer
   await settle(hook);
-  const [first, second] = pending.filter((entry) => entry.url === "/api/settings/account");
+  const [first, second] = pending.filter((entry) => entry.url === accountUrl);
   second.resolve(ok({ ...READ, cells: [] }));
   await settle(hook);
   take("/api/harness").resolve(ok({ harnesses: [] }));
@@ -331,13 +349,13 @@ test("B3: the shell renders the pending status and the retry line, and a finishe
   assert.equal(idle, "", "a settled, successful read has no status line");
 
   // the claude pane's own state: loading while in flight, absent once the read finished without claude
-  const pendingPane = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
-    harness: "claude", read: null, capabilities: null, onOpenLoginTerminal: noop, loading: true,
+  const pendingPane = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, {
+    claude: null, loaded: false,
   })));
   assert.match(pendingPane, /data-claude-status="loading"/, "a read still in flight says it is loading");
   assert.match(pendingPane, /Reading the account facts/, "the loading text is localized");
-  const failedPane = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
-    harness: "claude", read: null, capabilities: null, onOpenLoginTerminal: noop, loading: false,
+  const failedPane = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, {
+    claude: null, loaded: true,
   })));
   assert.match(failedPane, /data-claude-status="absent"/, "a finished read without claude is not still loading");
   assert.ok(!failedPane.includes("Reading the account facts"), "the failed read never claims to be reading");

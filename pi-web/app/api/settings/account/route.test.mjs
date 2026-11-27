@@ -140,8 +140,9 @@ const request = (init) => new Request("http://localhost/api/settings/account", {
   headers: { host: "localhost" },
   ...init,
 });
-async function get() {
-  const response = await route.GET(request({}));
+async function get(scope) {
+  const req = scope === undefined ? request({}) : new Request(`http://localhost/api/settings/account?scope=${scope}`, { headers: { host: "localhost" } });
+  const response = await route.GET(req);
   return { status: response.status, body: await response.json() };
 }
 async function post(body) {
@@ -178,7 +179,7 @@ test("GET: the interactive claude card and the three Cell kinds, no value anywhe
   assert.deepEqual(body.claude, {
     available: true, loggedIn: true, authMethod: "api_key", configDirectory: claudeHome,
     envCredentials: { ANTHROPIC_AUTH_TOKEN: true, ANTHROPIC_BASE_URL: true, CLAUDE_CODE_OAUTH_TOKEN: true, ANTHROPIC_API_KEY: false },
-    consoleProfile: "absent",
+    consoleProfile: "absent", envCredentialsState: "observed", externalEnvCredentialKeys: [],
   });
   // the Cell rows: default first, then the named Cells
   assert.deepEqual(body.cells.map((c) => c.profile), ["default", "beta", "gamma"]);
@@ -214,6 +215,48 @@ test("GET: the interactive claude card and the three Cell kinds, no value anywhe
   for (const argv of claudeCalls) {
     for (const word of argv) assert.ok(!word.includes("RT-SENTINEL"), `the claude argv carries a value: ${word}`);
   }
+});
+
+test("scoped reads isolate subprocesses and malformed interactive env stays unknown (#285)", async () => {
+  const count = (file) => fs.existsSync(file) ? fs.readFileSync(file, "utf8").length : 0;
+  const before = [count(pfLog), count(piLog)];
+  const interactive = await get("interactive");
+  assert.equal(interactive.body.scope, "interactive");
+  assert.deepEqual(interactive.body.cells, []);
+  assert.deepEqual([count(pfLog), count(piLog)], before);
+  const claudeBefore = count(claudeLog);
+  const cells = await get("cells");
+  assert.equal(cells.body.claude, null);
+  assert.equal(count(claudeLog), claudeBefore);
+  const pi = cells.body.cells[0].harnesses.pi;
+  assert.equal(pi.provider, "sub2api");
+  assert.ok(Number.isFinite(Date.parse(pi.checkedAt)));
+  assert.equal(pi.checkBasis, "pi-auth-check-no-refresh");
+  assert.equal(pi.modelUsable, null);
+  assert.equal(pi.usable, null);
+  assert.equal(cells.body.cells[0].harnesses.claude.status, "unknown");
+  const file = path.join(claudeHome, "settings.json");
+  const saved = fs.readFileSync(file, "utf8");
+  try {
+    for (const malformed of ["{bad", '{"env":[]}']) {
+      fs.writeFileSync(file, malformed);
+      const got = await get("interactive");
+      assert.equal(got.body.claude.envCredentialsState, "read-failed");
+      assert.ok(Object.values(got.body.claude.envCredentials).every((value) => value === null));
+      noSentinel(JSON.stringify(got.body));
+    }
+    fs.rmSync(file);
+    const absent = await get("interactive");
+    assert.equal(absent.body.claude.envCredentialsState, "absent");
+    assert.ok(Object.values(absent.body.claude.envCredentials).every((value) => value === false));
+    fs.mkdirSync(file);
+    assert.equal((await get("interactive")).body.claude.envCredentialsState, "read-failed");
+    fs.rmdirSync(file);
+  } finally { fs.writeFileSync(file, saved); }
+  assert.equal((await get("invalid")).status, 400);
+  const pfBefore = count(pfLog);
+  assert.equal((await post({ kind: "api-key", value: "RT-SENTINEL-NEW-KEY", targets: ["interactive"] })).status, 200);
+  assert.equal(count(pfLog), pfBefore);
 });
 
 test("POST: the credential lands in the native env block of the interactive session and the checked Cells (AC6)", async () => {
@@ -286,8 +329,40 @@ exec node ${path.join(here, "..", "..", "..", "..", "lib", "__fixtures__", "clau
   }
 });
 
+test("POST: empty targets never expands to all Cells and changes no credential file (#285)", async () => {
+  const files = [path.join(claudeHome, "settings.json"), ...["default", "beta", "gamma"].map((profile) => path.join(data, "cells", profile, "claude-config", "settings.json"))];
+  const before = files.map((file) => fs.readFileSync(file, "utf8"));
+  const refused = await post({ kind: "api-key", value: "RT-SENTINEL-NO-TARGET", targets: [] });
+  assert.equal(refused.status, 400);
+  assert.deepEqual(files.map((file) => fs.readFileSync(file, "utf8")), before);
+  noSentinel(refused.text);
+});
+
+test("POST: malformed gateway URLs and invalid copied URLs are refused before any target write", async () => {
+  const paths = [path.join(claudeHome, "settings.json"), path.join(data, "cells", "beta", "claude-config", "settings.json")];
+  const before = paths.map((file) => fs.readFileSync(file, "utf8"));
+  for (const baseUrl of ["abc", "/v1", "https://", "file:///tmp/key", "javascript:alert(1)"]) {
+    const refused = await post({ kind: "gateway", value: "RT-SENTINEL-BAD-URL", baseUrl, targets: ["interactive", "beta"] });
+    assert.equal(refused.status, 400);
+    noSentinel(refused.text);
+    assert.deepEqual(paths.map((file) => fs.readFileSync(file, "utf8")), before);
+  }
+  const source = JSON.parse(before[0]);
+  source.env.ANTHROPIC_AUTH_TOKEN = "RT-SENTINEL-COPY-BAD-URL";
+  source.env.ANTHROPIC_BASE_URL = "not-a-url";
+  fs.writeFileSync(paths[0], JSON.stringify(source));
+  try {
+    const refused = await post({ kind: "gateway", useInteractive: true, targets: ["beta"] });
+    assert.equal(refused.status, 400);
+    noSentinel(refused.text);
+    assert.equal(fs.readFileSync(paths[1], "utf8"), before[1]);
+  } finally { fs.writeFileSync(paths[0], before[0]); }
+});
+
 test("POST: a malformed body is a 400 before any write", async () => {
   for (const body of [
+    null,
+    [],
     {},
     { kind: "no-such", value: "x", targets: ["interactive"] },
     { kind: "api-key", targets: ["interactive"] },

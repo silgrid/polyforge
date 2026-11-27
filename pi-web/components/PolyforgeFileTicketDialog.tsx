@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import {
   fileTicketDialogDefaults,
@@ -33,6 +33,8 @@ export function PolyforgeFileTicketDialog({
   message,
   projects,
   lane,
+  embedded = false,
+  onBusyChange,
   onClose,
   onCreated,
 }: {
@@ -42,11 +44,24 @@ export function PolyforgeFileTicketDialog({
   projects: string[];
   /** The ticket's lane (bundle name); absent on the Messages path. */
   lane?: string;
+  /** Reuse the form in setup's content scroller and single footer. */
+  embedded?: boolean;
+  onBusyChange?: (busy: boolean) => void;
   onClose: () => void;
   onCreated: (slug: string) => void;
 }) {
   const { t } = useI18n();
   const titleId = useId();
+  const formRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!embedded) return;
+    const opener = document.activeElement as HTMLElement | null;
+    formRef.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+      else document.querySelector<HTMLElement>("[data-onboarding-ticket-open]")?.focus();
+    };
+  }, [embedded]);
   const [defaults] = useState(() => fileTicketDialogDefaults(analysis, message, projects));
   const [goal, setGoal] = useState(defaults.goal);
   const [project, setProject] = useState(defaults.project);
@@ -62,14 +77,16 @@ export function PolyforgeFileTicketDialog({
   }, [project, projects]);
 
   useEffect(() => {
+    if (embedded) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  }, [busy, embedded, onClose]);
 
   const confirm = async () => {
     if (busy) return;
     setBusy(true);
+    onBusyChange?.(true);
     setError(null);
     try {
       const response = await fetch("/api/polyforge/messages/file-ticket", {
@@ -87,11 +104,39 @@ export function PolyforgeFileTicketDialog({
       setError(t("polyforge.messages.ticketFailed"));
     } finally {
       setBusy(false);
+      onBusyChange?.(false);
     }
   };
 
   const field = { background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 6px", fontSize: 12, font: "inherit" } as const;
   const label = { display: "flex", flexDirection: "column", gap: 2, fontSize: 11, color: "var(--text-dim)" } as const;
+  const fields = <>
+    <label style={embedded ? undefined : label}>
+      {t("polyforge.messages.ticketGoal")}
+      <input value={goal} onChange={(event) => setGoal(event.target.value)} style={embedded ? undefined : field} />
+    </label>
+    <label style={embedded ? undefined : label}>
+      {t("polyforge.messages.ticketProject")}
+      <select value={project} onChange={(event) => setProject(event.target.value)} style={embedded ? undefined : field}>
+        {projects.map((name) => <option key={name} value={name}>{name}</option>)}
+      </select>
+    </label>
+    <label style={embedded ? undefined : label}>
+      {t("polyforge.messages.ticketContent")}
+      <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={embedded ? 5 : 8} style={embedded ? undefined : { ...field, resize: "vertical" }} />
+    </label>
+    {error && <div role="alert" className={embedded ? "onboarding-error" : undefined} style={embedded ? undefined : { fontSize: 11, color: "#dc2626", overflowWrap: "anywhere" }}>{error}</div>}
+  </>;
+  if (embedded) return <div ref={formRef} tabIndex={-1} data-onboarding-ticket-form data-lane={lane ?? "none"} className="onboarding-ticket-embedded">
+    <div className="onboarding-content">
+      <header className="onboarding-step-heading"><h2>{t("onboarding.stepTicket")}</h2><p>{t("onboarding.ticketHint")}</p></header>
+      <div className="onboarding-form">{fields}</div>
+    </div>
+    <footer className="onboarding-footer">
+      <button type="button" className="onboarding-skip" data-onboarding-ticket-cancel onClick={onClose} disabled={busy}>{t("polyforge.messages.ticketCancel")}</button>
+      <button type="button" className="onboarding-primary" onClick={() => void confirm()} disabled={busy} aria-busy={busy}>{t("polyforge.messages.ticketConfirm")}</button>
+    </footer>
+  </div>;
   return (
     <div
       onClick={(event) => { event.stopPropagation(); if (event.target === event.currentTarget && !busy) onClose(); }}
@@ -105,21 +150,7 @@ export function PolyforgeFileTicketDialog({
         style={{ width: "min(520px, 100%)", maxHeight: "100%", overflowY: "auto", background: "var(--bg-panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}
       >
         <div id={titleId} style={{ fontSize: 13, fontWeight: 600 }}>{t("polyforge.messages.ticketTitle")}</div>
-        <label style={label}>
-          {t("polyforge.messages.ticketGoal")}
-          <input value={goal} onChange={(event) => setGoal(event.target.value)} style={field} />
-        </label>
-        <label style={label}>
-          {t("polyforge.messages.ticketProject")}
-          <select value={project} onChange={(event) => setProject(event.target.value)} style={field}>
-            {projects.map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </label>
-        <label style={label}>
-          {t("polyforge.messages.ticketContent")}
-          <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={8} style={{ ...field, resize: "vertical" }} />
-        </label>
-        {error && <div role="alert" style={{ fontSize: 11, color: "#dc2626", overflowWrap: "anywhere" }}>{error}</div>}
+        {fields}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button type="button" onClick={onClose} disabled={busy}
             style={{ background: "none", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 12px", fontSize: 12, cursor: busy ? "default" : "pointer" }}>

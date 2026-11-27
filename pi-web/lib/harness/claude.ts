@@ -8,6 +8,7 @@
 // 85a3's Q4 ruling).
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { isClaudeGatewayUrl } from "../claude-api-config";
 import { writePrivateFileAtomicSync } from "../atomic-file";
 import { serializeByKey } from "../key-serializer";
 import { claudeConfigDir } from "../claude-config-dir";
@@ -604,11 +605,11 @@ async function writeClaudeAuth(
   const value = change.value;
   if (typeof value !== "string" || value === "")
     return { status: "refused", reason: "the credential value is missing" };
-  const baseUrl = shape.baseUrlKey ? change.baseUrl : undefined;
-  if (shape.baseUrlKey && (typeof baseUrl !== "string" || baseUrl === "")) {
+  const baseUrl = shape.baseUrlKey && typeof change.baseUrl === "string" ? change.baseUrl.trim() : undefined;
+  if (shape.baseUrlKey && !isClaudeGatewayUrl(baseUrl)) {
     return {
       status: "refused",
-      reason: "a gateway credential needs its base URL",
+      reason: "a gateway credential needs an absolute HTTP or HTTPS base URL",
     };
   }
   const path = join(configDir, "settings.json");
